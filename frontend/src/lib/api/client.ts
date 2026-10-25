@@ -1,0 +1,517 @@
+import { browser } from '$app/environment';
+
+import type {
+  ApiError,
+  ClientListResponse,
+  CreateClientResponse,
+  CreateLibraryRequest,
+  DownloadedRom,
+  LibraryDetail,
+  LibrarySummary,
+  LoginRequest,
+  RomDetail,
+  RomListResponse,
+  SessionResponse,
+  UploadAcceptedResponse,
+  UploadStatusResponse,
+  UpdateRomRequest
+} from './types';
+
+import { parseTranslationCatalog, type Locale, type TranslationCatalog } from '$lib/i18n/catalog';
+import { ApiClientError, parseApiErrorPayload } from './errors';
+import {
+  parseClientListResponse,
+  parseLibraryDetailResponse,
+  parseRomListResponse,
+  parseSessionResponse,
+  parseUploadAcceptedResponse
+} from './schemas';
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/$/, '');
+const SESSION_STORAGE_KEY = 'retroxide.session';
+let refreshInFlight: Promise<boolean> | null = null;
+
+type StoredSession = Pick<SessionResponse, 'access_token' | 'refresh_token'> & {
+  expiresAt: number;
+};
+
+type ApiRequestOptions = RequestInit & {
+  withAuth?: boolean;
+};
+
+function createApiUrl(path: string): string {
+  return `${API_BASE_URL}${path}`;
+}
+
+function readStoredSession(): StoredSession | null {
+  if (!browser) {
+    return null;
+  }
+
+  const rawSession = sessionStorage.getItem(SESSION_STORAGE_KEY);
+  if (!rawSession) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawSession) as Partial<StoredSession>;
+    if (
+      typeof parsed.access_token !== 'string' ||
+      parsed.access_token.length === 0 ||
+      typeof parsed.refresh_token !== 'string' ||
+      parsed.refresh_token.length === 0 ||
+      typeof parsed.expiresAt !== 'number'
+    ) {
+      return null;
+    }
+
+    return {
+      access_token: parsed.access_token,
+      refresh_token: parsed.refresh_token,
+      expiresAt: parsed.expiresAt
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function persistStoredSession(session: SessionResponse): void {
+  if (!browser) {
+    return;
+  }
+
+  const storedSession: StoredSession = {
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
+    expiresAt: Date.now() + session.expires_in * 1000
+  };
+
+  sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(storedSession));
+}
+
+export function clearStoredSession(): void {
+  if (!browser) {
+    return;
+  }
+
+  sessionStorage.removeItem(SESSION_STORAGE_KEY);
+}
+
+export function hasStoredSession(): boolean {
+  return readStoredSession() !== null;
+}
+
+function notifySessionExpired(): void {
+  if (browser) {
+    window.dispatchEvent(new Event('retroxide:session-expired'));
+  }
+}
+
+async function performSessionRefresh(): Promise<boolean> {
+  const session = readStoredSession();
+  if (!session) {
+    return false;
+  }
+
+  try {
+    const response = await fetch(createApiUrl('/session/refresh'), {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: session.refresh_token })
+    });
+
+    if (!response.ok) {
+      return false;
+    }
+
+    persistStoredSession(parseSessionResponse(await response.json()));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function refreshStoredSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    const refresh = performSessionRefresh();
+    refreshInFlight = refresh;
+    void refresh.finally(() => {
+      if (refreshInFlight === refresh) refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+function createHeaders(init: ApiRequestOptions | undefined): Headers {
+  const headers = new Headers(init?.headers);
+  const shouldAttachAuth = init?.withAuth ?? false;
+
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json');
+  }
+
+  if (shouldAttachAuth) {
+    const session = readStoredSession();
+    if (session) {
+      headers.set('Authorization', `Bearer ${session.access_token}`);
+    }
+  }
+
+  return headers;
+}
+
+async function requestResponse(path: string, init?: ApiRequestOptions): Promise<Response> {
+  let response = await fetch(createApiUrl(path), {
+    ...init,
+    headers: createHeaders(init)
+  });
+
+  if (init?.withAuth && response.status === 401 && await refreshStoredSession()) {
+    response = await fetch(createApiUrl(path), {
+      ...init,
+      headers: createHeaders(init)
+    });
+  }
+
+  if (!response.ok) {
+    if (init?.withAuth && response.status === 401) {
+      clearStoredSession();
+      notifySessionExpired();
+    }
+    throw await createResponseError(response);
+  }
+  return response;
+}
+
+async function requestJson<T>(path: string, init?: ApiRequestOptions): Promise<T> {
+  return (await requestResponse(path, init).then((response) => response.json())) as T;
+}
+
+async function requestNoContent(path: string, init?: ApiRequestOptions): Promise<void> {
+  await requestResponse(path, init);
+}
+
+async function createResponseError(response: Response): Promise<ApiClientError> {
+  const responseType = response.headers.get('Content-Type') ?? '';
+
+  if (responseType.includes('application/json')) {
+    try {
+      const payload = parseApiErrorPayload((await response.json()) as ApiError);
+      if (payload) {
+        return new ApiClientError({
+          message: payload.message,
+          code: payload.code,
+          status: response.status,
+          requestId: payload.request_id
+        });
+      }
+    } catch {
+      // Fall back to plain text handling below.
+    }
+  }
+
+  const message = await response.text();
+  return new ApiClientError({
+    message: message || `API request failed with status ${response.status}`,
+    status: response.status
+  });
+}
+
+function parseJsonText<T>(payload: string, status: number): T {
+  try {
+    return JSON.parse(payload) as T;
+  } catch {
+    throw new Error(`API request failed with status ${status}`);
+  }
+}
+
+function getXmlHttpRequestErrorMessage(request: XMLHttpRequest): string {
+  const payload = request.responseText?.trim();
+  if (!payload) {
+    return `API request failed with status ${request.status}`;
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as { message?: unknown };
+    if (typeof parsed.message === 'string' && parsed.message.length > 0) {
+      return parsed.message;
+    }
+  } catch {
+    // Fall back to returning the raw payload.
+  }
+
+  return payload;
+}
+
+function getXmlHttpRequestError(request: XMLHttpRequest): ApiClientError {
+  const payload = request.responseText?.trim();
+  if (payload) {
+    try {
+      const parsed = parseApiErrorPayload(JSON.parse(payload) as ApiError);
+      if (parsed) {
+        return new ApiClientError({
+          message: parsed.message,
+          code: parsed.code,
+          status: request.status,
+          requestId: parsed.request_id
+        });
+      }
+    } catch {
+      // Fall back to plain text handling below.
+    }
+  }
+
+  return new ApiClientError({
+    message: getXmlHttpRequestErrorMessage(request),
+    status: request.status
+  });
+}
+
+function getDownloadFilename(headerValue: string | null, romId: string): string {
+  if (!headerValue) {
+    return `${romId}.rom`;
+  }
+
+  const utf8Match = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const quotedMatch = headerValue.match(/filename="([^"]+)"/i);
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1];
+  }
+
+  const plainMatch = headerValue.match(/filename=([^;]+)/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1].trim();
+  }
+
+  return `${romId}.rom`;
+}
+
+export async function checkHealth(): Promise<boolean> {
+  const response = await fetch('/health', { method: 'GET' });
+  if (!response.ok) {
+    return false;
+  }
+
+  const body = await response.text();
+  return body.trim().toLowerCase() === 'ok';
+}
+
+export async function fetchCatalog(locale: Locale): Promise<TranslationCatalog> {
+  return parseTranslationCatalog(await requestJson<unknown>(`/i18n/${encodeURIComponent(locale)}`));
+}
+
+export function listRoms(limit = 10, cursor?: string): Promise<RomListResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+
+  return requestJson<unknown>(`/rom?${params.toString()}`, { withAuth: true }).then(parseRomListResponse);
+}
+
+export function createSession(payload: LoginRequest): Promise<SessionResponse> {
+  return requestJson<unknown>('/session', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  }).then(parseSessionResponse);
+}
+
+export function listLibraries(): Promise<LibrarySummary[]> {
+  return requestJson<LibrarySummary[]>('/library', { withAuth: true });
+}
+
+export function createLibrary(payload: CreateLibraryRequest): Promise<LibrarySummary> {
+  return requestJson<LibrarySummary>('/library', {
+    method: 'POST',
+    withAuth: true,
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function getLibrary(libraryId: string): Promise<LibraryDetail> {
+  return parseLibraryDetailResponse(await requestJson<unknown>(`/library/${encodeURIComponent(libraryId)}`, { withAuth: true }));
+}
+
+export function addRomToLibrary(libraryId: string, romId: string): Promise<void> {
+  return requestNoContent(`/library/${encodeURIComponent(libraryId)}/item`, {
+    method: 'POST',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rom_id: romId })
+  });
+}
+
+export function removeRomFromLibrary(libraryId: string, romId: string): Promise<void> {
+  return requestNoContent(`/library/${encodeURIComponent(libraryId)}/item/${encodeURIComponent(romId)}`, {
+    method: 'DELETE',
+    withAuth: true
+  });
+}
+
+export async function listClients(): Promise<ClientListResponse> {
+  return parseClientListResponse(await requestJson<unknown>('/client', { withAuth: true }));
+}
+
+export function createClient(name: string): Promise<CreateClientResponse> {
+  return requestJson<CreateClientResponse>('/client', {
+    method: 'POST',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  });
+}
+
+export function revokeClient(clientId: string): Promise<void> {
+  return requestNoContent(`/client/${encodeURIComponent(clientId)}`, { method: 'DELETE', withAuth: true });
+}
+
+export function isAdminSession(): boolean {
+  const accessToken = readStoredSession()?.access_token;
+  if (!accessToken) return false;
+  try {
+    const payload = accessToken.split('.')[1];
+    if (!payload) return false;
+    const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as { role?: unknown };
+    return decoded.role === 'admin';
+  } catch {
+    return false;
+  }
+}
+
+export async function logoutSession(): Promise<void> {
+  try {
+    await requestNoContent('/session', { method: 'DELETE', withAuth: true });
+  } finally {
+    clearStoredSession();
+  }
+}
+
+export function getRom(romId: string): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${romId}`, { withAuth: true });
+}
+
+export function deleteRom(romId: string): Promise<void> {
+  return requestNoContent(`/rom/${romId}`, {
+    method: 'DELETE',
+    withAuth: true
+  });
+}
+
+export function updateRom(romId: string, payload: UpdateRomRequest): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}`, {
+    method: 'PATCH',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+export function uploadRomCover(romId: string, file: File): Promise<RomDetail> {
+  const formData = new FormData();
+  formData.append('cover', file, file.name);
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/cover`, {
+    method: 'POST',
+    withAuth: true,
+    body: formData
+  });
+}
+
+export async function fetchRomCover(romId: string): Promise<Blob> {
+  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/cover`, { withAuth: true });
+  return response.blob();
+}
+
+export function uploadRom(
+  file: File,
+  onProgress?: (loadedBytes: number, totalBytes: number) => void
+): Promise<UploadAcceptedResponse> {
+  if (!browser) {
+    return Promise.reject(new Error('Upload is only available in the browser.'));
+  }
+
+  if (!readStoredSession()) {
+    return Promise.reject(new Error('Missing stored session token.'));
+  }
+
+  const sendUpload = (): Promise<XMLHttpRequest> => new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', createApiUrl('/upload'));
+    request.responseType = 'text';
+    request.setRequestHeader('Accept', 'application/json');
+    const session = readStoredSession();
+    if (!session) {
+      reject(new Error('Missing stored session token.'));
+      return;
+    }
+    request.setRequestHeader('Authorization', `Bearer ${session.access_token}`);
+
+    request.upload.addEventListener('progress', (event) => {
+      if (!onProgress || !event.lengthComputable) {
+        return;
+      }
+
+      onProgress(event.loaded, event.total);
+    });
+
+    request.addEventListener('load', () => {
+      resolve(request);
+    });
+
+    request.addEventListener('error', () => {
+      reject(new ApiClientError({ message: 'Network request failed' }));
+    });
+
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    request.send(formData);
+  });
+
+  return (async () => {
+  let request = await sendUpload();
+  if (request.status === 401 && await refreshStoredSession()) request = await sendUpload();
+  if (request.status < 200 || request.status >= 300) {
+    if (request.status === 401) {
+      clearStoredSession();
+      notifySessionExpired();
+    }
+    throw getXmlHttpRequestError(request);
+  }
+  return parseUploadAcceptedResponse(parseJsonText<unknown>(request.responseText, request.status));
+  })();
+}
+
+export function uploadStatus(uploadId: string): Promise<UploadStatusResponse> {
+  return requestJson<UploadStatusResponse>(`/upload/${encodeURIComponent(uploadId)}`, {
+    withAuth: true
+  });
+}
+
+export async function downloadRom(romId: string): Promise<DownloadedRom> {
+  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/download`, {
+    method: 'GET',
+    withAuth: true,
+    headers: { Accept: 'application/octet-stream' }
+  });
+
+  const blob = await response.blob();
+  return {
+    blob,
+    filename: getDownloadFilename(response.headers.get('Content-Disposition'), romId),
+    contentType:
+      response.headers.get('Content-Type') ?? blob.type ?? 'application/octet-stream'
+  };
+}

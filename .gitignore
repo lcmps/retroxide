@@ -13,3 +13,7 @@ docs/
 .vscode/
 storage/*
 .superpowers/
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+frontend/.output/

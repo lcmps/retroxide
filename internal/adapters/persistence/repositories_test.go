@@ -1,0 +1,174 @@
+package persistence
+
+import (
+	"context"
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
+	"testing"
+
+	"github.com/lcmps/retroxide/internal/features/auth"
+	"github.com/lcmps/retroxide/internal/features/jobs"
+	"github.com/lcmps/retroxide/internal/features/libraries"
+	"github.com/lcmps/retroxide/internal/features/rom"
+	"github.com/lcmps/retroxide/internal/shared/fault"
+	"github.com/lcmps/retroxide/internal/shared/identity"
+	"time"
+)
+
+func openTestRepositories(t *testing.T) (*Repositories, context.Context) {
+	t.Helper()
+	db, err := OpenDatabase(context.Background(), "sqlite", t.TempDir()+"/test.sqlite3", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		sqlDB, err := db.DB()
+		if err == nil {
+			if closeErr := sqlDB.Close(); closeErr != nil {
+				t.Error(closeErr)
+			}
+		}
+	})
+	return NewRepositories(db), context.Background()
+}
+
+func validROMFile(id, title string) rom.ROMFile {
+	content := []byte(id + ":" + title)
+	sha256Digest := sha256.Sum256(content)
+	sha1Digest := sha1.Sum(content)
+	md5Digest := md5.Sum(content)
+	hash := hex.EncodeToString(sha256Digest[:])
+	romHash, _ := rom.NewROMHash(hash, hex.EncodeToString(sha1Digest[:]), hex.EncodeToString(md5Digest[:]), "deadbeef")
+	return rom.ROMFile{ID: id, Hash: romHash, Size: uint64(len(title)), StoragePath: "/storage/" + hash}
+}
+
+func TestRepositoriesDetectDuplicateContentAndVerifyFullHash(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	file := validROMFile("rf-first", "payload")
+	if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := file
+	duplicate.ID = "rf-second"
+	if _, err := repositories.UpsertROMFile(ctx, duplicate); !fault.IsCode(err, fault.CodeROMAlreadyExists) {
+		t.Fatalf("duplicate insert error = %v, want rom_already_exists", err)
+	}
+	collision := duplicate
+	collision.Hash.MD5 = strings.Repeat("d", 32)
+	if _, err := repositories.UpsertROMFile(ctx, collision); !fault.IsCode(err, fault.CodeInternal) {
+		t.Fatalf("secondary-hash mismatch error = %v, want internal collision error", err)
+	}
+}
+
+func TestRepositoriesFilterPlatformByCaseInsensitiveExactMatch(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	for _, row := range []struct {
+		id       string
+		platform string
+	}{
+		{id: "rom-1", platform: "SNES"},
+		{id: "rom-2", platform: "snes_dev"},
+	} {
+		file := validROMFile("rf-"+row.id, row.id)
+		if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+		if err := repositories.SaveROM(ctx, rom.ROM{
+			ID: row.id, ROMFileID: file.ID, UploaderID: "user-1",
+			Identity: rom.ROMIdentity{Title: row.id, Platform: row.platform, IdentifiedBy: "test", Confidence: 100},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	platform := "sNeS"
+	rows, err := repositories.ListROMsWithFiles(ctx, 10, nil, &platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ROM.ID != "rom-1" {
+		t.Fatalf("platform-filtered ROMs = %+v, want only rom-1", rows)
+	}
+}
+
+func TestRepositoriesLibraryMembershipIsIdempotent(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	file := validROMFile("rf-1", "payload")
+	if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.SaveROM(ctx, rom.ROM{ID: "rom-1", ROMFileID: file.ID, UploaderID: "user-1", Identity: rom.ROMIdentity{Title: "Game", Platform: "snes", IdentifiedBy: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.SaveLibrary(ctx, libraries.Library{ID: "lib-1", UserID: "user-1", Name: "collection"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := repositories.AddLibraryItem(ctx, "lib-1", "rom-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	romIDs, err := repositories.ListLibraryROMIDs(ctx, "lib-1")
+	if err != nil || len(romIDs) != 1 || romIDs[0] != "rom-1" {
+		t.Fatalf("library ROM IDs = %v, %v, want [rom-1]", romIDs, err)
+	}
+	removed, err := repositories.RemoveLibraryItem(ctx, "lib-1", "rom-1")
+	if err != nil || !removed {
+		t.Fatalf("first removal = %t, %v", removed, err)
+	}
+	removed, err = repositories.RemoveLibraryItem(ctx, "lib-1", "rom-1")
+	if err != nil || removed {
+		t.Fatalf("second removal = %t, %v, want false", removed, err)
+	}
+	romIDs, err = repositories.ListLibraryROMIDs(ctx, "lib-1")
+	if err != nil || len(romIDs) != 0 {
+		t.Fatalf("ROM IDs after removal = %v, %v, want empty", romIDs, err)
+	}
+}
+
+func TestRepositoriesQueueClaimsJobOnlyOnceUntilLeaseExpires(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	if err := repositories.Enqueue(ctx, jobs.Payload{Kind: "identify_rom", UploadID: "upl-1", ROMFileID: "rf-1"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	first, err := repositories.Claim(ctx, now, time.Minute)
+	if err != nil || first == nil {
+		t.Fatalf("first claim = %+v, %v", first, err)
+	}
+	second, err := repositories.Claim(ctx, now.Add(time.Second), time.Minute)
+	if err != nil || second != nil {
+		t.Fatalf("second claim = %+v, %v, want no available job", second, err)
+	}
+	reclaimed, err := repositories.Claim(ctx, now.Add(2*time.Minute), time.Minute)
+	if err != nil || reclaimed == nil || reclaimed.ID != first.ID {
+		t.Fatalf("reclaim = %+v, %v, want expired lease job %q", reclaimed, err, first.ID)
+	}
+}
+
+func TestRepositoriesRefreshRotationIsAtomicAndReplayRevokesReplacement(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	if err := repositories.SaveUser(ctx, auth.User{ID: "user-1", Email: "user@example.com", PasswordHash: "hash", Role: identity.RoleUser}); err != nil {
+		t.Fatal(err)
+	}
+	now := uint64(time.Now().Unix())
+	old := auth.RefreshToken{JTI: "old-jti", UserID: "user-1", TokenHash: strings.Repeat("a", 64), CreatedAt: now, ExpiresAt: now + 3600}
+	if err := repositories.Store(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	replacement := auth.RefreshToken{JTI: "new-jti", UserID: "user-1", TokenHash: strings.Repeat("b", 64), CreatedAt: now, ExpiresAt: now + 3600}
+	rotated, err := repositories.Rotate(ctx, old.JTI, replacement)
+	if err != nil || !rotated {
+		t.Fatalf("first rotation = %t, %v", rotated, err)
+	}
+	rotated, err = repositories.Rotate(ctx, old.JTI, auth.RefreshToken{JTI: "replay-jti", UserID: "user-1", TokenHash: strings.Repeat("c", 64), CreatedAt: now, ExpiresAt: now + 3600})
+	if err != nil || rotated {
+		t.Fatalf("replay rotation = %t, %v, want false", rotated, err)
+	}
+	storedReplacement, err := repositories.FindByJTI(ctx, replacement.JTI)
+	if err != nil || storedReplacement == nil || !storedReplacement.Revoked {
+		t.Fatalf("replacement after replay = %+v, %v, want revoked", storedReplacement, err)
+	}
+}

@@ -1,0 +1,402 @@
+:root {
+	color-scheme: dark;
+	font-family: 'Press Start 2P', monospace;
+	--pixel-bg: #090909;
+	--pixel-panel: #333333;
+	--pixel-panel-strong: #62799d;
+	--pixel-panel-soft: #090909;
+	--pixel-border: #62799d;
+	--pixel-border-strong: #93a7c7;
+	--pixel-text: #f6f6f6;
+	--pixel-muted: #c7c7c7;
+	--pixel-accent: #62799d;
+	--pixel-accent-strong: #93a7c7;
+	--pixel-danger: #62799d;
+	--pixel-shadow: none;
+	--pixel-focus: #ffffff;
+	--pixel-control-height: 2rem;
+	--pixel-shell-width: none;
+	--pixel-gap: 1.25rem;
+}
+
+html,
+body {
+	min-height: 100%;
+	margin: 0;
+	background: var(--pixel-bg);
+	color: var(--pixel-text);
+	text-rendering: optimizeLegibility;
+	font-synthesis: none;
+}
+
+body {
+	min-width: 320px;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+a,
+button,
+input,
+select,
+textarea {
+	font: inherit;
+}
+
+a {
+	color: inherit;
+	text-decoration: none;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+	outline: 3px solid var(--pixel-focus);
+	outline-offset: 2px;
+	box-shadow: 0 0 0 2px var(--pixel-bg);
+}
+
+button,
+input,
+select,
+textarea {
+	min-height: var(--pixel-control-height);
+	border: 2px solid var(--pixel-border);
+	background: var(--pixel-panel);
+	color: var(--pixel-text);
+	padding: 0.65rem 0.85rem;
+	border-radius: 0;
+	appearance: none;
+	-webkit-appearance: none;
+	transition:
+		border-color 120ms ease,
+		background-color 120ms ease,
+		color 120ms ease;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+	opacity: 0.65;
+	cursor: not-allowed;
+}
+
+input::placeholder {
+	color: var(--pixel-muted);
+	opacity: 1;
+}
+
+.skip-link {
+	position: absolute;
+	left: 1rem;
+	top: -3rem;
+	padding: 0.7rem 0.85rem;
+	background: var(--pixel-focus);
+	color: #11141a;
+	font-weight: 700;
+	z-index: 20;
+}
+
+.skip-link:focus-visible {
+	top: 1rem;
+	outline-color: var(--pixel-text);
+}
+
+.app-shell {
+	min-height: 100vh;
+	padding: 1.25rem 1.5rem;
+}
+
+.app-shell__header {
+	display: flex;
+	gap: 1.5rem;
+	align-items: center;
+}
+
+.app-shell__brand {
+	display: flex;
+	align-items: center;
+	width: 4.5rem;
+}
+
+.app-shell__brand-image {
+	display: block;
+	height: auto;
+	image-rendering: pixelated;
+	image-rendering: crisp-edges;
+	max-width: 100%;
+	object-fit: contain;
+	object-position: left center;
+}
+
+.app-shell__brand-image--main {
+	display: none;
+}
+
+.app-shell__brand-image--mini {
+	display: block;
+	width: 4.5rem;
+	height: 2.5rem;
+}
+
+.app-shell__controls {
+	display: flex;
+	gap: 1.25rem;
+	align-items: center;
+}
+
+.app-shell__control-group {
+	position: relative;
+	display: block;
+}
+
+.app-shell__control-group input,
+.app-shell__control-group select {
+	width: 9rem;
+	min-height: 2rem;
+	padding: 0.5rem 0.65rem;
+	background: var(--pixel-panel-strong);
+	border: 0;
+	border-radius: 0.4rem;
+	font-size: 0.55rem;
+	color: var(--pixel-text);
+}
+
+.app-shell__control-icon {
+	position: absolute;
+	top: 50%;
+	right: 0.55rem;
+	display: grid;
+	place-items: center;
+	transform: translateY(-50%);
+	pointer-events: none;
+	color: var(--pixel-text);
+}
+
+.app-shell__control-group select,
+.app-shell__control-group--search input { padding-right: 2.25rem; }
+
+.app-shell__control-group--search input {
+	width: 9rem;
+}
+
+.app-shell__control-group--locale {
+	display: none;
+}
+
+.app-shell__nav {
+	position: absolute;
+	top: 1.25rem;
+	right: 1.5rem;
+	display: flex;
+	gap: 1.25rem;
+	align-items: center;
+}
+
+.app-shell__nav a,
+.pixel-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 2rem;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	font-size: 0.8rem;
+	font-weight: 400;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	white-space: nowrap;
+	cursor: pointer;
+	color: var(--pixel-text);
+	font: inherit;
+	text-decoration: none;
+	border-radius: 0;
+}
+
+.app-shell__back {
+	gap: 0.75rem;
+}
+
+.app-shell__back img {
+	width: 2.25rem;
+	height: 2.25rem;
+	object-fit: contain;
+	image-rendering: pixelated;
+}
+
+.app-shell__nav a:hover,
+.app-shell__nav button:hover,
+.pixel-button:hover:not(:disabled) {
+	color: var(--pixel-focus);
+}
+
+.app-shell__nav a.current,
+.app-shell__nav button.current {
+	color: var(--pixel-focus);
+}
+
+.app-shell__avatar {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 2rem;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--pixel-text);
+	cursor: pointer;
+}
+
+.app-shell__avatar img {
+	width: 2.25rem;
+	height: 2.25rem;
+	object-fit: contain;
+	image-rendering: pixelated;
+}
+
+.app-shell__avatar:hover,
+.app-shell__avatar:focus-visible,
+.app-shell__avatar[data-state='open'] {
+	color: var(--pixel-focus);
+}
+
+.app-shell__account-menu {
+	display: grid;
+	gap: 0.3rem;
+	min-width: 9rem;
+	padding: 0.5rem;
+	background: var(--pixel-panel-strong);
+	border-radius: 0.4rem;
+}
+
+.app-shell__account-menu-item {
+	display: flex;
+	align-items: center;
+	min-height: 2rem;
+	padding: 0.4rem 0.6rem;
+	border-radius: 0.3rem;
+	font-size: 0.55rem;
+	color: var(--pixel-text);
+	cursor: pointer;
+	user-select: none;
+}
+
+.app-shell__account-menu-item[data-highlighted] {
+	background: rgba(255, 255, 255, 0.14);
+	color: var(--pixel-focus);
+}
+
+.app-shell__content {
+	margin-top: 2.25rem;
+}
+
+.app-shell__content > .page-shell {
+	margin: 0;
+	max-width: none;
+	min-width: 0;
+	padding: 0;
+}
+
+.app-shell__content > .page-shell h1,
+.app-shell__content > .page-shell h2,
+.app-shell__content > .page-shell p {
+	max-width: 60rem;
+}
+
+.app-shell__content > .page-shell .panel,
+.app-shell__content > .page-shell .accordion-shell {
+	border: 0;
+	background: transparent;
+	border-radius: 0;
+	box-shadow: none;
+}
+
+.app-shell__assistive {
+	position: fixed;
+	left: -9999px;
+	top: auto;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+@media (max-width: 800px) {
+	.app-shell {
+		padding-inline: 0.75rem;
+	}
+
+	.app-shell__nav {
+		position: static;
+		margin-top: 1.25rem;
+		justify-content: flex-end;
+	}
+}
+
+@media (max-width: 640px) {
+	.app-shell {
+		padding: 1rem;
+	}
+
+	.app-shell__header {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 1rem;
+	}
+
+	.app-shell__brand {
+		width: 3.5rem;
+	}
+
+	.app-shell__brand-image--mini {
+		width: 3.5rem;
+		height: 2rem;
+	}
+
+	.app-shell__controls {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.75rem;
+		width: 100%;
+	}
+
+	.app-shell__control-group input,
+	.app-shell__control-group select {
+		width: 100%;
+		min-width: 0;
+		min-height: 2.75rem;
+		font-size: 0.6rem;
+	}
+
+	.app-shell__content {
+		margin-top: 1.5rem;
+	}
+
+	.app-shell__nav {
+		justify-content: flex-start;
+		flex-wrap: wrap;
+		gap: 1rem;
+	}
+
+	.app-shell__nav a,
+	.app-shell__nav button {
+		min-height: 2.75rem;
+		font-size: 0.6rem;
+	}
+
+	.app-shell__back img {
+		width: 2rem;
+		height: 2rem;
+	}
+
+}

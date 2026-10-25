@@ -18,8 +18,8 @@ WORKDIR /app
 RUN apk add --no-cache ca-certificates \
     && addgroup -g 10001 -S retroxide \
     && adduser -u 10001 -S -D -G retroxide retroxide \
-    && mkdir -p /app/storage \
-    && touch /app/retroxide.sqlite3 \
+    && mkdir -p /app/storage /app/data \
+    && touch /app/data/retroxide.sqlite3 \
     && chown -R retroxide:retroxide /app
 
 COPY --from=builder /out/retroxide /usr/local/bin/retroxide
@@ -32,9 +32,8 @@ ENV GIN_MODE=release \
     RETROXIDE_HOST=0.0.0.0 \
     RETROXIDE_PORT=3000 \
     RETROXIDE_DB_DRIVER=sqlite \
-    RETROXIDE_SQLITE_PATH=/app/retroxide.sqlite3 \
+    RETROXIDE_SQLITE_PATH=/app/data/retroxide.sqlite3 \
     RETROXIDE_STORAGE_ROOT=/app/storage \
-    RETROXIDE_WORKER_COUNT=1 \
-    RETROXIDE_JWT_SECRET=change-me-in-production-use-a-long-random-string
+    RETROXIDE_WORKER_COUNT=1
 
 CMD ["retroxide"]
