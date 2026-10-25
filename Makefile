@@ -1,7 +1,8 @@
 GO ?= go
+NPM ?= npm
 BINARY ?= retroxide
 
-.PHONY: build run test race vet check integration integration-mysql bench clean docker-build
+.PHONY: build run test race vet check check-all integration integration-mysql bench clean docker-build frontend-install frontend-dev frontend-test frontend-check frontend-build
 
 BENCH_COUNT ?= 5
 
@@ -21,6 +22,23 @@ vet:
 	$(GO) vet ./...
 
 check: test race vet
+
+check-all: check frontend-test frontend-check frontend-build
+
+frontend-install:
+	cd frontend && $(NPM) ci
+
+frontend-dev:
+	cd frontend && $(NPM) run dev -- --host 0.0.0.0
+
+frontend-test:
+	cd frontend && $(NPM) test
+
+frontend-check:
+	cd frontend && $(NPM) run check
+
+frontend-build:
+	cd frontend && $(NPM) run build
 
 integration:
 	$(GO) test -tags=integration ./...

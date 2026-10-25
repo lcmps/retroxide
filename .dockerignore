@@ -11,6 +11,7 @@ skills-lock.json
 
 retroxide.sqlite3
 storage
+frontend
 
 .env
 *.log
