@@ -1,0 +1,16 @@
+.git
+.gitignore
+.vscode
+.agents
+
+target
+llvm-cov-target
+
+docs
+skills-lock.json
+
+retroxide.sqlite3
+storage
+
+.env
+*.log

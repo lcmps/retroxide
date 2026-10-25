@@ -1,0 +1,194 @@
+package uploads
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+
+	"github.com/lcmps/retroxide/internal/features/rom"
+	"github.com/lcmps/retroxide/internal/platform/id"
+	"github.com/lcmps/retroxide/internal/shared/fault"
+)
+
+type identifyUploadRepository interface {
+	FindUpload(context.Context, string) (*Upload, error)
+	SaveUpload(context.Context, Upload) error
+}
+
+type identifyROMRepository interface {
+	FindROMFileByID(context.Context, string) (*rom.ROMFile, error)
+	SaveROM(context.Context, rom.ROM) error
+}
+
+type IdentifyService struct {
+	uploadRepository identifyUploadRepository
+	romRepository    identifyROMRepository
+}
+
+func NewIdentifyService(uploadRepository identifyUploadRepository, romRepository identifyROMRepository) *IdentifyService {
+	return &IdentifyService{uploadRepository: uploadRepository, romRepository: romRepository}
+}
+
+func (service *IdentifyService) Identify(ctx context.Context, uploadID, romFileID string) error {
+	upload, err := service.uploadRepository.FindUpload(ctx, uploadID)
+	if err != nil {
+		return err
+	}
+	if upload == nil {
+		return fault.NotFound()
+	}
+	romFile, err := service.romRepository.FindROMFileByID(ctx, romFileID)
+	if err != nil {
+		return err
+	}
+	if romFile == nil {
+		if err := upload.TransitionTo(UploadStatusFailed); err != nil {
+			return fault.Internal(fmt.Errorf("transitioning upload to failed: %w", err))
+		}
+		message := "rom file not found for identification"
+		upload.ErrorMessage = &message
+		if err := service.uploadRepository.SaveUpload(ctx, *upload); err != nil {
+			return err
+		}
+		return fault.NotFound()
+	}
+
+	identity := InferIdentityFromFilename(upload.OriginalFilename)
+	romID, err := id.New("rom")
+	if err != nil {
+		return fault.Internal(fmt.Errorf("generating rom id: %w", err))
+	}
+	rom := rom.ROM{
+		ID:         romID,
+		ROMFileID:  romFileID,
+		UploaderID: upload.UploaderID,
+		Identity:   identity,
+	}
+	if err := service.romRepository.SaveROM(ctx, rom); err != nil {
+		if transitionErr := upload.TransitionTo(UploadStatusFailed); transitionErr == nil {
+			message := err.Error()
+			upload.ErrorMessage = &message
+			if saveErr := service.uploadRepository.SaveUpload(ctx, *upload); saveErr != nil {
+				slog.ErrorContext(ctx, "failed to persist failed upload status", "upload_id", uploadID, "error", saveErr)
+			}
+		}
+		return err
+	}
+	if err := upload.TransitionTo(UploadStatusCompleted); err != nil {
+		return fault.Internal(fmt.Errorf("transitioning upload to completed: %w", err))
+	}
+	upload.ErrorMessage = nil
+	upload.ROMID = &romID
+	return service.uploadRepository.SaveUpload(ctx, *upload)
+}
+
+func InferIdentityFromFilename(filename string) rom.ROMIdentity {
+	name, extension := splitFilename(filename)
+	lowerName := strings.ToLower(name)
+	platform := inferPlatform(extension)
+	region := inferRegion(lowerName)
+	version := inferVersion(name, lowerName)
+	confidence := uint8(70)
+	if platform == "unknown" {
+		confidence = 45
+	} else if region != nil || version != nil {
+		confidence = 80
+	}
+	return rom.ROMIdentity{
+		Title:        inferTitle(name),
+		Platform:     platform,
+		Region:       region,
+		Version:      version,
+		IdentifiedBy: "retroxide_filename_v1",
+		Confidence:   confidence,
+	}
+}
+
+func splitFilename(filename string) (string, string) {
+	index := strings.LastIndexByte(filename, '.')
+	if index < 0 {
+		return filename, ""
+	}
+	return filename[:index], filename[index+1:]
+}
+
+func inferPlatform(extension string) string {
+	switch strings.ToLower(extension) {
+	case "nes":
+		return "nes"
+	case "sfc", "smc":
+		return "snes"
+	case "gba":
+		return "gba"
+	case "gb":
+		return "gb"
+	case "gbc":
+		return "gbc"
+	case "n64", "z64", "v64":
+		return "n64"
+	case "iso", "cue", "chd":
+		return "psx"
+	default:
+		return "unknown"
+	}
+}
+
+func inferRegion(lowerName string) *string {
+	regions := []struct {
+		markers []string
+		name    string
+	}{
+		{markers: []string{"(usa)", "[usa]", "(us)", "[us]"}, name: "usa"},
+		{markers: []string{"(europe)", "[europe]", "(eu)", "[eu]"}, name: "europe"},
+		{markers: []string{"(japan)", "[japan]", "(jp)", "[jp]"}, name: "japan"},
+		{markers: []string{"(world)", "[world]"}, name: "world"},
+	}
+	for _, region := range regions {
+		for _, marker := range region.markers {
+			if strings.Contains(lowerName, marker) {
+				value := region.name
+				return &value
+			}
+		}
+	}
+	return nil
+}
+
+func inferVersion(name, lowerName string) *string {
+	for _, marker := range []string{"rev ", "version "} {
+		if index := strings.Index(lowerName, marker); index >= 0 {
+			return extractVersion(name[index:])
+		}
+	}
+	if index := strings.IndexByte(lowerName, 'v'); index >= 0 && index+1 < len(lowerName) && lowerName[index+1] >= '0' && lowerName[index+1] <= '9' {
+		return extractVersion(name[index:])
+	}
+	return nil
+}
+
+func extractVersion(fragment string) *string {
+	if index := strings.IndexAny(fragment, ")]("); index >= 0 {
+		fragment = fragment[:index]
+	}
+	version := strings.TrimSpace(fragment)
+	if version == "" {
+		return nil
+	}
+	return &version
+}
+
+func inferTitle(name string) string {
+	originalName := name
+	if index := strings.Index(name, " ("); index >= 0 {
+		name = name[:index]
+	}
+	if index := strings.IndexByte(name, '['); index >= 0 {
+		name = name[:index]
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return strings.TrimSpace(originalName)
+	}
+	return name
+}

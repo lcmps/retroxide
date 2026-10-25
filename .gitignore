@@ -1,0 +1,15 @@
+# Build outputs
+target
+bin/
+*.test
+*.pdb
+
+.agents/
+skills-lock.json
+docs/
+.env
+.env.local
+*.sqlite*
+.vscode/
+storage/*
+.superpowers/
