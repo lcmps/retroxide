@@ -2,6 +2,7 @@ package libraries
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,6 +31,18 @@ func (repository *testLibraryRepository) FindLibraryByID(_ context.Context, libr
 		}
 	}
 	return nil, nil
+}
+
+func (repository *testLibraryRepository) ListLibraryROMIDs(_ context.Context, libraryID string) ([]string, error) {
+	var romIDs []string
+	for key := range repository.items {
+		prefix := libraryID + ":"
+		if strings.HasPrefix(key, prefix) {
+			romIDs = append(romIDs, strings.TrimPrefix(key, prefix))
+		}
+	}
+	slices.Sort(romIDs)
+	return romIDs, nil
 }
 
 func (repository *testLibraryRepository) AddLibraryItem(_ context.Context, libraryID, romID string) error {
@@ -84,6 +97,22 @@ func TestLibraryServiceConcealsUnauthorizedLibrary(t *testing.T) {
 	_, err := service.Get(context.Background(), identity.Requester{UserID: "user-2", Role: identity.RoleUser}, "lib-1")
 	if !fault.IsCode(err, fault.CodeNotFound) {
 		t.Fatalf("Get() error = %v, want not found", err)
+	}
+}
+
+func TestLibraryServiceGetReturnsSortedROMMembership(t *testing.T) {
+	repository := &testLibraryRepository{
+		libraries: []Library{{ID: "lib-1", UserID: "user-1", Name: "Collection"}},
+		items:     map[string]bool{"lib-1:rom-z": true, "lib-1:rom-a": true},
+	}
+	service := NewService(repository, testLibraryROMRepository{roms: map[string]bool{}})
+
+	detail, err := service.Get(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser}, "lib-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(detail.ROMIDs, []string{"rom-a", "rom-z"}) {
+		t.Fatalf("ROMIDs = %v, want [rom-a rom-z]", detail.ROMIDs)
 	}
 }
 

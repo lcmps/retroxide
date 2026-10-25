@@ -8,6 +8,8 @@ import (
 
 type Lookup func(key string) (string, bool)
 
+const insecureProductionJWTSecret = "change-me-in-production-use-a-long-random-string"
+
 type Config struct {
 	RuntimeEnv              string
 	Host                    string
@@ -78,6 +80,9 @@ func Load(lookup Lookup) (Config, error) {
 	}
 	if len(secret) < 32 {
 		return Config{}, invalid("RETROXIDE_JWT_SECRET", "must be at least 32 characters long")
+	}
+	if (runtimeEnv == "prod" || runtimeEnv == "production") && secret == insecureProductionJWTSecret {
+		return Config{}, invalid("RETROXIDE_JWT_SECRET", "must not use the built-in placeholder in production")
 	}
 	mimeTypes := parseList(get(lookup, "RETROXIDE_ALLOWED_UPLOAD_MIME_TYPES", "application/octet-stream"), true)
 	if len(mimeTypes) == 0 {

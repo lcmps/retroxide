@@ -53,15 +53,22 @@ func (service *Service) Create(ctx context.Context, requester identity.Requester
 	return LibraryDTO{LibraryID: library.ID, Name: library.Name}, nil
 }
 
-func (service *Service) Get(ctx context.Context, requester identity.Requester, libraryID string) (LibraryDTO, error) {
+func (service *Service) Get(ctx context.Context, requester identity.Requester, libraryID string) (LibraryDetailDTO, error) {
 	library, err := service.libraries.FindLibraryByID(ctx, libraryID)
 	if err != nil {
-		return LibraryDTO{}, err
+		return LibraryDetailDTO{}, err
 	}
 	if library == nil || !requester.CanAccess(library.UserID) {
-		return LibraryDTO{}, fault.NotFound()
+		return LibraryDetailDTO{}, fault.NotFound()
 	}
-	return LibraryDTO{LibraryID: library.ID, Name: library.Name}, nil
+	romIDs, err := service.libraries.ListLibraryROMIDs(ctx, library.ID)
+	if err != nil {
+		return LibraryDetailDTO{}, err
+	}
+	if romIDs == nil {
+		romIDs = []string{}
+	}
+	return LibraryDetailDTO{LibraryID: library.ID, Name: library.Name, ROMIDs: romIDs}, nil
 }
 
 func (service *Service) AddItem(ctx context.Context, requester identity.Requester, libraryID, romID string) error {

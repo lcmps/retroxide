@@ -341,6 +341,17 @@ func registerRoutes(router *gin.Engine, dependencies Dependencies, options Optio
 		context.Status(http.StatusNoContent)
 	})
 
+	api.GET("/client", func(context *gin.Context) {
+		if !requireDependencies(context, dependencies.Clients) {
+			return
+		}
+		clients, err := dependencies.Clients.List(context.Request.Context(), requesterFromContext(context))
+		if err != nil {
+			writeError(context, err)
+			return
+		}
+		context.JSON(http.StatusOK, clients)
+	})
 	api.POST("/client", func(context *gin.Context) {
 		if !requireDependencies(context, dependencies.Clients) {
 			return

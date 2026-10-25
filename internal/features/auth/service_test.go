@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -166,15 +168,22 @@ func (repository *authTestRefreshRepository) RevokeAllForUser(_ context.Context,
 }
 
 type authTestClientRepository struct {
-	client Client
-	count  int
+	client  Client
+	clients []Client
+	count   int
 }
 
 func (repository *authTestClientRepository) FindByTokenHash(context.Context, string) (*Client, error) {
 	return nil, nil
 }
-func (repository *authTestClientRepository) FindByUserID(context.Context, string) ([]Client, error) {
-	return nil, nil
+func (repository *authTestClientRepository) FindByUserID(_ context.Context, userID string) ([]Client, error) {
+	clients := make([]Client, 0, len(repository.clients))
+	for _, client := range repository.clients {
+		if client.UserID == userID {
+			clients = append(clients, client)
+		}
+	}
+	return clients, nil
 }
 func (repository *authTestClientRepository) SaveClient(_ context.Context, client Client) error {
 	repository.client = client
@@ -302,6 +311,34 @@ func TestClientServiceStoresOnlyHashAndReturnsPlainTokenOnce(t *testing.T) {
 	}
 	if repository.client.UserID != "admin-1" || repository.client.Name != "frontend" {
 		t.Fatalf("stored client = %+v", repository.client)
+	}
+}
+
+func TestClientServiceListsOnlyForAdminWithoutTokenSecrets(t *testing.T) {
+	repository := &authTestClientRepository{clients: []Client{
+		{ID: "client-1", UserID: "admin-1", Name: "desktop", TokenHash: "secret-hash"},
+		{ID: "client-2", UserID: "other-user", Name: "other", TokenHash: "other-hash"},
+	}}
+	service := NewClientService(repository)
+
+	clients, err := service.List(context.Background(), identity.Requester{UserID: "admin-1", Role: identity.RoleAdmin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clients.Item) != 1 || clients.Item[0].ID != "client-1" || clients.Item[0].Name != "desktop" {
+		t.Fatalf("clients = %+v, want only client-1 metadata", clients)
+	}
+	encoded, err := json.Marshal(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "token") || strings.Contains(string(encoded), "secret-hash") {
+		t.Fatalf("client list leaked token material: %s", encoded)
+	}
+
+	_, err = service.List(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser})
+	if !fault.IsCode(err, fault.CodeForbidden) {
+		t.Fatalf("user list error = %v, want forbidden", err)
 	}
 }
 

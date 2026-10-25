@@ -57,6 +57,7 @@ func TestLoadRejectsInvalidExplicitValues(t *testing.T) {
 	}{
 		{name: "missing secret", values: map[string]string{}},
 		{name: "short secret", values: map[string]string{"RETROXIDE_JWT_SECRET": "short"}},
+		{name: "production placeholder secret", values: map[string]string{"RETROXIDE_ENV": "prod", "RETROXIDE_JWT_SECRET": "change-me-in-production-use-a-long-random-string"}},
 		{name: "zero port", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_PORT": "0"}},
 		{name: "unknown driver", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_DB_DRIVER": "postgres"}},
 		{name: "worker count exceeds bound", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_WORKER_COUNT": "65"}},

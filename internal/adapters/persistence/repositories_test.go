@@ -110,6 +110,10 @@ func TestRepositoriesLibraryMembershipIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	romIDs, err := repositories.ListLibraryROMIDs(ctx, "lib-1")
+	if err != nil || len(romIDs) != 1 || romIDs[0] != "rom-1" {
+		t.Fatalf("library ROM IDs = %v, %v, want [rom-1]", romIDs, err)
+	}
 	removed, err := repositories.RemoveLibraryItem(ctx, "lib-1", "rom-1")
 	if err != nil || !removed {
 		t.Fatalf("first removal = %t, %v", removed, err)
@@ -117,6 +121,10 @@ func TestRepositoriesLibraryMembershipIsIdempotent(t *testing.T) {
 	removed, err = repositories.RemoveLibraryItem(ctx, "lib-1", "rom-1")
 	if err != nil || removed {
 		t.Fatalf("second removal = %t, %v, want false", removed, err)
+	}
+	romIDs, err = repositories.ListLibraryROMIDs(ctx, "lib-1")
+	if err != nil || len(romIDs) != 0 {
+		t.Fatalf("ROM IDs after removal = %v, %v, want empty", romIDs, err)
 	}
 }
 

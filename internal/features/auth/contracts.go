@@ -59,6 +59,7 @@ type SessionAPI interface {
 }
 
 type ClientAPI interface {
+	List(context.Context, identity.Requester) (ClientListResponse, error)
 	Create(context.Context, identity.Requester, string) (CreateClientResponse, error)
 	Revoke(context.Context, identity.Requester, string) error
 }

@@ -37,7 +37,7 @@ func (routerTestClients) FindByUserID(context.Context, string) ([]auth.Client, e
 	return nil, nil
 }
 func (routerTestClients) SaveClient(context.Context, auth.Client) error { return nil }
-func (routerTestClients) DeleteClient(context.Context, string) error      { return nil }
+func (routerTestClients) DeleteClient(context.Context, string) error    { return nil }
 
 type routerTestSessions struct{}
 
@@ -167,7 +167,7 @@ func TestRouterWrongJSONContentTypeReturns415Envelope(t *testing.T) {
 	}
 }
 
-func TestCORSPreflightAllowsConfiguredMethodsAndRejectsPatch(t *testing.T) {
+func TestCORSPreflightAllowsPatchAndRejectsUnsupportedMethod(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := NewRouter(Dependencies{}, Options{CORSOrigins: []string{"https://frontend.example"}})
 	request := httptest.NewRequest(http.MethodOptions, "/api/v1/rom", nil)
@@ -179,14 +179,26 @@ func TestCORSPreflightAllowsConfiguredMethodsAndRejectsPatch(t *testing.T) {
 	if response.Code != http.StatusNoContent || response.Header().Get("Access-Control-Allow-Origin") != "https://frontend.example" {
 		t.Fatalf("GET preflight = %d %#v", response.Code, response.Header())
 	}
+	if response.Header().Get("Access-Control-Expose-Headers") != "Accept-Ranges, Content-Disposition, Content-Range, ETag, Last-Modified, X-Request-ID" {
+		t.Fatalf("exposed headers = %q", response.Header().Get("Access-Control-Expose-Headers"))
+	}
 
 	request = httptest.NewRequest(http.MethodOptions, "/api/v1/rom/rom-1", nil)
 	request.Header.Set("Origin", "https://frontend.example")
 	request.Header.Set("Access-Control-Request-Method", http.MethodPatch)
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || response.Header().Get("Access-Control-Allow-Methods") == "" {
+		t.Fatalf("PATCH preflight status = %d, headers = %#v, want 204 with allow methods", response.Code, response.Header())
+	}
+
+	request = httptest.NewRequest(http.MethodOptions, "/api/v1/rom/rom-1", nil)
+	request.Header.Set("Origin", "https://frontend.example")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
 	if response.Code != http.StatusForbidden {
-		t.Fatalf("PATCH preflight status = %d, want 403", response.Code)
+		t.Fatalf("PUT preflight status = %d, want 403", response.Code)
 	}
 }
 
@@ -206,7 +218,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"GET /api/v1/rom/:rom_id/cover", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
 		"GET /api/v1/library", "POST /api/v1/library", "GET /api/v1/library/:library_id",
 		"POST /api/v1/library/:library_id/item", "DELETE /api/v1/library/:library_id/item/:rom_id",
-		"POST /api/v1/client", "DELETE /api/v1/client/:id",
+		"GET /api/v1/client", "POST /api/v1/client", "DELETE /api/v1/client/:id",
 	}
 	for _, route := range want {
 		if !registered[route] {

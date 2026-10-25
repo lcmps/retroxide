@@ -207,6 +207,21 @@ func NewClientService(clients ClientRepository) *ClientService {
 	return &ClientService{clients: clients}
 }
 
+func (service *ClientService) List(ctx context.Context, requester identity.Requester) (ClientListResponse, error) {
+	if !requester.IsAdmin() {
+		return ClientListResponse{}, fault.Forbidden()
+	}
+	clients, err := service.clients.FindByUserID(ctx, requester.UserID)
+	if err != nil {
+		return ClientListResponse{}, err
+	}
+	result := ClientListResponse{Item: make([]ClientDTO, 0, len(clients))}
+	for _, client := range clients {
+		result.Item = append(result.Item, ClientDTO{ID: client.ID, UserID: client.UserID, Name: client.Name})
+	}
+	return result, nil
+}
+
 func (service *ClientService) Create(ctx context.Context, requester identity.Requester, name string) (CreateClientResponse, error) {
 	if !requester.IsAdmin() {
 		return CreateClientResponse{}, fault.Forbidden()

@@ -113,13 +113,14 @@ func setCORSHeaders(context *gin.Context, origin string, allowAny bool) {
 		context.Header("Access-Control-Allow-Origin", origin)
 		context.Header("Vary", "Origin")
 	}
-	context.Header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+	context.Header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 	context.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+	context.Header("Access-Control-Expose-Headers", "Accept-Ranges, Content-Disposition, Content-Range, ETag, Last-Modified, X-Request-ID")
 }
 
 func corsMethodAllowed(method string) bool {
 	switch method {
-	case http.MethodGet, http.MethodPost, http.MethodDelete, http.MethodOptions:
+	case http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodDelete, http.MethodOptions:
 		return true
 	default:
 		return false

@@ -246,6 +246,15 @@ func (repositories *Repositories) FindLibraryByID(ctx context.Context, libraryID
 	return &library, nil
 }
 
+func (repositories *Repositories) ListLibraryROMIDs(ctx context.Context, libraryID string) ([]string, error) {
+	var romIDs []string
+	if err := repositories.DB.WithContext(ctx).Model(&LibraryItemModel{}).
+		Where("library_id = ?", libraryID).Order("rom_id ASC").Pluck("rom_id", &romIDs).Error; err != nil {
+		return nil, databaseError("listing library ROMs", err)
+	}
+	return romIDs, nil
+}
+
 func (repositories *Repositories) AddLibraryItem(ctx context.Context, libraryID, romID string) error {
 	item := LibraryItemModel{LibraryID: libraryID, ROMID: romID}
 	if err := repositories.DB.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&item).Error; err != nil {
