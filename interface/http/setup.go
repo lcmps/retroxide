@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lcmps/retroxide/application/fault"
@@ -13,7 +14,7 @@ import (
 const setupPath = "/api/v1/setup"
 
 // NewSetupRouter serves only health, locales, and the setup wizard API until configuration is complete.
-func NewSetupRouter(service setup.Service, locales map[string][]byte, logger *slog.Logger) *gin.Engine {
+func NewSetupRouter(service setup.Service, locales map[string][]byte, logger *slog.Logger, frontend http.Handler) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.CustomRecovery(func(context *gin.Context, recovered any) {
 		slog.ErrorContext(context.Request.Context(), "http handler panic", "panic", recovered)
@@ -57,10 +58,27 @@ func NewSetupRouter(service setup.Service, locales map[string][]byte, logger *sl
 		}
 		context.Status(http.StatusNoContent)
 	})
-	router.NoRoute(func(context *gin.Context) {
+	router.NoRoute(frontendFallback(frontend, func(context *gin.Context) {
 		writeSpecificError(context, http.StatusServiceUnavailable, "setup_required", "server configuration is required")
-	})
+	}))
 	return router
+}
+
+// frontendFallback sends unmatched non-API requests to the web app and everything else to apiFallback.
+func frontendFallback(frontend http.Handler, apiFallback gin.HandlerFunc) gin.HandlerFunc {
+	return func(context *gin.Context) {
+		if frontend == nil || isAPIPath(context.Request.URL.Path) {
+			apiFallback(context)
+			return
+		}
+		// Gin presets 404 for unmatched routes; the frontend decides the real status.
+		context.Status(http.StatusOK)
+		frontend.ServeHTTP(context.Writer, context.Request)
+	}
+}
+
+func isAPIPath(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/")
 }
 
 func registerSetupStatusRoute(router *gin.Engine) {

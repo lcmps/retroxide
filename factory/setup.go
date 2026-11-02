@@ -22,6 +22,7 @@ import (
 	"github.com/lcmps/retroxide/infrastructure/persistence"
 	httpadapter "github.com/lcmps/retroxide/interface/http"
 	"github.com/lcmps/retroxide/interface/http/i18n"
+	"github.com/lcmps/retroxide/interface/web"
 	"gorm.io/gorm"
 )
 
@@ -59,7 +60,7 @@ func NewSetupRouter(service setup.Service, logger *slog.Logger) (http.Handler, e
 	if err != nil {
 		return nil, fault.Internal(fmt.Errorf("loading locale catalogs: %w", err))
 	}
-	return httpadapter.NewSetupRouter(service, locales, logger), nil
+	return httpadapter.NewSetupRouter(service, locales, logger, web.New()), nil
 }
 
 func (service *SetupService) Status() setup.Status {

@@ -10,6 +10,7 @@ import (
 	"github.com/lcmps/retroxide/infrastructure/config"
 	httpadapter "github.com/lcmps/retroxide/interface/http"
 	"github.com/lcmps/retroxide/interface/http/i18n"
+	"github.com/lcmps/retroxide/interface/web"
 )
 
 func NewRouter(settings config.Config, services *Services, tokens auth.TokenService, clients auth.ClientRepository, logger *slog.Logger) (http.Handler, error) {
@@ -30,5 +31,6 @@ func NewRouter(settings config.Config, services *Services, tokens auth.TokenServ
 	}, httpadapter.Options{
 		MaxUploadBytes: settings.MaxUploadBytes,
 		CORSOrigins:    settings.CORSAllowedOrigins,
+		Frontend:       web.New(),
 	}), nil
 }

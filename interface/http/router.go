@@ -33,6 +33,8 @@ type Dependencies struct {
 type Options struct {
 	MaxUploadBytes int64
 	CORSOrigins    []string
+	// Frontend serves non-API paths; nil leaves them as 404s.
+	Frontend http.Handler
 }
 
 func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
@@ -50,6 +52,9 @@ func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 	})
 	registerSetupStatusRoute(router)
 	registerRoutes(router, dependencies, options)
+	router.NoRoute(frontendFallback(options.Frontend, func(context *gin.Context) {
+		writeError(context, fault.NotFound())
+	}))
 	return router
 }
 
@@ -172,6 +177,9 @@ func authMiddleware(tokens auth.TokenService, clients auth.ClientRepository) gin
 }
 
 func publicPrefix(method, path string) bool {
+	if !isAPIPath(path) {
+		return true
+	}
 	if method == http.MethodGet && (path == "/api/v1/i18n" || strings.HasPrefix(path, "/api/v1/i18n/")) {
 		return true
 	}
