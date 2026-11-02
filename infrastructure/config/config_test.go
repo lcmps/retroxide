@@ -20,7 +20,7 @@ func TestLoadUsesRustDefaultsAndSingleWorker(t *testing.T) {
 	if config.Host != "0.0.0.0" || config.Port != 3000 || config.DBDriver != "sqlite" || config.MaxUploadBytes != 64*1024*1024 {
 		t.Fatalf("unexpected defaults: %+v", config)
 	}
-	if config.WorkerCount != 1 || config.JWTAccessExpirySecs != 900 || config.JWTRefreshExpirySecs != 604800 {
+	if config.WorkerCount != 1 || config.JWTAccessExpirySecs != 3600 || config.JWTRefreshExpirySecs != 604800 {
 		t.Fatalf("unexpected concurrency/auth defaults: %+v", config)
 	}
 	if len(config.AllowedUploadExtensions) == 0 || len(config.AllowedUploadMIMETypes) == 0 {
