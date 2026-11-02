@@ -51,6 +51,7 @@ ALTER TABLE rom ADD COLUMN release_year TEXT;
 ALTER TABLE rom ADD COLUMN description TEXT;
 ALTER TABLE rom ADD COLUMN title_screen_path TEXT;
 ALTER TABLE rom ADD COLUMN screenshot_path TEXT;`},
+	{11, "widen_rom_file_identifiers", `SELECT 1;`},
 }
 
 var mysqlMigrations = []migration{
@@ -88,6 +89,12 @@ ALTER TABLE rom ADD COLUMN release_year VARCHAR(16) NULL;
 ALTER TABLE rom ADD COLUMN description TEXT NULL;
 ALTER TABLE rom ADD COLUMN title_screen_path TEXT NULL;
 ALTER TABLE rom ADD COLUMN screenshot_path TEXT NULL;`},
+	{11, "widen_rom_file_identifiers", `ALTER TABLE rom DROP FOREIGN KEY fk_rom_file;
+ALTER TABLE rom_file MODIFY COLUMN id VARCHAR(67) NOT NULL;
+ALTER TABLE rom MODIFY COLUMN rom_file_id VARCHAR(67) NOT NULL;
+ALTER TABLE job_queue MODIFY COLUMN rom_file_id VARCHAR(67) NOT NULL;
+ALTER TABLE job_dead_letter MODIFY COLUMN rom_file_id VARCHAR(67) NOT NULL;
+ALTER TABLE rom ADD CONSTRAINT fk_rom_file FOREIGN KEY (rom_file_id) REFERENCES rom_file(id);`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {
