@@ -14,6 +14,24 @@ export default defineConfig(({ mode }) => {
 					runes: ({ filename }) =>
 						filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 				},
+				// Hash mode pins the inline bootstrap script in the static pages' CSP <meta>.
+				// frame-ancestors cannot be set via <meta>; the Go server sends it as a header.
+				csp: {
+					mode: 'hash',
+					directives: {
+						'default-src': ['self'],
+						'script-src': ['self'],
+						// bits-ui/floating-ui position popovers with inline style attributes.
+						'style-src': ['self', 'unsafe-inline'],
+						// Cover art and downloads are fetched with the bearer token, then shown via blob: URLs.
+						'img-src': ['self', 'blob:', 'data:'],
+						'font-src': ['self'],
+						'connect-src': ['self'],
+						'object-src': ['none'],
+						'base-uri': ['self'],
+						'form-action': ['self']
+					}
+				},
 				// Output lands in the Go package that embeds it into the single binary.
 				adapter: adapter({
 					pages: '../interface/web/dist',

@@ -43,6 +43,7 @@ func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 		slog.ErrorContext(context.Request.Context(), "http handler panic", "panic", recovered)
 		writeError(context, fault.Internal(errors.New("http handler panic")))
 	}))
+	router.Use(securityHeadersMiddleware())
 	router.Use(requestIDMiddleware(dependencies.Logger))
 	router.Use(corsMiddleware(options.CORSOrigins))
 	router.Use(authMiddleware(dependencies.Tokens, dependencies.ClientRepo))
@@ -241,7 +242,12 @@ func bindJSON(context *gin.Context, target any) bool {
 		writeError(context, fault.UnsupportedMediaType("request content type must be application/json"))
 		return false
 	}
+	context.Request.Body = http.MaxBytesReader(context.Writer, context.Request.Body, maxJSONBodyBytes)
 	if err := context.ShouldBindJSON(target); err != nil {
+		if isBodyTooLarge(err) {
+			writeError(context, fault.Validation("request body is too large"))
+			return false
+		}
 		writeError(context, fault.Validation("invalid JSON request body"))
 		return false
 	}

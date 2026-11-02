@@ -20,6 +20,7 @@ func NewSetupRouter(service setup.Service, locales map[string][]byte, logger *sl
 		slog.ErrorContext(context.Request.Context(), "http handler panic", "panic", recovered)
 		writeError(context, fault.Internal(errors.New("http handler panic")))
 	}))
+	router.Use(securityHeadersMiddleware())
 	router.Use(requestIDMiddleware(logger))
 
 	router.GET("/health", func(context *gin.Context) {
