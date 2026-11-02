@@ -2,10 +2,10 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { Tooltip } from 'bits-ui';
-	import { fetchRomCover, i18n, listRoms } from '$lib';
-	import type { RomSummary } from '$lib';
-	import { useTranslate } from '$lib/i18n/helpers';
-	import { getErrorMessage } from '$lib/helpers/error';
+	import { fetchRomCover, i18n, listRoms } from '#lib';
+	import type { RomSummary } from '#lib';
+	import { useTranslate } from '#lib/i18n/helpers.js';
+	import { getErrorMessage } from '#lib/helpers/error.js';
 	import { onMount } from 'svelte';
 
 	let roms = $state<RomSummary[]>([]);
@@ -106,7 +106,7 @@
 		<ul class="rom-gallery" aria-label={t('library.roms.title', 'ROM Catalog')}>
 			{#each filteredRoms as rom (rom.rom_id)}
 				<li>
-					<a class="rom-tile" href={resolve(`/rom/${rom.rom_id}`)} aria-label={rom.title}>
+					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={rom.title}>
 						<div class="rom-cover" aria-hidden="true">{#if coverPreviews[rom.rom_id]}<img src={coverPreviews[rom.rom_id]} alt="" />{/if}</div>
 						<Tooltip.Root>
 							<Tooltip.Trigger>

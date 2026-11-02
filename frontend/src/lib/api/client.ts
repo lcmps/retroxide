@@ -1,4 +1,4 @@
-import { browser } from '$app/environment';
+import { browser } from '$app/env';
 
 import type {
   ApiError,
@@ -15,7 +15,7 @@ import type {
   UpdateRomRequest
 } from './types';
 
-import { parseTranslationCatalog, type Locale, type TranslationCatalog } from '$lib/i18n/catalog';
+import { parseTranslationCatalog, type Locale, type TranslationCatalog } from '#lib/i18n/catalog.js';
 import { ApiClientError, parseApiErrorPayload } from './errors';
 import {
   parseRomListResponse,

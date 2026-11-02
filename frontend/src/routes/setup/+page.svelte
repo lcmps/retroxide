@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import ActionButton from '$lib/components/ActionButton.svelte';
-	import { completeSetup, getSetupStatus, i18n, testMySQLConnection } from '$lib';
-	import type { DatabaseDriver, MySQLConnection, SetupLockedField } from '$lib';
-	import { ApiClientError } from '$lib/api/errors';
-	import { getErrorMessage } from '$lib/helpers/error';
-	import { useTranslate } from '$lib/i18n/helpers';
+	import ActionButton from '#lib/components/ActionButton.svelte';
+	import { completeSetup, getSetupStatus, i18n, testMySQLConnection } from '#lib';
+	import type { DatabaseDriver, MySQLConnection, SetupLockedField } from '#lib';
+	import { ApiClientError } from '#lib/api/errors.js';
+	import { getErrorMessage } from '#lib/helpers/error.js';
+	import { useTranslate } from '#lib/i18n/helpers.js';
 
 	const MIN_PASSWORD_LENGTH = 8;
 

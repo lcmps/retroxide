@@ -1,7 +1,7 @@
-import { browser } from '$app/environment';
+import { browser } from '$app/env';
 
-import { fetchCatalog } from '$lib/api/client';
-import { logger } from '$lib/utils/logger';
+import { fetchCatalog } from '#lib/api/client.js';
+import { logger } from '#lib/utils/logger.js';
 
 import {
 	createCatalog,

@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
+	import { browser } from '$app/env';
 	import { onMount } from 'svelte';
-	import ActionButton from '$lib/components/ActionButton.svelte';
-	import IconButton from '$lib/components/IconButton.svelte';
-	import { downloadRom, i18n, listRoms } from '$lib';
-	import { useTranslate } from '$lib/i18n/helpers';
-	import { getErrorMessage } from '$lib/helpers/error';
-	import type { DownloadedRom, RomSummary } from '$lib';
+	import ActionButton from '#lib/components/ActionButton.svelte';
+	import IconButton from '#lib/components/IconButton.svelte';
+	import { downloadRom, i18n, listRoms } from '#lib';
+	import { useTranslate } from '#lib/i18n/helpers.js';
+	import { getErrorMessage } from '#lib/helpers/error.js';
+	import type { DownloadedRom, RomSummary } from '#lib';
 
 	type QueueItemStatus = 'ready' | 'downloading' | 'completed' | 'failed';
 
