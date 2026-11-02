@@ -59,7 +59,8 @@ func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit i
 		query = query.Where("r.id > ?", *afterCursor)
 	}
 	if platform != nil && *platform != "" {
-		query = query.Where("LOWER(r.platform) = ?", strings.ToLower(*platform))
+		// platform_key is the generated, indexed LOWER(platform) column.
+		query = query.Where("r.platform_key = ?", strings.ToLower(*platform))
 	}
 	return scanROMsWithFiles(query.Order("r.id ASC").Limit(limit+1), "listing roms")
 }

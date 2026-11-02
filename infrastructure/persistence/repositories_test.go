@@ -267,3 +267,22 @@ func TestRepositoriesListLibraryFiltersByOwnerInSQL(t *testing.T) {
 		t.Fatalf("unfiltered libraries = %+v, %v, want both", all, err)
 	}
 }
+
+func TestRepositoriesPlatformFilterUsesTheCaseInsensitiveIndex(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	err := repositories.DB.WithContext(ctx).
+		Raw("EXPLAIN QUERY PLAN SELECT r.id FROM rom AS r WHERE r.platform_key = ?", "snes").
+		Scan(&plan).Error
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range plan {
+		if strings.Contains(step.Detail, "idx_rom_platform_key") {
+			return
+		}
+	}
+	t.Fatalf("query plan %+v does not use idx_rom_platform_key", plan)
+}
