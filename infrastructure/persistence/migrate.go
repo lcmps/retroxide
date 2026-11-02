@@ -56,6 +56,7 @@ ALTER TABLE rom ADD COLUMN screenshot_path TEXT;`},
 	{13, "index_case_insensitive_platform", `ALTER TABLE rom ADD COLUMN platform_key TEXT GENERATED ALWAYS AS (LOWER(platform)) VIRTUAL;
 CREATE INDEX IF NOT EXISTS idx_rom_platform_key ON rom(platform_key);`},
 	{14, "index_job_queue_availability", `CREATE INDEX IF NOT EXISTS idx_job_queue_available_at ON job_queue(available_at);`},
+	{15, "index_upload_rom_id", `CREATE INDEX IF NOT EXISTS idx_upload_rom_id ON upload(rom_id);`},
 }
 
 var mysqlMigrations = []migration{
@@ -103,6 +104,7 @@ ALTER TABLE rom ADD CONSTRAINT fk_rom_file FOREIGN KEY (rom_file_id) REFERENCES 
 	{13, "index_case_insensitive_platform", `ALTER TABLE rom ADD COLUMN platform_key VARCHAR(64) GENERATED ALWAYS AS (LOWER(platform)) STORED;
 CREATE INDEX idx_rom_platform_key ON rom(platform_key);`},
 	{14, "index_job_queue_availability", `CREATE INDEX idx_job_queue_available_at ON job_queue(available_at);`},
+	{15, "index_upload_rom_id", `CREATE INDEX idx_upload_rom_id ON upload(rom_id);`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {
