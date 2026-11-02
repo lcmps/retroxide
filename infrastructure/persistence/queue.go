@@ -30,7 +30,7 @@ func (repositories *Repositories) Claim(ctx context.Context, now time.Time, clai
 	expiredBefore := sqlTimestamp(now.Add(-claimTimeout))
 	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := tx.Where("available_at <= ? AND (claimed_at IS NULL OR claimed_at <= ?)", currentTimestamp, expiredBefore).Order("id ASC").Limit(1)
-		if tx.Dialector.Name() == "mysql" {
+		if isMySQL(tx) {
 			query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
 		}
 		var model JobQueueModel

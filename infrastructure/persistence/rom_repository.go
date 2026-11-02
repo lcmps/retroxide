@@ -1,0 +1,162 @@
+package persistence
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/lcmps/retroxide/application/fault"
+	romdomain "github.com/lcmps/retroxide/domain/rom"
+)
+
+// UpsertROMFile inserts romFile, reporting an already-exists conflict when identical content is stored.
+func (repositories *Repositories) UpsertROMFile(ctx context.Context, romFile romdomain.ROMFile) (romdomain.ROMFile, error) {
+	model := romFileModel(romFile)
+	if err := repositories.DB.WithContext(ctx).Create(&model).Error; err != nil {
+		existing, lookupErr := repositories.FindROMFileBySHA256(ctx, model.SHA256)
+		if lookupErr == nil && existing != nil {
+			return romdomain.ROMFile{}, classifyROMFileConflict(existing.ID, existing.Hash, romFile.Hash)
+		}
+		return romdomain.ROMFile{}, databaseError("upserting rom file", err)
+	}
+	saved, err := repositories.FindROMFileBySHA256(ctx, model.SHA256)
+	if err != nil {
+		return romdomain.ROMFile{}, err
+	}
+	if saved == nil {
+		return romdomain.ROMFile{}, fault.Internal(errors.New("rom file was not visible after upsert"))
+	}
+	return *saved, nil
+}
+
+func classifyROMFileConflict(existingID string, existingHash, incomingHash romdomain.ROMHash) error {
+	if !existingHash.MatchesContent(incomingHash) {
+		return fault.Internal(errors.New("sha256 collision with differing rom hash bundle"))
+	}
+	return fault.ROMAlreadyExists(existingID, incomingHash.SHA256)
+}
+
+func (repositories *Repositories) SaveROM(ctx context.Context, rom romdomain.ROM) error {
+	model := romModel(rom)
+	if err := repositories.DB.WithContext(ctx).Save(&model).Error; err != nil {
+		return databaseError("saving rom", err)
+	}
+	return nil
+}
+
+// ListROMsWithFiles returns up to limit+1 ROMs ordered by ID, so callers can detect a next page.
+// Nil filters are not applied; uploaderID restricts results to one owner.
+func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit int, afterCursor, platform, uploaderID *string) ([]romdomain.ROMWithFile, error) {
+	query := repositories.DB.WithContext(ctx).
+		Table("rom AS r").
+		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, f.sha256").
+		Joins("JOIN rom_file AS f ON f.id = r.rom_file_id")
+	if uploaderID != nil {
+		query = query.Where("r.uploader_id = ?", *uploaderID)
+	}
+	if afterCursor != nil {
+		query = query.Where("r.id > ?", *afterCursor)
+	}
+	if platform != nil && *platform != "" {
+		query = query.Where("LOWER(r.platform) = ?", strings.ToLower(*platform))
+	}
+	var rows []struct {
+		ROMModel
+		SHA256 string `gorm:"column:sha256"`
+	}
+	if err := query.Order("r.id ASC").Limit(limit + 1).Scan(&rows).Error; err != nil {
+		return nil, databaseError("listing roms", err)
+	}
+	result := make([]romdomain.ROMWithFile, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, romdomain.ROMWithFile{ROM: romEntity(row.ROMModel), SHA256: row.SHA256})
+	}
+	return result, nil
+}
+
+func (repositories *Repositories) FindROMByID(ctx context.Context, romID string) (*romdomain.ROM, error) {
+	model, err := takeOne[ROMModel](repositories.DB.WithContext(ctx).Where("id = ?", romID), "finding rom")
+	return mapOptional(model, err, infallible(romEntity))
+}
+
+func (repositories *Repositories) ROMExists(ctx context.Context, romID string) (bool, error) {
+	var count int64
+	if err := repositories.DB.WithContext(ctx).Model(&ROMModel{}).Where("id = ?", romID).Count(&count).Error; err != nil {
+		return false, databaseError("checking rom existence", err)
+	}
+	return count != 0, nil
+}
+
+func (repositories *Repositories) FindROMFileByID(ctx context.Context, romFileID string) (*romdomain.ROMFile, error) {
+	model, err := takeOne[ROMFileModel](repositories.DB.WithContext(ctx).Where("id = ?", romFileID), "finding rom file")
+	return mapOptional(model, err, romFileEntity)
+}
+
+func (repositories *Repositories) FindROMFileBySHA256(ctx context.Context, sha256 string) (*romdomain.ROMFile, error) {
+	model, err := takeOne[ROMFileModel](repositories.DB.WithContext(ctx).Where("sha256 = ?", sha256), "finding rom file by sha256")
+	return mapOptional(model, err, romFileEntity)
+}
+
+func (repositories *Repositories) FindROMFileByROMID(ctx context.Context, romID string) (*romdomain.ROMFile, error) {
+	query := repositories.DB.WithContext(ctx).Table("rom_file AS f").
+		Select("f.*").Joins("JOIN rom AS r ON r.rom_file_id = f.id").
+		Where("r.id = ?", romID)
+	model, err := takeOne[ROMFileModel](query, "finding rom file by rom id")
+	return mapOptional(model, err, romFileEntity)
+}
+
+func (repositories *Repositories) CountROMsByROMFileID(ctx context.Context, romFileID string) (uint64, error) {
+	var count int64
+	if err := repositories.DB.WithContext(ctx).Model(&ROMModel{}).Where("rom_file_id = ?", romFileID).Count(&count).Error; err != nil {
+		return 0, databaseError("counting rom references", err)
+	}
+	return uint64(count), nil
+}
+
+func (repositories *Repositories) DeleteROM(ctx context.Context, romID string) error {
+	return expectDeleted(repositories.DB.WithContext(ctx).Where("id = ?", romID).Delete(&ROMModel{}), "deleting rom")
+}
+
+func (repositories *Repositories) DeleteROMFile(ctx context.Context, romFileID string) error {
+	return expectDeleted(repositories.DB.WithContext(ctx).Where("id = ?", romFileID).Delete(&ROMFileModel{}), "deleting rom file")
+}
+
+func romModel(rom romdomain.ROM) ROMModel {
+	return ROMModel{
+		ID: rom.ID, ROMFileID: rom.ROMFileID, UploaderID: rom.UploaderID,
+		Title: rom.Identity.Title, Platform: rom.Identity.Platform, Region: rom.Identity.Region,
+		Version: rom.Identity.Version, IdentifiedBy: rom.Identity.IdentifiedBy,
+		Confidence: rom.Identity.Confidence, CoverArtPath: rom.Identity.CoverArtPath,
+		Publisher: rom.Identity.Publisher, ReleaseYear: rom.Identity.ReleaseYear, Description: rom.Identity.Description,
+		TitleScreenPath: rom.Identity.TitleScreenPath, ScreenshotPath: rom.Identity.ScreenshotPath,
+	}
+}
+
+func romEntity(model ROMModel) romdomain.ROM {
+	return romdomain.ROM{
+		ID: model.ID, ROMFileID: model.ROMFileID, UploaderID: model.UploaderID,
+		Identity: romdomain.ROMIdentity{
+			Title: model.Title, Platform: model.Platform, Region: model.Region, Version: model.Version,
+			CoverArtPath: model.CoverArtPath, IdentifiedBy: model.IdentifiedBy, Confidence: model.Confidence,
+			Publisher: model.Publisher, ReleaseYear: model.ReleaseYear, Description: model.Description,
+			TitleScreenPath: model.TitleScreenPath, ScreenshotPath: model.ScreenshotPath,
+		},
+	}
+}
+
+func romFileModel(romFile romdomain.ROMFile) ROMFileModel {
+	return ROMFileModel{
+		ID: romFile.ID, SHA256: romFile.Hash.SHA256, SHA1: romFile.Hash.SHA1,
+		MD5: romFile.Hash.MD5, CRC32: romFile.Hash.CRC32, Size: romFile.Size,
+		StoragePath: romFile.StoragePath,
+	}
+}
+
+func romFileEntity(model ROMFileModel) (romdomain.ROMFile, error) {
+	hash, err := romdomain.NewROMHash(model.SHA256, model.SHA1, model.MD5, model.CRC32)
+	if err != nil {
+		return romdomain.ROMFile{}, fault.Internal(fmt.Errorf("invalid persisted rom hash: %w", err))
+	}
+	return romdomain.ROMFile{ID: model.ID, Hash: hash, Size: model.Size, StoragePath: model.StoragePath}, nil
+}
