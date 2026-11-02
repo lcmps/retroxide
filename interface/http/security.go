@@ -30,17 +30,17 @@ const (
 
 // securityHeadersMiddleware sets browser hardening headers on every response.
 func securityHeadersMiddleware() gin.HandlerFunc {
-	return func(context *gin.Context) {
-		header := context.Writer.Header()
+	return func(c *gin.Context) {
+		header := c.Writer.Header()
 		header.Set("X-Content-Type-Options", "nosniff")
 		header.Set("X-Frame-Options", "DENY")
 		header.Set("Referrer-Policy", "no-referrer")
-		if isAPIPath(context.Request.URL.Path) {
+		if isAPIPath(c.Request.URL.Path) {
 			header.Set("Content-Security-Policy", apiContentSecurityPolicy)
 		} else {
 			header.Set("Content-Security-Policy", frontendContentSecurityPolicy)
 		}
-		context.Next()
+		c.Next()
 	}
 }
 
@@ -102,13 +102,13 @@ func (limiter *attemptLimiter) allow(key string) (bool, time.Duration) {
 
 // rateLimitMiddleware rejects requests once the client's attempts for this route are exhausted.
 func rateLimitMiddleware(limiter *attemptLimiter) gin.HandlerFunc {
-	return func(context *gin.Context) {
-		allowed, retryAfter := limiter.allow(context.ClientIP() + " " + context.FullPath())
+	return func(c *gin.Context) {
+		allowed, retryAfter := limiter.allow(c.ClientIP() + " " + c.FullPath())
 		if !allowed {
-			context.Header("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
-			writeError(context, fault.RateLimited())
+			c.Header("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
+			writeError(c, fault.RateLimited())
 			return
 		}
-		context.Next()
+		c.Next()
 	}
 }
