@@ -4,9 +4,12 @@ import type {
   ApiError,
   DownloadedRom,
   LoginRequest,
+  MySQLConnection,
   RomDetail,
   RomListResponse,
   SessionResponse,
+  SetupRequest,
+  SetupStatus,
   UploadAcceptedResponse,
   UploadStatusResponse,
   UpdateRomRequest
@@ -295,6 +298,26 @@ export async function checkHealth(): Promise<boolean> {
 
   const body = await response.text();
   return body.trim().toLowerCase() === 'ok';
+}
+
+export function getSetupStatus(): Promise<SetupStatus> {
+  return requestJson<SetupStatus>('/setup');
+}
+
+export function testMySQLConnection(connection: MySQLConnection): Promise<void> {
+  return requestNoContent('/setup/mysql/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(connection)
+  });
+}
+
+export function completeSetup(payload: SetupRequest): Promise<void> {
+  return requestNoContent('/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function fetchCatalog(locale: Locale): Promise<TranslationCatalog> {

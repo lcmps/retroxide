@@ -31,6 +31,12 @@ enforce dependency direction and cover assembly and failure cleanup.
 
 Requirements: Go 1.27+, Node.js/npm compatible with `frontend/package-lock.json`, and a C compiler for SQLite.
 
+### First-run setup
+
+If `RETROXIDE_JWT_SECRET` is not set in the environment or config file, the backend starts in setup mode and the frontend redirects to `/setup`. The wizard configures the database (SQLite, or MySQL with a connection test), the ROM storage folder, and the administrator account. It generates a JWT secret, verifies the database, writes the configuration to `RETROXIDE_CONFIG_FILE` (default `./.env`, mode `0600`), and switches to the full application without a restart. Admin credentials are used once for seeding and are not saved. Fields already set through environment variables are shown read-only.
+
+Setup endpoints require no authentication and are available only until the configuration is saved; complete setup before exposing the server to untrusted networks.
+
 The backend requires `RETROXIDE_JWT_SECRET` with at least 32 characters. The development `.env` placeholder is not accepted in production. Before starting Compose, set a real random value, for example:
 
 ```sh
