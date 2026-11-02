@@ -1,8 +1,10 @@
 package uploads
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 
 	romhash "github.com/lcmps/retroxide/infrastructure/hash"
@@ -49,15 +51,48 @@ func (repository *testUploadRepository) FindUpload(_ context.Context, _ string) 
 	return nil, nil
 }
 
+// testStorage stages in memory; writes counts commits and discards counts abandoned staging.
 type testStorage struct {
+	staged       int
 	writes       int
+	discards     int
 	deletes      []string
 	deleteCtxErr error
 }
 
-func (storage *testStorage) Write(_ context.Context, contentAddress string, _ []byte) (string, error) {
-	storage.writes++
+func (storage *testStorage) Stage(_ context.Context, content io.Reader) (StagedContent, error) {
+	data, err := io.ReadAll(content)
+	if err != nil {
+		return nil, err
+	}
+	storage.staged++
+	return &testStaged{storage: storage, size: int64(len(data))}, nil
+}
+
+// pending reports staged content that was neither committed nor discarded.
+func (storage *testStorage) pending() int {
+	return storage.staged - storage.writes - storage.discards
+}
+
+type testStaged struct {
+	storage *testStorage
+	size    int64
+	done    bool
+}
+
+func (staged *testStaged) Size() int64 { return staged.size }
+
+func (staged *testStaged) Commit(_ context.Context, contentAddress string) (string, error) {
+	staged.done = true
+	staged.storage.writes++
 	return "/storage/" + contentAddress, nil
+}
+
+func (staged *testStaged) Discard() {
+	if !staged.done {
+		staged.done = true
+		staged.storage.discards++
+	}
 }
 
 func (storage *testStorage) Delete(ctx context.Context, storagePath string) error {
@@ -106,7 +141,7 @@ func TestUploadServiceCreateAcceptsAndEnqueues(t *testing.T) {
 
 	result, err := service.Create(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser}, UploadInput{
 		Filename: "game.sfc",
-		Bytes:    []byte("abc"),
+		Content:  bytes.NewReader([]byte("abc")),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -142,12 +177,12 @@ func TestUploadServiceCreateRejectsDuplicateBeforeStorageWrite(t *testing.T) {
 
 	_, err = service.Create(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser}, UploadInput{
 		Filename: "game.sfc",
-		Bytes:    []byte("abc"),
+		Content:  bytes.NewReader([]byte("abc")),
 	})
 	if !fault.IsCode(err, fault.CodeROMAlreadyExists) {
 		t.Fatalf("Create() error = %v, want duplicate conflict", err)
 	}
-	if storage.writes != 0 || len(queue.payloads) != 0 || audit.duplicate != 1 {
+	if storage.writes != 0 || storage.pending() != 0 || len(queue.payloads) != 0 || audit.duplicate != 1 {
 		t.Fatalf("storage writes=%d queued=%d duplicate audits=%d", storage.writes, len(queue.payloads), audit.duplicate)
 	}
 }
@@ -163,7 +198,7 @@ func TestUploadServiceCreateCompensatesWhenEnqueueFails(t *testing.T) {
 
 	_, err := service.Create(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser}, UploadInput{
 		Filename: "game.sfc",
-		Bytes:    []byte("abc"),
+		Content:  bytes.NewReader([]byte("abc")),
 	})
 	if !errors.Is(err, queueError) {
 		t.Fatalf("Create() error = %v, want queue error", err)
@@ -202,13 +237,13 @@ func TestUploadServiceCreateRejectsInvalidInputBeforeStorage(t *testing.T) {
 			_, err := service.Create(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser}, UploadInput{
 				Filename: test.filename,
 				MIMEType: test.mimeType,
-				Bytes:    test.content,
+				Content:  bytes.NewReader(test.content),
 			})
 			if !fault.IsCode(err, test.wantCode) {
 				t.Fatalf("Create() error = %v, want code %q", err, test.wantCode)
 			}
-			if storage.writes != 0 {
-				t.Fatalf("storage writes = %d, want 0", storage.writes)
+			if storage.writes != 0 || storage.pending() != 0 {
+				t.Fatalf("storage writes = %d, pending staged = %d, want none", storage.writes, storage.pending())
 			}
 		})
 	}
@@ -222,7 +257,7 @@ func TestUploadServiceCreateRemovesContentWhenUploadSaveFails(t *testing.T) {
 	})
 	_, err := service.Create(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser}, UploadInput{
 		Filename: "game.sfc",
-		Bytes:    []byte("abc"),
+		Content:  bytes.NewReader([]byte("abc")),
 	})
 	if err == nil {
 		t.Fatal("Create() succeeded, want persistence error")
@@ -245,7 +280,7 @@ func TestUploadServiceDoesNotDeleteSharedContentAfterDuplicateInsertRace(t *test
 	)
 	_, err = service.Create(context.Background(), identity.Requester{UserID: "user-2", Role: identity.RoleUser}, UploadInput{
 		Filename: "game.sfc",
-		Bytes:    []byte("abc"),
+		Content:  bytes.NewReader([]byte("abc")),
 	})
 	if !fault.IsCode(err, fault.CodeROMAlreadyExists) {
 		t.Fatalf("Create() error = %v, want duplicate conflict", err)
@@ -265,7 +300,7 @@ func TestUploadServiceCleanupSurvivesRequestCancellation(t *testing.T) {
 	})
 	_, err := service.Create(requestContext, identity.Requester{UserID: "user-1", Role: identity.RoleUser}, UploadInput{
 		Filename: "game.sfc",
-		Bytes:    []byte("abc"),
+		Content:  bytes.NewReader([]byte("abc")),
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Create() error = %v, want context canceled", err)

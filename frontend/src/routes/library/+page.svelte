@@ -2,16 +2,21 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { Tooltip } from 'bits-ui';
-	import { fetchRomCover, i18n, listRoms } from '$lib';
-	import type { RomSummary } from '$lib';
-	import { useTranslate } from '$lib/i18n/helpers';
-	import { getErrorMessage } from '$lib/helpers/error';
+	import LoadMoreSentinel from '#lib/components/LoadMoreSentinel.svelte';
+	import RomCover from '#lib/components/RomCover.svelte';
+	import { i18n } from '#lib';
+	import { useTranslate } from '#lib/i18n/helpers.js';
+	import { getErrorMessage } from '#lib/helpers/error.js';
+	import { RomPager } from '#lib/roms/pager.svelte.js';
 	import { onMount } from 'svelte';
 
-	let roms = $state<RomSummary[]>([]);
-	let loading = $state(false);
-	let loadErrorMessage = $state('');
-	let coverPreviews = $state<Record<string, string>>({});
+	/** Wait for typing to pause before searching the server. */
+	const SEARCH_DEBOUNCE_MS = 250;
+
+	const pager = new RomPager();
+	let ready = $state(false);
+	let initErrorMessage = $state('');
+	let loadedOnce = false;
 
 	const t = useTranslate(i18n);
 
@@ -22,18 +27,21 @@
 			? formatPlatformName(selectedPlatform)
 			: t('library.title', 'Library')
 	);
-	const filteredRoms = $derived.by(() =>
-		roms.filter((rom) => {
-			const matchesPlatform = !selectedPlatform || rom.platform === selectedPlatform;
-			const matchesQuery =
-				!searchQuery ||
-				rom.title.toLowerCase().includes(searchQuery) ||
-				rom.platform.toLowerCase().includes(searchQuery) ||
-				rom.rom_id.toLowerCase().includes(searchQuery);
-
-			return matchesPlatform && matchesQuery;
-		})
+	const loadErrorMessage = $derived(
+		initErrorMessage || (pager.error ? getErrorMessage(pager.error, 'library.roms.error', 'Failed to load ROMs', t) : '')
 	);
+
+	// Filtering and search run on the server, one page at a time, so large catalogs load only
+	// what is on screen. Filter changes restart from the first page.
+	$effect(() => {
+		const filters = { platform: selectedPlatform || undefined, q: searchQuery || undefined };
+		if (!ready) {
+			return;
+		}
+		const timer = setTimeout(() => void pager.reset(filters), loadedOnce ? SEARCH_DEBOUNCE_MS : 0);
+		loadedOnce = true;
+		return () => clearTimeout(timer);
+	});
 
 	function formatPlatformName(platform: string): string {
 		const labels: Record<string, string> = {
@@ -49,47 +57,15 @@
 		return labels[platform.toLowerCase()] ?? platform;
 	}
 
-	async function loadRoms() {
-		loading = true;
-		loadErrorMessage = '';
-
-		try {
-			roms = await loadAllRoms();
-			await loadCoverPreviews(roms);
-		} catch (error) {
-			loadErrorMessage = getErrorMessage(error, 'library.roms.error', 'Failed to load ROMs', t);
-		} finally {
-			loading = false;
-		}
-	}
-
-	async function loadCoverPreviews(items: RomSummary[]): Promise<void> {
-		for (const url of Object.values(coverPreviews)) URL.revokeObjectURL(url);
-		const previews = await Promise.allSettled(items.filter((rom) => rom.cover_art_url).map(async (rom) => [rom.rom_id, URL.createObjectURL(await fetchRomCover(rom.rom_id))] as const));
-		const successful = previews.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
-		coverPreviews = Object.fromEntries(successful);
-	}
-
-	async function loadAllRoms(): Promise<RomSummary[]> {
-		const items: RomSummary[] = [];
-		let cursor: string | undefined;
-
-		while (true) {
-			const response = await listRoms(100, cursor);
-			items.push(...response.item);
-
-			if (!response.next_cursor) {
-				return items;
-			}
-
-			cursor = response.next_cursor;
-		}
-	}
-
 	onMount(() => {
-		void i18n.initialize().then(loadRoms).catch((error: unknown) => {
-			loadErrorMessage = getErrorMessage(error, 'library.roms.error', 'Failed to load ROMs', t);
-		});
+		void i18n
+			.initialize()
+			.catch((error: unknown) => {
+				initErrorMessage = getErrorMessage(error, 'library.roms.error', 'Failed to load ROMs', t);
+			})
+			.finally(() => {
+				ready = true;
+			});
 	});
 </script>
 
@@ -98,16 +74,16 @@
 		<h1 id="library-title">{pageTitle}</h1>
 	</div>
 
-	{#if loading}
+	{#if pager.items.length === 0 && (pager.loading || !ready)}
 		<p class="library-state">{t('library.roms.loading', 'Loading ROMs...')}</p>
-	{:else if filteredRoms.length === 0}
+	{:else if pager.items.length === 0}
 		<p class="library-state">{t('library.roms.empty', 'No ROMs matched the current filters.')}</p>
 	{:else}
 		<ul class="rom-gallery" aria-label={t('library.roms.title', 'ROM Catalog')}>
-			{#each filteredRoms as rom (rom.rom_id)}
+			{#each pager.items as rom (rom.rom_id)}
 				<li>
-					<a class="rom-tile" href={resolve(`/rom/${rom.rom_id}`)} aria-label={rom.title}>
-						<div class="rom-cover" aria-hidden="true">{#if coverPreviews[rom.rom_id]}<img src={coverPreviews[rom.rom_id]} alt="" />{/if}</div>
+					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={rom.title}>
+						<div class="rom-cover" aria-hidden="true"><RomCover romId={rom.rom_id} coverArtUrl={rom.cover_art_url} /></div>
 						<Tooltip.Root>
 							<Tooltip.Trigger>
 								{#snippet child({ props })}
@@ -125,6 +101,9 @@
 				</li>
 			{/each}
 		</ul>
+		{#if !pager.exhausted && !pager.error}
+			<LoadMoreSentinel onvisible={() => void pager.loadMore()} key={pager.items.length} />
+		{/if}
 	{/if}
 
   {#if loadErrorMessage}
@@ -172,7 +151,6 @@
 		overflow: hidden;
 	}
 
-	.rom-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
 
 	.rom-tile:hover .rom-cover,
 	.rom-tile:focus-visible .rom-cover {

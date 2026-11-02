@@ -1,8 +1,8 @@
-import { browser } from '$app/environment';
+import { browser } from '$app/env';
 
 import type {
   ApiError,
-  DownloadedRom,
+  DownloadLink,
   LoginRequest,
   MySQLConnection,
   RomDetail,
@@ -15,7 +15,7 @@ import type {
   UpdateRomRequest
 } from './types';
 
-import { parseTranslationCatalog, type Locale, type TranslationCatalog } from '$lib/i18n/catalog';
+import { parseTranslationCatalog, type Locale, type TranslationCatalog } from '#lib/i18n/catalog.js';
 import { ApiClientError, parseApiErrorPayload } from './errors';
 import {
   parseRomListResponse,
@@ -138,6 +138,21 @@ function refreshStoredSession(): Promise<boolean> {
   return refreshInFlight;
 }
 
+/** Refresh this long before expiry, so requests never go out with a token about to lapse. */
+const REFRESH_AHEAD_MS = 60_000;
+
+/**
+ * Refreshes the session ahead of expiry instead of waiting for a 401. Besides saving a wasted
+ * round trip, this keeps a large upload from being sent twice when the token lapses first.
+ * A failed refresh is not fatal here: the request proceeds and normal 401 handling applies.
+ */
+async function ensureFreshSession(): Promise<void> {
+  const session = readStoredSession();
+  if (session && session.expiresAt - Date.now() < REFRESH_AHEAD_MS) {
+    await refreshStoredSession();
+  }
+}
+
 function createHeaders(init: ApiRequestOptions | undefined): Headers {
   const headers = new Headers(init?.headers);
   const shouldAttachAuth = init?.withAuth ?? false;
@@ -157,6 +172,9 @@ function createHeaders(init: ApiRequestOptions | undefined): Headers {
 }
 
 async function requestResponse(path: string, init?: ApiRequestOptions): Promise<Response> {
+  if (init?.withAuth) {
+    await ensureFreshSession();
+  }
   let response = await fetch(createApiUrl(path), {
     ...init,
     headers: createHeaders(init)
@@ -263,33 +281,6 @@ function getXmlHttpRequestError(request: XMLHttpRequest): ApiClientError {
   });
 }
 
-function getDownloadFilename(headerValue: string | null, romId: string): string {
-  if (!headerValue) {
-    return `${romId}.rom`;
-  }
-
-  const utf8Match = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utf8Match?.[1]) {
-    try {
-      return decodeURIComponent(utf8Match[1]);
-    } catch {
-      return utf8Match[1];
-    }
-  }
-
-  const quotedMatch = headerValue.match(/filename="([^"]+)"/i);
-  if (quotedMatch?.[1]) {
-    return quotedMatch[1];
-  }
-
-  const plainMatch = headerValue.match(/filename=([^;]+)/i);
-  if (plainMatch?.[1]) {
-    return plainMatch[1].trim();
-  }
-
-  return `${romId}.rom`;
-}
-
 export async function checkHealth(): Promise<boolean> {
   const response = await fetch('/health', { method: 'GET' });
   if (!response.ok) {
@@ -324,10 +315,22 @@ export async function fetchCatalog(locale: Locale): Promise<TranslationCatalog> 
   return parseTranslationCatalog(await requestJson<unknown>(`/i18n/${encodeURIComponent(locale)}`));
 }
 
-export function listRoms(limit = 10, cursor?: string): Promise<RomListResponse> {
+/** Server-side ROM list filters: exact platform and case-insensitive search. */
+export type RomListFilters = {
+  platform?: string;
+  q?: string;
+};
+
+export function listRoms(limit = 10, cursor?: string, filters: RomListFilters = {}): Promise<RomListResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) {
     params.set('cursor', cursor);
+  }
+  if (filters.platform) {
+    params.set('platform', filters.platform);
+  }
+  if (filters.q) {
+    params.set('q', filters.q);
   }
 
   return requestJson<unknown>(`/rom?${params.toString()}`, { withAuth: true }).then(parseRomListResponse);
@@ -381,8 +384,13 @@ export function uploadRomCover(romId: string, file: File): Promise<RomDetail> {
   });
 }
 
-export async function fetchRomCover(romId: string): Promise<Blob> {
-  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/cover`, { withAuth: true });
+/**
+ * Fetches a ROM's cover. Passing the summary's cover_art_url keeps its content version, so the
+ * browser can serve repeat requests from its HTTP cache.
+ */
+export async function fetchRomCover(romId: string, coverArtUrl?: string | null): Promise<Blob> {
+  const version = coverArtUrl ? new URL(coverArtUrl, 'http://localhost').search : '';
+  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/cover${version}`, { withAuth: true });
   return response.blob();
 }
 
@@ -439,6 +447,7 @@ export function uploadRom(
   });
 
   return (async () => {
+  await ensureFreshSession();
   let request = await sendUpload();
   if (request.status === 401 && await refreshStoredSession()) request = await sendUpload();
   if (request.status < 200 || request.status >= 300) {
@@ -458,18 +467,33 @@ export function uploadStatus(uploadId: string): Promise<UploadStatusResponse> {
   });
 }
 
-export async function downloadRom(romId: string): Promise<DownloadedRom> {
-  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/download`, {
-    method: 'GET',
-    withAuth: true,
-    headers: { Accept: 'application/octet-stream' }
-  });
+/**
+ * Requests a signed, short-lived download link. Opening it lets the browser stream the file to
+ * disk with its own download UI, instead of buffering the whole ROM in page memory.
+ */
+export async function createDownloadLink(romId: string): Promise<DownloadLink> {
+  const link = await requestJson<{ url: string; expires_in: number }>(
+    `/rom/${encodeURIComponent(romId)}/download-link`,
+    { method: 'POST', withAuth: true }
+  );
+  return { url: resolveApiLink(link.url), filename: `${romId}.rom`, expiresIn: link.expires_in };
+}
 
-  const blob = await response.blob();
-  return {
-    blob,
-    filename: getDownloadFilename(response.headers.get('Content-Disposition'), romId),
-    contentType:
-      response.headers.get('Content-Type') ?? blob.type ?? 'application/octet-stream'
-  };
+/** Starts a native browser download of a ROM and returns the link it opened. */
+export async function downloadRom(romId: string): Promise<DownloadLink> {
+  const link = await createDownloadLink(romId);
+  const anchor = document.createElement('a');
+  anchor.href = link.url;
+  anchor.download = link.filename;
+  anchor.rel = 'noopener';
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  return link;
+}
+
+/** Resolves a server-relative link against the API origin, which may differ from the page's. */
+function resolveApiLink(path: string): string {
+  const pageURL = globalThis.location?.href ?? 'http://localhost';
+  return new URL(path, new URL(API_BASE_URL, pageURL)).href;
 }

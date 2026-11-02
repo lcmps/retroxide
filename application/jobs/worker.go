@@ -16,11 +16,16 @@ const (
 	maxAttempts    = uint8(3)
 	maxWorkerCount = 64
 	claimTimeout   = 5 * time.Minute
-	pollInterval   = 200 * time.Millisecond
-	errorBackoff   = 500 * time.Millisecond
+	// Idle workers poll at minIdleWait, doubling up to maxIdleWait while the queue stays empty.
+	// The polling is only a fallback: Notifier wakes a worker as soon as a job is enqueued.
+	minIdleWait  = 200 * time.Millisecond
+	maxIdleWait  = 5 * time.Second
+	errorBackoff = 500 * time.Millisecond
 )
 
-func Run(ctx context.Context, workerCount int, queue Queue, identifier Identifier) error {
+// Run processes queued jobs with workerCount workers until ctx is cancelled. notifier may be nil,
+// in which case workers rely on polling alone.
+func Run(ctx context.Context, workerCount int, queue Queue, identifier Identifier, notifier *Notifier) error {
 	if workerCount < 1 || workerCount > maxWorkerCount {
 		return fault.Validation("worker count must be between 1 and 64")
 	}
@@ -33,7 +38,7 @@ func Run(ctx context.Context, workerCount int, queue Queue, identifier Identifie
 	for range workerCount {
 		go func() {
 			defer workers.Done()
-			runWorker(ctx, queue, identifier)
+			runWorker(ctx, queue, identifier, notifier)
 		}()
 	}
 	<-ctx.Done()
@@ -41,7 +46,8 @@ func Run(ctx context.Context, workerCount int, queue Queue, identifier Identifie
 	return nil
 }
 
-func runWorker(ctx context.Context, queue Queue, identifier Identifier) {
+func runWorker(ctx context.Context, queue Queue, identifier Identifier, notifier *Notifier) {
+	idleWait := minIdleWait
 	for ctx.Err() == nil {
 		job, err := claimSafely(ctx, queue)
 		if err != nil {
@@ -55,12 +61,20 @@ func runWorker(ctx context.Context, queue Queue, identifier Identifier) {
 			continue
 		}
 		if job == nil {
-			if !wait(ctx, pollInterval) {
+			woken, ok := waitForWork(ctx, idleWait, notifier.wake())
+			if !ok {
 				return
+			}
+			if woken {
+				idleWait = minIdleWait
+			} else {
+				idleWait = min(idleWait*2, maxIdleWait)
 			}
 			continue
 		}
-
+		idleWait = minIdleWait
+		// More jobs may be queued behind this one; let an idle peer look while this worker is busy.
+		notifier.Notify()
 		processJob(context.WithoutCancel(ctx), queue, identifier, *job)
 	}
 }
@@ -127,6 +141,20 @@ func callSafely(operation string, call func() error) (err error) {
 		}
 	}()
 	return call()
+}
+
+// waitForWork sleeps for duration or until woken. ok is false once ctx is cancelled.
+func waitForWork(ctx context.Context, duration time.Duration, wake <-chan struct{}) (woken, ok bool) {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false, false
+	case <-wake:
+		return true, true
+	case <-timer.C:
+		return false, true
+	}
 }
 
 func wait(ctx context.Context, duration time.Duration) bool {

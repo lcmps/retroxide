@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/lcmps/retroxide/application/rom"
 	"os"
 	"strings"
 	"testing"
@@ -19,6 +20,9 @@ import (
 	librariesdomain "github.com/lcmps/retroxide/domain/libraries"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
 	"time"
+
+	gormmysql "gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 func TestMySQLMigrationAndAtomicRepositories(t *testing.T) {
@@ -56,7 +60,7 @@ func TestMySQLMigrationAndAtomicRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	romFile := romdomain.ROMFile{ID: "rf-" + userID, Hash: romFileHash, Size: 10, StoragePath: "/tmp/integration.rom"}
+	romFile := romdomain.ROMFile{ID: "rf_" + romFileHash.SHA256, Hash: romFileHash, Size: 10, StoragePath: "/tmp/integration.rom"}
 	if _, err := repositories.UpsertROMFile(ctx, romFile); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +71,7 @@ func TestMySQLMigrationAndAtomicRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	platform := "snes"
-	romRows, err := repositories.ListROMsWithFiles(ctx, 10, nil, &platform)
+	romRows, err := repositories.ListROMsWithFiles(ctx, 10, rom.ROMFilter{Platform: &platform})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,5 +128,87 @@ func TestMySQLMigrationAndAtomicRepositories(t *testing.T) {
 	storedReplacement, err := repositories.FindByJTI(ctx, replacement.JTI)
 	if err != nil || storedReplacement == nil || !storedReplacement.Revoked {
 		t.Fatalf("replacement after replay = %+v, %v, want revoked", storedReplacement, err)
+	}
+}
+
+func TestMySQLROMFileIdentifierUpgrade(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_UPGRADE_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_UPGRADE_URL must point to an empty disposable database")
+	}
+	dsn, err := mysqlDSN(mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := gorm.Open(gormmysql.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pool.Close() })
+	var tables int64
+	if err := db.Raw("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()").Scan(&tables).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tables != 0 {
+		t.Fatal("upgrade test requires an empty disposable database")
+	}
+	if err := db.Exec("CREATE TABLE schema_migration (version INT UNSIGNED PRIMARY KEY, name VARCHAR(255) NOT NULL, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)").Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range mysqlMigrations {
+		if item.version > 10 {
+			break
+		}
+		for _, statement := range splitMigrationStatements(item.sql) {
+			if err := db.Exec(statement).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := db.Exec("INSERT INTO schema_migration (version, name) VALUES (?, ?)", item.version, item.name).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	repositories := NewRepositories(db)
+	legacy := validROMFile("legacy-file", "legacy content")
+	if _, err := repositories.UpsertROMFile(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacyROM := romdomain.ROM{ID: "legacy-rom", ROMFileID: legacy.ID, UploaderID: "system", Identity: romdomain.ROMIdentity{Title: "Legacy", Platform: "snes"}}
+	if err := repositories.SaveROM(context.Background(), legacyROM); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := Initialize(context.Background(), db, "mysql"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if restored, err := repositories.FindROMByID(context.Background(), legacyROM.ID); err != nil || restored == nil || restored.ROMFileID != legacy.ID {
+		t.Fatalf("legacy ROM after upgrade = %+v, %v", restored, err)
+	}
+	file := validROMFile("new-file", "new content")
+	file.ID = "rf_" + file.Hash.SHA256
+	if _, err := repositories.UpsertROMFile(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.SaveROM(context.Background(), romdomain.ROM{ID: "new-rom", ROMFileID: file.ID, UploaderID: "system", Identity: romdomain.ROMIdentity{Title: "New", Platform: "snes"}}); err != nil {
+		t.Fatal(err)
+	}
+	job := jobsdomain.Payload{Kind: "identify_rom", UploadID: "new-upload", ROMFileID: file.ID}
+	if err := repositories.Enqueue(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repositories.Claim(context.Background(), time.Now(), time.Minute)
+	if err != nil || claimed == nil || claimed.Payload.ROMFileID != file.ID {
+		t.Fatalf("claimed job = %+v, %v", claimed, err)
+	}
+	if err := repositories.DeadLetter(context.Background(), *claimed, 1, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("INSERT INTO rom (id, rom_file_id, title, platform, identified_by, confidence) VALUES ('invalid-reference', 'missing', 'Invalid', 'snes', 'test', 1)").Error; err == nil {
+		t.Fatal("ROM-file foreign key was not restored")
 	}
 }

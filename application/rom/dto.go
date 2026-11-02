@@ -1,5 +1,7 @@
 package rom
 
+import "context"
+
 type ROMSummaryDTO struct {
 	ROMID       string  `json:"rom_id"`
 	Title       string  `json:"title"`
@@ -42,10 +44,13 @@ type UpdateROMRequest struct {
 	Version  *string `json:"version"`
 }
 
+// DownloadOutput streams a ROM file. The caller must close Content and should call Served
+// once the body, or a range of it, has actually been sent.
 type DownloadOutput struct {
-	Filename                string
-	MIMEType                string
-	Bytes                   []byte
-	SHA256                  string
-	LastModifiedUnixSeconds *uint64
+	Filename string
+	MIMEType string
+	SHA256   string
+	Content  StoredContent
+	// Served records the download in the audit log with the number of body bytes sent.
+	Served func(ctx context.Context, bytesSent int64)
 }

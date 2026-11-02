@@ -3,6 +3,10 @@
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
+	"imports": {
+		"#lib": "./src/lib/index.ts",
+		"#lib/*": "./src/lib/*"
+	},
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
@@ -14,19 +18,24 @@
 		"test": "vitest run"
 	},
 	"devDependencies": {
-		"@sveltejs/adapter-static": "^3.0.10",
-		"@sveltejs/kit": "^2.63.0",
-		"@sveltejs/vite-plugin-svelte": "^7.1.2",
-		"svelte": "^5.56.1",
-		"svelte-check": "^4.6.0",
+		"@sveltejs/adapter-static": "^4.0.0",
+		"@sveltejs/kit": "^3.1.0",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"svelte": "^5.57.2",
+		"svelte-check": "^4.7.7",
 		"typescript": "^6.0.3",
-		"vite": "^8.0.16",
-		"vitest": "^4.1.11"
+		"vite": "^8.3.4",
+		"vitest": "^5.0.5"
 	},
 	"dependencies": {
 		"@fontsource/press-start-2p": "^5.3.0",
-		"@internationalized/date": "^3.12.2",
-		"@lucide/svelte": "^1.38.0",
-		"bits-ui": "^2.18.1"
+		"@internationalized/date": "^3.12.4",
+		"@lucide/svelte": "^1.59.0",
+		"bits-ui": "^2.19.5"
+	},
+	"overrides": {
+		"runed": {
+			"@sveltejs/kit": "$@sveltejs/kit"
+		}
 	}
 }

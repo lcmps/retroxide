@@ -1,11 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import ActionButton from '$lib/components/ActionButton.svelte';
-	import { completeSetup, getSetupStatus, i18n, testMySQLConnection } from '$lib';
-	import type { DatabaseDriver, MySQLConnection, SetupLockedField } from '$lib';
-	import { ApiClientError } from '$lib/api/errors';
-	import { getErrorMessage } from '$lib/helpers/error';
-	import { useTranslate } from '$lib/i18n/helpers';
+	import ActionButton from '#lib/components/ActionButton.svelte';
+	import AdminAccountFields from '#lib/components/setup/AdminAccountFields.svelte';
+	import DatabaseSettings from '#lib/components/setup/DatabaseSettings.svelte';
+	import SetupField from '#lib/components/setup/SetupField.svelte';
+	import SetupSection from '#lib/components/setup/SetupSection.svelte';
+	import { completeSetup, getSetupStatus } from '#lib/api/client.js';
+	import type { DatabaseDriver, MySQLConnection, SetupLockedField } from '#lib/api/types.js';
+	import { getValidationAwareErrorMessage } from '#lib/helpers/error.js';
+	import { useTranslate } from '#lib/i18n/helpers.js';
+	import { i18n } from '#lib/i18n/store.svelte.js';
 
 	const MIN_PASSWORD_LENGTH = 8;
 
@@ -18,49 +22,27 @@
 	let adminPassword = $state('');
 	let adminPasswordConfirm = $state('');
 	let locked = $state<SetupLockedField[]>([]);
-
-	let testing = $state(false);
-	let testResult = $state<{ ok: boolean; message: string } | null>(null);
 	let saving = $state(false);
 	let errorMessage = $state('');
 
 	const t = useTranslate(i18n);
-	const isLocked = (field: SetupLockedField) => locked.includes(field);
-	const lockedHint = $derived(t('setup.locked', 'Set by environment variable'));
+	const lockedHint = (field: SetupLockedField) =>
+		locked.includes(field) ? t('setup.locked', 'Set by environment variable') : undefined;
 
-	function describeError(error: unknown, fallbackKey: string, fallback: string): string {
-		if (error instanceof ApiClientError && error.code === 'validation_error' && error.message) {
-			return error.message;
+	function validateAdminPassword(): string {
+		if (adminPassword.length < MIN_PASSWORD_LENGTH) {
+			return t('setup.admin.passwordTooShort', 'Password must be at least {count} characters.', { count: MIN_PASSWORD_LENGTH });
 		}
-		return getErrorMessage(error, fallbackKey, fallback, t);
-	}
-
-	function resetTest(): void {
-		testResult = null;
-	}
-
-	async function runConnectionTest(): Promise<void> {
-		testing = true;
-		testResult = null;
-		try {
-			await testMySQLConnection({ ...mysql, port: Number(mysql.port) });
-			testResult = { ok: true, message: t('setup.mysql.testSuccess', 'Connection successful.') };
-		} catch (error) {
-			testResult = { ok: false, message: describeError(error, 'setup.mysql.testFailure', 'Connection failed.') };
-		} finally {
-			testing = false;
+		if (adminPassword !== adminPasswordConfirm) {
+			return t('setup.admin.passwordMismatch', 'Passwords do not match.');
 		}
+		return '';
 	}
 
 	async function submit(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
-		errorMessage = '';
-		if (adminPassword.length < MIN_PASSWORD_LENGTH) {
-			errorMessage = t('setup.admin.passwordTooShort', 'Password must be at least {count} characters.', { count: MIN_PASSWORD_LENGTH });
-			return;
-		}
-		if (adminPassword !== adminPasswordConfirm) {
-			errorMessage = t('setup.admin.passwordMismatch', 'Passwords do not match.');
+		errorMessage = validateAdminPassword();
+		if (errorMessage) {
 			return;
 		}
 		saving = true;
@@ -76,7 +58,7 @@
 			// Full reload so the layout re-reads setup status from the now-configured backend.
 			window.location.assign('/login');
 		} catch (error) {
-			errorMessage = describeError(error, 'setup.saveFailure', 'Could not save the configuration.');
+			errorMessage = getValidationAwareErrorMessage(error, 'setup.saveFailure', 'Could not save the configuration.', t);
 			saving = false;
 		}
 	}
@@ -94,7 +76,7 @@
 				locked = status.locked ?? [];
 			})
 			.catch((error: unknown) => {
-				errorMessage = describeError(error, 'setup.loadFailure', 'Could not reach the server.');
+				errorMessage = getValidationAwareErrorMessage(error, 'setup.loadFailure', 'Could not reach the server.', t);
 			})
 			.finally(() => {
 				loading = false;
@@ -112,83 +94,29 @@
 			<p class="status">{t('setup.loading', 'Loading...')}</p>
 		{:else}
 			<form class="setup-form" onsubmit={submit}>
-				<fieldset>
-					<legend>{t('setup.database.title', 'Database')}</legend>
-					<div class="segmented" role="radiogroup" aria-label={t('setup.database.driver', 'Database driver')}>
-						{#each [['sqlite', 'SQLite'], ['mysql', 'MySQL']] as [value, label] (value)}
-							<label class:selected={driver === value} class:disabled={isLocked('db_driver')}>
-								<input type="radio" name="driver" {value} bind:group={driver} disabled={isLocked('db_driver')} />
-								{label}
-							</label>
-						{/each}
-					</div>
-					{#if isLocked('db_driver')}<p class="hint">{lockedHint}</p>{/if}
+				<DatabaseSettings
+					bind:driver
+					bind:sqlitePath
+					bind:mysql
+					lockedHints={{ driver: lockedHint('db_driver'), sqlitePath: lockedHint('sqlite_path'), mysql: lockedHint('mysql') }}
+				/>
 
-					{#if driver === 'sqlite'}
-						<label class="field">
-							<span>{t('setup.sqlite.path', 'Database file')}</span>
-							<input class="setup-input" bind:value={sqlitePath} required disabled={isLocked('sqlite_path')} />
-						</label>
-						{#if isLocked('sqlite_path')}<p class="hint">{lockedHint}</p>{/if}
-					{:else}
-						<div class="field-row">
-							<label class="field field--grow">
-								<span>{t('setup.mysql.host', 'Host')}</span>
-								<input class="setup-input" bind:value={mysql.host} oninput={resetTest} required disabled={isLocked('mysql')} />
-							</label>
-							<label class="field field--port">
-								<span>{t('setup.mysql.port', 'Port')}</span>
-								<input class="setup-input" type="number" min="1" max="65535" bind:value={mysql.port} oninput={resetTest} required disabled={isLocked('mysql')} />
-							</label>
-						</div>
-						<label class="field">
-							<span>{t('setup.mysql.user', 'User')}</span>
-							<input class="setup-input" bind:value={mysql.user} oninput={resetTest} autocomplete="off" required disabled={isLocked('mysql')} />
-						</label>
-						<label class="field">
-							<span>{t('setup.mysql.password', 'Password')}</span>
-							<input class="setup-input" type="password" bind:value={mysql.password} oninput={resetTest} autocomplete="new-password" disabled={isLocked('mysql')} />
-						</label>
-						<label class="field">
-							<span>{t('setup.mysql.database', 'Database name')}</span>
-							<input class="setup-input" bind:value={mysql.database} oninput={resetTest} required disabled={isLocked('mysql')} />
-						</label>
-						{#if isLocked('mysql')}<p class="hint">{lockedHint}</p>{/if}
-						<div class="test-row">
-							<ActionButton class="setup-button setup-button--secondary" type="button" onclick={() => void runConnectionTest()} disabled={testing}>
-								{testing ? t('setup.mysql.testing', 'Testing...') : t('setup.mysql.test', 'Test connection')}
-							</ActionButton>
-							{#if testResult}
-								<p class="test-result" class:test-result--ok={testResult.ok} role="status">{testResult.message}</p>
-							{/if}
-						</div>
-					{/if}
-				</fieldset>
+				<SetupSection legend={t('setup.storage.title', 'Storage')}>
+					<SetupField
+						label={t('setup.storage.path', 'ROM storage folder')}
+						bind:value={storageRoot}
+						required
+						disabled={!!lockedHint('storage_root')}
+						hint={lockedHint('storage_root')}
+					/>
+				</SetupSection>
 
-				<fieldset>
-					<legend>{t('setup.storage.title', 'Storage')}</legend>
-					<label class="field">
-						<span>{t('setup.storage.path', 'ROM storage folder')}</span>
-						<input class="setup-input" bind:value={storageRoot} required disabled={isLocked('storage_root')} />
-					</label>
-					{#if isLocked('storage_root')}<p class="hint">{lockedHint}</p>{/if}
-				</fieldset>
-
-				<fieldset>
-					<legend>{t('setup.admin.title', 'Administrator')}</legend>
-					<label class="field">
-						<span>{t('setup.admin.email', 'Email')}</span>
-						<input class="setup-input" type="email" bind:value={adminEmail} autocomplete="email" placeholder="admin@example.com" required />
-					</label>
-					<label class="field">
-						<span>{t('setup.admin.password', 'Password')}</span>
-						<input class="setup-input" type="password" bind:value={adminPassword} autocomplete="new-password" minlength={MIN_PASSWORD_LENGTH} required />
-					</label>
-					<label class="field">
-						<span>{t('setup.admin.passwordConfirm', 'Confirm password')}</span>
-						<input class="setup-input" type="password" bind:value={adminPasswordConfirm} autocomplete="new-password" required />
-					</label>
-				</fieldset>
+				<AdminAccountFields
+					bind:email={adminEmail}
+					bind:password={adminPassword}
+					bind:passwordConfirm={adminPasswordConfirm}
+					minPasswordLength={MIN_PASSWORD_LENGTH}
+				/>
 
 				<ActionButton class="setup-button" type="submit" disabled={saving}>
 					{saving ? t('setup.saving', 'Saving...') : t('setup.save', 'Save and continue')}
@@ -249,129 +177,6 @@
 		width: 100%;
 	}
 
-	fieldset {
-		display: grid;
-		gap: 0.85rem;
-		min-width: 0;
-		margin: 0;
-		padding: 0;
-		border: 0;
-	}
-
-	legend {
-		margin-bottom: 0.85rem;
-		padding: 0;
-		font-size: 0.65rem;
-		color: var(--pixel-text);
-	}
-
-	.field {
-		display: grid;
-		gap: 0.45rem;
-		min-width: 0;
-	}
-
-	.field span {
-		font-size: 0.5rem;
-		color: var(--pixel-muted);
-	}
-
-	.field-row {
-		display: flex;
-		gap: 0.75rem;
-	}
-
-	.field--grow {
-		flex: 1;
-	}
-
-	.field--port {
-		width: 6rem;
-	}
-
-	.setup-input {
-		width: 100%;
-		min-width: 0;
-		min-height: 2.4rem;
-		padding: 0.5rem 0.75rem;
-		border: 0;
-		border-radius: 0.5rem;
-		background: #303030;
-		color: var(--pixel-text);
-		font: inherit;
-		font-size: 0.6rem;
-	}
-
-	.setup-input:focus-visible {
-		outline: 2px solid var(--pixel-focus);
-		outline-offset: 2px;
-	}
-
-	.setup-input:disabled {
-		opacity: 0.6;
-	}
-
-	.segmented {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 0.5rem;
-	}
-
-	.segmented label {
-		display: grid;
-		place-items: center;
-		min-height: 2.4rem;
-		border-radius: 0.4rem;
-		background: #303030;
-		font-size: 0.55rem;
-		cursor: pointer;
-	}
-
-	.segmented label.selected {
-		background: var(--pixel-panel-strong);
-		outline: 2px solid var(--pixel-focus);
-	}
-
-	.segmented label.disabled {
-		cursor: not-allowed;
-		opacity: 0.6;
-	}
-
-	.segmented label:focus-within {
-		outline: 2px solid var(--pixel-focus);
-		outline-offset: 2px;
-	}
-
-	.segmented input {
-		position: absolute;
-		opacity: 0;
-		pointer-events: none;
-	}
-
-	.hint {
-		margin: -0.35rem 0 0;
-		font-size: 0.45rem;
-		color: var(--pixel-muted);
-	}
-
-	.test-row {
-		display: grid;
-		gap: 0.6rem;
-		justify-items: start;
-	}
-
-	.test-result {
-		margin: 0;
-		font-size: 0.5rem;
-		line-height: 1.6;
-		color: #ffd8cf;
-		word-break: break-word;
-	}
-
-	.test-result--ok {
-		color: var(--pixel-focus);
-	}
-
 	:global(.setup-button) {
 		justify-self: center;
 		min-height: 2.5rem;
@@ -395,10 +200,6 @@
 		.setup-page {
 			align-items: start;
 			padding: 2rem 1rem;
-		}
-
-		.field--port {
-			width: 5rem;
 		}
 	}
 </style>

@@ -5,8 +5,8 @@
 	import { Gamepad2, Search } from "@lucide/svelte";
 	import { onMount } from "svelte";
 	import type { Snippet } from "svelte";
-	import { i18n, logger, logoutSession } from "$lib";
-	import { useTranslate } from "$lib/i18n/helpers";
+	import { i18n, logger, logoutSession } from "#lib";
+	import { useTranslate } from "#lib/i18n/helpers.js";
 
 	type Props = {
 		activePath: string;
@@ -56,7 +56,7 @@
 			return;
 		}
 
-		const params = new URLSearchParams(page.url.searchParams);
+		const params = new URLSearchParams(page.url.searchParams.toString());
 		const trimmedQuery = nextQuery.trim();
 
 		if (nextPlatform) {
@@ -74,9 +74,8 @@
 		const nextUrl =
 			params.size > 0 ? `/library?${params.toString()}` : "/library";
 		await goto(nextUrl, {
-			replaceState: true,
-			keepFocus: true,
-			noScroll: true,
+			replace: true,
+			reset: false,
 		});
 	}
 
@@ -100,7 +99,7 @@
 		} catch (error) {
 			logger.warn("Server logout failed; clearing the local session anyway.", error);
 		}
-		await goto(resolve("/login"), { replaceState: true });
+		await goto(resolve("/login"), { replace: true });
 	}
 
 	$effect(() => {
@@ -116,7 +115,7 @@
 
 	onMount(() => {
 		const handleSessionExpired = () =>
-			void goto(resolve("/login"), { replaceState: true });
+			void goto(resolve("/login"), { replace: true });
 		window.addEventListener(
 			"retroxide:session-expired",
 			handleSessionExpired,

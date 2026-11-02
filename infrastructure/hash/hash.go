@@ -6,30 +6,47 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	romdomain "github.com/lcmps/retroxide/domain/rom"
+	stdhash "hash"
 	"hash/crc32"
 	"io"
+
+	romdomain "github.com/lcmps/retroxide/domain/rom"
 )
 
+// Service computes the SHA-256, SHA-1, MD5, and CRC32 bundle that identifies ROM content.
 type Service struct{}
 
 func New() Service {
 	return Service{}
 }
 
-func (Service) Hash(content []byte) (romdomain.ROMHash, error) {
-	sha256Hash := sha256.New()
-	sha1Hash := sha1.New()
-	md5Hash := md5.New()
-	crc32Hash := crc32.NewIEEE()
-	if _, err := io.MultiWriter(sha256Hash, sha1Hash, md5Hash, crc32Hash).Write(content); err != nil {
+// NewDigest returns a streaming digest computing every hash in a single pass.
+func (Service) NewDigest() romdomain.Digest {
+	digest := &digest{sha256: sha256.New(), sha1: sha1.New(), md5: md5.New(), crc32: crc32.NewIEEE()}
+	digest.Writer = io.MultiWriter(digest.sha256, digest.sha1, digest.md5, digest.crc32)
+	return digest
+}
+
+// Hash hashes content held in memory.
+func (service Service) Hash(content []byte) (romdomain.ROMHash, error) {
+	digest := service.NewDigest()
+	if _, err := digest.Write(content); err != nil {
 		return romdomain.ROMHash{}, fmt.Errorf("hashing rom content: %w", err)
 	}
+	return digest.Sum()
+}
 
+type digest struct {
+	io.Writer
+	sha256, sha1, md5 stdhash.Hash
+	crc32             stdhash.Hash32
+}
+
+func (digest *digest) Sum() (romdomain.ROMHash, error) {
 	return romdomain.NewROMHash(
-		hex.EncodeToString(sha256Hash.Sum(nil)),
-		hex.EncodeToString(sha1Hash.Sum(nil)),
-		hex.EncodeToString(md5Hash.Sum(nil)),
-		fmt.Sprintf("%08x", crc32Hash.Sum32()),
+		hex.EncodeToString(digest.sha256.Sum(nil)),
+		hex.EncodeToString(digest.sha1.Sum(nil)),
+		hex.EncodeToString(digest.md5.Sum(nil)),
+		fmt.Sprintf("%08x", digest.crc32.Sum32()),
 	)
 }

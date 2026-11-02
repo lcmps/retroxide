@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,16 @@ func (repository authTestUserRepository) FindByID(_ context.Context, userID stri
 
 func (authTestUserRepository) SaveUser(context.Context, authdomain.User) error { return nil }
 
+func (repository authTestUserRepository) IncrementTokenVersion(_ context.Context, userID string) error {
+	user, ok := repository.usersByID[userID]
+	if !ok {
+		return fault.NotFound()
+	}
+	user.TokenVersion++
+	repository.usersByID[userID] = user
+	return nil
+}
+
 type authTestHasher struct {
 	hashCalls   int
 	verifyCalls int
@@ -60,10 +71,10 @@ type authTestTokenService struct {
 	issued []string
 }
 
-func (service *authTestTokenService) Issue(userID, role string) (TokenPair, error) {
+func (service *authTestTokenService) Issue(userID, role string, tokenVersion uint64) (TokenPair, error) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	service.issued = append(service.issued, userID+":"+role)
+	service.issued = append(service.issued, fmt.Sprintf("%s:%s:v%d", userID, role, tokenVersion))
 	return TokenPair{
 		AccessToken:      "access-token",
 		RefreshToken:     "refresh-token",
@@ -227,7 +238,7 @@ func TestSessionServiceLoginStoresRefreshTokenHash(t *testing.T) {
 	if refreshes.stored[0].TokenHash != hex.EncodeToString(expectedHash[:]) {
 		t.Fatalf("stored token hash = %q, want SHA-256 of refresh token", refreshes.stored[0].TokenHash)
 	}
-	if len(tokens.issued) != 1 || tokens.issued[0] != "user-1:admin" {
+	if len(tokens.issued) != 1 || tokens.issued[0] != "user-1:admin:v0" {
 		t.Fatalf("issued identities = %v", tokens.issued)
 	}
 }
@@ -252,6 +263,47 @@ func TestSessionServiceRefreshReplayRevokesFamily(t *testing.T) {
 	}
 	if len(refreshes.revokedAll) != 1 || refreshes.revokedAll[0] != user.ID || !refreshes.records["jti-newer"].Revoked {
 		t.Fatalf("family revocation = %v records=%+v", refreshes.revokedAll, refreshes.records)
+	}
+	if version := users.usersByID[user.ID].TokenVersion; version != 1 {
+		t.Fatalf("token version after replay = %d, want 1 so access tokens are invalidated", version)
+	}
+}
+
+func TestSessionServiceLogoutInvalidatesAccessAndRefreshTokens(t *testing.T) {
+	user := authdomain.User{ID: "user-1", Email: "mario@example.com", Role: identity.RoleUser, TokenVersion: 4}
+	users := authTestUserRepository{usersByID: map[string]authdomain.User{user.ID: user}}
+	refreshes := &authTestRefreshRepository{records: map[string]authdomain.RefreshToken{
+		"jti-live": {JTI: "jti-live", UserID: user.ID, ExpiresAt: uint64(time.Now().Add(time.Hour).Unix())},
+	}}
+	service := NewSessionService(users, &authTestHasher{}, &authTestTokenService{}, refreshes)
+
+	if err := service.Logout(context.Background(), identity.Requester{UserID: user.ID, Role: identity.RoleUser}); err != nil {
+		t.Fatal(err)
+	}
+	if version := users.usersByID[user.ID].TokenVersion; version != 5 {
+		t.Fatalf("token version after logout = %d, want 5", version)
+	}
+	if !refreshes.records["jti-live"].Revoked {
+		t.Fatal("refresh token survived logout")
+	}
+}
+
+func TestSessionServiceRefreshRejectsTokenFromEarlierVersion(t *testing.T) {
+	user := authdomain.User{ID: "user-1", Email: "mario@example.com", Role: identity.RoleUser, TokenVersion: 2}
+	users := authTestUserRepository{usersByID: map[string]authdomain.User{user.ID: user}}
+	refreshes := &authTestRefreshRepository{records: map[string]authdomain.RefreshToken{
+		"jti-old": {JTI: "jti-old", UserID: user.ID, ExpiresAt: uint64(time.Now().Add(time.Hour).Unix())},
+	}}
+	tokens := &authTestTokenService{claims: map[string]AccessClaims{
+		"stale": {UserID: user.ID, TokenVersion: 1, JTI: authStringPointer("jti-old")},
+	}}
+	service := NewSessionService(users, &authTestHasher{}, tokens, refreshes)
+
+	if _, err := service.Refresh(context.Background(), "stale"); !fault.IsCode(err, fault.CodeUnauthorized) {
+		t.Fatalf("Refresh(stale version) error = %v, want unauthorized", err)
+	}
+	if len(tokens.issued) != 0 {
+		t.Fatalf("issued tokens for stale refresh: %v", tokens.issued)
 	}
 }
 

@@ -1,5 +1,5 @@
-import { ApiClientError, getLocalizedErrorMessage as apiGetLocalizedErrorMessage } from '$lib/api/errors';
-import type { TranslateFunction } from '$lib/i18n/helpers';
+import { ApiClientError, getLocalizedErrorMessage as apiGetLocalizedErrorMessage } from '#lib/api/errors.js';
+import type { TranslateFunction } from '#lib/i18n/helpers.js';
 
 /**
  * Extract a user-friendly error message from various error types.
@@ -47,4 +47,20 @@ export function getErrorStatus(error: unknown): number | undefined {
 }
 
 // Re-export commonly used error utilities
-export { getLocalizedErrorMessage, getUploadStatusRetryMessage, getUploadProcessingErrorMessage } from '$lib/api/errors';
+export { getLocalizedErrorMessage, getUploadStatusRetryMessage, getUploadProcessingErrorMessage } from '#lib/api/errors.js';
+
+/**
+ * Like getErrorMessage, but surfaces the server's own message for validation errors, which
+ * name the offending input (for example an unreachable MySQL host during setup).
+ */
+export function getValidationAwareErrorMessage(
+	error: unknown,
+	fallbackKey: string,
+	fallback: string,
+	translate: TranslateFunction
+): string {
+	if (error instanceof ApiClientError && error.code === 'validation_error' && error.message) {
+		return error.message;
+	}
+	return getErrorMessage(error, fallbackKey, fallback, translate);
+}

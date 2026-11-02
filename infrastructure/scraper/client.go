@@ -73,12 +73,20 @@ type Client struct {
 
 	mu       sync.Mutex
 	datCache map[string]*datIndex
+	datLoads map[string]*datLoad
+}
+
+// datLoad is an in-flight database download that concurrent lookups for the same system share.
+type datLoad struct {
+	done  chan struct{}
+	index *datIndex
+	err   error
 }
 
 var _ rom.Scraper = (*Client)(nil)
 
 func NewClient(httpClient *http.Client, endpoints Endpoints) *Client {
-	return &Client{http: httpClient, endpoints: endpoints, datCache: make(map[string]*datIndex)}
+	return &Client{http: httpClient, endpoints: endpoints, datCache: make(map[string]*datIndex), datLoads: make(map[string]*datLoad)}
 }
 
 func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.ScrapeResult, error) {
@@ -224,22 +232,48 @@ func (client *Client) lookupLibretro(ctx context.Context, system libretroSystem,
 	return nil, nil
 }
 
+// datIndex returns the parsed libretro database for system, downloading it at most once at a
+// time per system. The lock only guards the maps, so lookups for other systems, and cache hits,
+// never wait on a download; failed downloads are not cached and are retried by the next caller.
 func (client *Client) datIndex(ctx context.Context, system libretroSystem) (*datIndex, error) {
+	key := system.database
 	client.mu.Lock()
-	defer client.mu.Unlock()
-	if index, ok := client.datCache[system.database]; ok {
+	if index, ok := client.datCache[key]; ok {
+		client.mu.Unlock()
 		return index, nil
 	}
+	load, inFlight := client.datLoads[key]
+	if !inFlight {
+		load = &datLoad{done: make(chan struct{})}
+		client.datLoads[key] = load
+	}
+	client.mu.Unlock()
+
+	if !inFlight {
+		load.index, load.err = client.downloadDAT(ctx, system)
+		client.mu.Lock()
+		if load.err == nil {
+			client.datCache[key] = load.index
+		}
+		delete(client.datLoads, key)
+		client.mu.Unlock()
+		close(load.done)
+	}
+
+	select {
+	case <-load.done:
+		return load.index, load.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (client *Client) downloadDAT(ctx context.Context, system libretroSystem) (*datIndex, error) {
 	body, err := client.get(ctx, client.endpoints.LibretroDatabase+"/"+escapePath(system.database)+".dat", maxDATBytes)
 	if err != nil {
 		return nil, fmt.Errorf("downloading libretro database %q: %w", system.database, err)
 	}
-	index, err := parseDAT(bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	client.datCache[system.database] = index
-	return index, nil
+	return parseDAT(bytes.NewReader(body))
 }
 
 // parseDAT reads clrmamepro DAT files, mapping each ROM's SHA1 and CRC to its game.

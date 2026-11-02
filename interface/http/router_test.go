@@ -1,44 +1,40 @@
 package http
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lcmps/retroxide/application/auth"
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
-	authdomain "github.com/lcmps/retroxide/domain/auth"
+	uploadfeature "github.com/lcmps/retroxide/application/uploads"
 	"github.com/lcmps/retroxide/domain/identity"
 )
 
-type routerTestTokens struct{}
-
-func (routerTestTokens) Issue(string, string) (auth.TokenPair, error) {
-	return auth.TokenPair{}, errors.New("unexpected issue")
-}
-func (routerTestTokens) VerifyAccess(string) (auth.AccessClaims, error) {
-	return auth.AccessClaims{}, fault.Unauthorized()
-}
-func (routerTestTokens) VerifyRefresh(string) (auth.AccessClaims, error) {
-	return auth.AccessClaims{}, fault.Unauthorized()
+// routerTestAuthenticator resolves every token to requester, or fails with err.
+type routerTestAuthenticator struct {
+	requester identity.Requester
+	err       error
 }
 
-type routerTestClients struct{}
+func (authenticator routerTestAuthenticator) Authenticate(context.Context, string) (identity.Requester, error) {
+	return authenticator.requester, authenticator.err
+}
 
-func (routerTestClients) FindByTokenHash(context.Context, string) (*authdomain.Client, error) {
-	return nil, nil
-}
-func (routerTestClients) FindByUserID(context.Context, string) ([]authdomain.Client, error) {
-	return nil, nil
-}
-func (routerTestClients) SaveClient(context.Context, authdomain.Client) error { return nil }
-func (routerTestClients) DeleteClient(context.Context, string) error          { return nil }
+var rejectingAuthenticator = routerTestAuthenticator{err: fault.Unauthorized()}
 
 type routerTestSessions struct{}
 
@@ -72,7 +68,7 @@ func TestRouterHealthAndRequestID(t *testing.T) {
 
 func TestRouterProtectsROMRoutesWithStandardUnauthorizedResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := NewRouter(Dependencies{Tokens: routerTestTokens{}, ClientRepo: routerTestClients{}}, Options{})
+	router := NewRouter(Dependencies{Authenticator: rejectingAuthenticator}, Options{})
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/rom", nil)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -92,7 +88,7 @@ func TestRouterProtectsROMRoutesWithStandardUnauthorizedResponse(t *testing.T) {
 
 func TestRouterAllowsPublicSessionPathPastAuthMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := NewRouter(Dependencies{Tokens: routerTestTokens{}, ClientRepo: routerTestClients{}}, Options{})
+	router := NewRouter(Dependencies{Authenticator: rejectingAuthenticator}, Options{})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/session", nil)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -217,6 +213,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"POST /api/v1/upload", "GET /api/v1/upload/:upload_id",
 		"GET /api/v1/rom", "GET /api/v1/rom/:rom_id", "PATCH /api/v1/rom/:rom_id", "DELETE /api/v1/rom/:rom_id",
 		"GET /api/v1/rom/:rom_id/cover", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
+		"POST /api/v1/rom/:rom_id/download-link", "GET /api/v1/download",
 		"POST /api/v1/rom/:rom_id/scrape", "GET /api/v1/rom/:rom_id/media/:kind",
 		"GET /api/v1/library", "POST /api/v1/library", "GET /api/v1/library/:library_id",
 		"POST /api/v1/library/:library_id/item", "DELETE /api/v1/library/:library_id/item/:rom_id",
@@ -232,74 +229,55 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 	}
 }
 
-func TestParseByteRange(t *testing.T) {
-	tests := []struct {
-		name      string
-		header    string
-		total     int
-		wantStart int
-		wantEnd   int
-		wantOK    bool
-	}{
-		{name: "closed range", header: "bytes=1-3", total: 8, wantStart: 1, wantEnd: 3, wantOK: true},
-		{name: "open range", header: "bytes=4-", total: 8, wantStart: 4, wantEnd: 7, wantOK: true},
-		{name: "suffix range", header: "bytes=-3", total: 8, wantStart: 5, wantEnd: 7, wantOK: true},
-		{name: "suffix longer than body", header: "bytes=-30", total: 8, wantStart: 0, wantEnd: 7, wantOK: true},
-		{name: "multi range rejected", header: "bytes=0-1,3-4", total: 8},
-		{name: "start after end rejected", header: "bytes=4-2", total: 8},
-		{name: "start beyond body rejected", header: "bytes=8-", total: 8},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			start, end, ok := parseByteRange(test.header, test.total)
-			if start != test.wantStart || end != test.wantEnd || ok != test.wantOK {
-				t.Fatalf("parseByteRange() = %d-%d %t, want %d-%d %t", start, end, ok, test.wantStart, test.wantEnd, test.wantOK)
-			}
-		})
-	}
-}
+type nopSeekCloser struct{ *strings.Reader }
 
-func TestWriteDownloadRangeAndETagResponses(t *testing.T) {
+func (nopSeekCloser) Close() error { return nil }
+
+func TestWriteDownloadStreamsRangesAndConditionalResponses(t *testing.T) {
 	tests := []struct {
 		name       string
-		request    func(*http.Request)
+		header     string
+		value      string
 		wantStatus int
 		wantBody   string
 		wantRange  string
+		wantServed bool
 	}{
-		{
-			name:       "partial range",
-			request:    func(request *http.Request) { request.Header.Set("Range", "bytes=1-3") },
-			wantStatus: http.StatusPartialContent, wantBody: "bcd", wantRange: "bytes 1-3/6",
-		},
-		{
-			name:       "not modified",
-			request:    func(request *http.Request) { request.Header.Set("If-None-Match", `"abc"`) },
-			wantStatus: http.StatusNotModified, wantBody: "",
-		},
-		{
-			name:       "unsatisfiable range",
-			request:    func(request *http.Request) { request.Header.Set("Range", "bytes=9-") },
-			wantStatus: http.StatusRequestedRangeNotSatisfiable, wantBody: "", wantRange: "bytes */6",
-		},
+		{name: "full body", wantStatus: http.StatusOK, wantBody: "abcdef", wantServed: true},
+		{name: "partial range", header: "Range", value: "bytes=1-3", wantStatus: http.StatusPartialContent, wantBody: "bcd", wantRange: "bytes 1-3/6", wantServed: true},
+		{name: "suffix range", header: "Range", value: "bytes=-2", wantStatus: http.StatusPartialContent, wantBody: "ef", wantRange: "bytes 4-5/6", wantServed: true},
+		{name: "not modified", header: "If-None-Match", value: `"abc"`, wantStatus: http.StatusNotModified},
+		{name: "unsatisfiable range", header: "Range", value: "bytes=9-", wantStatus: http.StatusRequestedRangeNotSatisfiable, wantRange: "bytes */6"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
-			request := httptest.NewRequest(http.MethodGet, "/download", nil)
-			test.request(request)
-			context.Request = request
-			writeDownload(context, rom.DownloadOutput{Filename: "game.rom", MIMEType: "application/octet-stream", Bytes: []byte("abcdef"), SHA256: "abc"})
-			if recorder.Code != test.wantStatus || recorder.Body.String() != test.wantBody {
-				t.Fatalf("response = %d %q, want %d %q", recorder.Code, recorder.Body.String(), test.wantStatus, test.wantBody)
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/download", nil)
+			if test.header != "" {
+				c.Request.Header.Set(test.header, test.value)
 			}
-			if test.wantRange != "" && recorder.Header().Get("Content-Range") != test.wantRange {
-				t.Fatalf("Content-Range = %q, want %q", recorder.Header().Get("Content-Range"), test.wantRange)
+			writeDownload(c, rom.DownloadOutput{
+				Filename: "game.rom", MIMEType: "application/octet-stream", SHA256: "abc",
+				Content: rom.StoredContent{ReadSeekCloser: nopSeekCloser{strings.NewReader("abcdef")}, Size: 6},
+			})
+			c.Writer.WriteHeaderNow() // gin flushes body-less statuses when the handler returns
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
 			}
-			if recorder.Header().Get("ETag") != `"abc"` {
+			if test.wantBody != "" && recorder.Body.String() != test.wantBody {
+				t.Fatalf("body = %q, want %q", recorder.Body.String(), test.wantBody)
+			}
+			if got := recorder.Header().Get("Content-Range"); got != test.wantRange {
+				t.Fatalf("Content-Range = %q, want %q", got, test.wantRange)
+			}
+			// net/http strips validators from 416 error responses.
+			if test.wantStatus != http.StatusRequestedRangeNotSatisfiable && recorder.Header().Get("ETag") != `"abc"` {
 				t.Fatalf("ETag = %q", recorder.Header().Get("ETag"))
+			}
+			if served := bodyWasServed(c); served != test.wantServed {
+				t.Fatalf("bodyWasServed = %t, want %t", served, test.wantServed)
 			}
 		})
 	}
@@ -311,5 +289,210 @@ func TestRequestBodyLimitSaturates(t *testing.T) {
 	}
 	if got := requestBodyLimit(math.MaxInt64); got != math.MaxInt64 {
 		t.Fatalf("saturated body limit = %d, want MaxInt64", got)
+	}
+}
+
+func TestRouterAuthenticatesBearerTokenForProtectedRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(Dependencies{
+		Sessions:      routerTestSessions{},
+		Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: "user-1", Role: identity.RoleUser}},
+	}, Options{})
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/session", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("logout with valid token = %d %s, want 204", response.Code, response.Body.String())
+	}
+}
+
+func TestRouterReportsAuthenticatorFailuresAsServerErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(Dependencies{Authenticator: routerTestAuthenticator{err: fault.Internal(errors.New("database offline"))}}, Options{})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/rom", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("authenticator failure = %d %s, want 500 rather than a misleading 401", response.Code, response.Body.String())
+	}
+}
+
+// routerTestUploads records the streamed upload it receives.
+type routerTestUploads struct {
+	received *string
+}
+
+func (uploads routerTestUploads) Create(_ context.Context, _ identity.Requester, input uploadfeature.UploadInput) (uploadfeature.UploadAcceptedDTO, error) {
+	content, err := io.ReadAll(input.Content)
+	if err != nil {
+		return uploadfeature.UploadAcceptedDTO{}, err
+	}
+	*uploads.received = input.Filename + ":" + string(content)
+	return uploadfeature.UploadAcceptedDTO{UploadID: "upl_1", Status: "processing"}, nil
+}
+
+func (routerTestUploads) Status(context.Context, identity.Requester, string) (uploadfeature.UploadStatusDTO, error) {
+	return uploadfeature.UploadStatusDTO{}, nil
+}
+
+func multipartUpload(t *testing.T, field, filename, content string) (*bytes.Buffer, string) {
+	t.Helper()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("note", "ignored"); err != nil {
+		t.Fatal(err)
+	}
+	part, err := writer.CreateFormFile(field, filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body, writer.FormDataContentType()
+}
+
+func TestRouterStreamsMultipartUploads(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	authenticated := routerTestAuthenticator{requester: identity.Requester{UserID: "user-1", Role: identity.RoleUser}}
+	send := func(maxBytes int64, field, content string) (*httptest.ResponseRecorder, string) {
+		var received string
+		router := NewRouter(Dependencies{Uploads: routerTestUploads{received: &received}, Authenticator: authenticated}, Options{MaxUploadBytes: maxBytes})
+		body, contentType := multipartUpload(t, field, "game.sfc", content)
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+		request.Header.Set("Content-Type", contentType)
+		request.Header.Set("Authorization", "Bearer token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response, received
+	}
+
+	if response, received := send(1024, "file", "rom bytes"); response.Code != http.StatusAccepted || received != "game.sfc:rom bytes" {
+		t.Fatalf("upload = %d %s, service received %q", response.Code, response.Body.String(), received)
+	}
+	if response, _ := send(1024, "attachment", "rom bytes"); response.Code != http.StatusBadRequest {
+		t.Fatalf("upload without file field = %d, want 400", response.Code)
+	}
+	// The request limit is the file limit plus multipart overhead, so exceed both.
+	oversized := strings.Repeat("x", 16+multipartOverhead)
+	if response, _ := send(16, "file", oversized); !strings.Contains(response.Body.String(), `"code":"upload_too_large"`) {
+		t.Fatalf("oversized upload = %d %s, want upload_too_large", response.Code, response.Body.String())
+	}
+}
+
+func TestServeImageCachesVersionedURLsAndRevalidatesOthers(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\n" + strings.Repeat("p", 16))
+	digest := sha256.Sum256(png)
+	contentHash := hex.EncodeToString(digest[:])
+	serve := func(target, ifNoneMatch string) *httptest.ResponseRecorder {
+		gin.SetMode(gin.TestMode)
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, target, nil)
+		if ifNoneMatch != "" {
+			c.Request.Header.Set("If-None-Match", ifNoneMatch)
+		}
+		serveImage(c, png, nil)
+		c.Writer.WriteHeaderNow()
+		return recorder
+	}
+
+	versioned := serve("/cover?v="+contentHash[:16], "")
+	if versioned.Code != http.StatusOK || versioned.Header().Get("Cache-Control") != "private, max-age=31536000, immutable" {
+		t.Fatalf("versioned = %d %q", versioned.Code, versioned.Header().Get("Cache-Control"))
+	}
+	if stale := serve("/cover?v=0000000000000000", ""); stale.Header().Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("mismatched version Cache-Control = %q, want revalidation", stale.Header().Get("Cache-Control"))
+	}
+	if unchanged := serve("/cover", `"`+contentHash+`"`); unchanged.Code != http.StatusNotModified || unchanged.Body.Len() != 0 {
+		t.Fatalf("revalidation = %d with %d body bytes, want empty 304", unchanged.Code, unchanged.Body.Len())
+	}
+}
+
+// linkTestROMs implements only what the download-link flow uses; other rom.API methods panic.
+type linkTestROMs struct {
+	rom.API
+	owner string
+}
+
+func (roms linkTestROMs) Get(_ context.Context, requester identity.Requester, romID string) (rom.ROMDetailDTO, error) {
+	if !requester.CanAccess(roms.owner) {
+		return rom.ROMDetailDTO{}, fault.NotFound()
+	}
+	return rom.ROMDetailDTO{ROMID: romID}, nil
+}
+
+func (roms linkTestROMs) Download(ctx context.Context, requester identity.Requester, romID string) (rom.DownloadOutput, error) {
+	if _, err := roms.Get(ctx, requester, romID); err != nil {
+		return rom.DownloadOutput{}, err
+	}
+	return rom.DownloadOutput{
+		Filename: romID + ".rom", MIMEType: "application/octet-stream", SHA256: "abc",
+		Content: rom.StoredContent{ReadSeekCloser: nopSeekCloser{strings.NewReader("rom bytes")}, Size: 9},
+	}, nil
+}
+
+// linkTestSigner encodes the requester and ROM into the token without cryptography.
+type linkTestSigner struct{}
+
+func (linkTestSigner) Sign(requester identity.Requester, romID string) (string, time.Time, error) {
+	return requester.UserID + ":" + romID, time.Now().Add(time.Minute), nil
+}
+
+func (linkTestSigner) Verify(token string) (identity.Requester, string, error) {
+	userID, romID, ok := strings.Cut(token, ":")
+	if !ok {
+		return identity.Requester{}, "", fault.Unauthorized()
+	}
+	return identity.Requester{UserID: userID, Role: identity.RoleUser}, romID, nil
+}
+
+func TestRouterDownloadLinksStreamWithoutBearerTokenAndCheckAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	asUser := func(userID string) Dependencies {
+		return Dependencies{
+			ROMs:          linkTestROMs{owner: "user-1"},
+			DownloadLinks: linkTestSigner{},
+			Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: userID, Role: identity.RoleUser}},
+		}
+	}
+	createLink := func(userID string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/rom/rom-1/download-link", nil)
+		request.Header.Set("Authorization", "Bearer token")
+		response := httptest.NewRecorder()
+		NewRouter(asUser(userID), Options{}).ServeHTTP(response, request)
+		return response
+	}
+
+	if response := createLink("user-2"); response.Code != http.StatusNotFound {
+		t.Fatalf("link for inaccessible ROM = %d, want 404", response.Code)
+	}
+	response := createLink("user-1")
+	var link downloadLinkResponse
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &link) != nil || link.ExpiresIn <= 0 {
+		t.Fatalf("create link = %d %s", response.Code, response.Body.String())
+	}
+
+	// The link works without any Authorization header.
+	download := httptest.NewRecorder()
+	NewRouter(Dependencies{ROMs: linkTestROMs{owner: "user-1"}, DownloadLinks: linkTestSigner{}}, Options{}).
+		ServeHTTP(download, httptest.NewRequest(http.MethodGet, link.URL, nil))
+	if download.Code != http.StatusOK || download.Body.String() != "rom bytes" {
+		t.Fatalf("download via link = %d %q", download.Code, download.Body.String())
+	}
+	if !strings.HasPrefix(download.Header().Get("Content-Disposition"), "attachment") {
+		t.Fatalf("Content-Disposition = %q", download.Header().Get("Content-Disposition"))
+	}
+
+	invalid := httptest.NewRecorder()
+	NewRouter(Dependencies{ROMs: linkTestROMs{owner: "user-1"}, DownloadLinks: linkTestSigner{}}, Options{}).
+		ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/v1/download?token=garbage", nil))
+	if invalid.Code != http.StatusForbidden || !strings.Contains(invalid.Body.String(), "invalid_download_link") {
+		t.Fatalf("invalid link = %d %s", invalid.Code, invalid.Body.String())
 	}
 }

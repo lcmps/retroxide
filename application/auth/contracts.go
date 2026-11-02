@@ -11,6 +11,8 @@ type UserRepository interface {
 	FindByEmail(context.Context, string) (*authdomain.User, error)
 	FindByID(context.Context, string) (*authdomain.User, error)
 	SaveUser(context.Context, authdomain.User) error
+	// IncrementTokenVersion invalidates every token issued to the user so far.
+	IncrementTokenVersion(context.Context, string) error
 }
 
 type ClientRepository interface {
@@ -34,9 +36,10 @@ type PasswordHasher interface {
 }
 
 type AccessClaims struct {
-	UserID string
-	Role   string
-	JTI    *string
+	UserID       string
+	Role         string
+	TokenVersion uint64
+	JTI          *string
 }
 
 type TokenPair struct {
@@ -48,7 +51,8 @@ type TokenPair struct {
 }
 
 type TokenService interface {
-	Issue(string, string) (TokenPair, error)
+	// Issue signs a token pair for userID with role, stamped with the user's current token version.
+	Issue(userID, role string, tokenVersion uint64) (TokenPair, error)
 	VerifyAccess(string) (AccessClaims, error)
 	VerifyRefresh(string) (AccessClaims, error)
 }

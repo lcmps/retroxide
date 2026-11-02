@@ -12,7 +12,7 @@ Retroxide is a Go backend and SvelteKit frontend maintained in one repository an
 - `interface/web/`: embedded frontend build (`dist/`, generated) and its static file server
 - `factory/`: explicit factories for configuration, repositories, storage, services, routing, and application assembly
 - `bootstrap/`: HTTP/worker lifecycle, signals, and shutdown
-- `frontend/`: SvelteKit 2, Svelte 5, Vite, TypeScript, and Vitest frontend
+- `frontend/`: SvelteKit 3, Svelte 5, Vite, TypeScript, and Vitest frontend
 
 ## Backend Architecture
 
@@ -59,6 +59,10 @@ The backend requires `RETROXIDE_JWT_SECRET` with at least 32 characters, which t
 ```sh
 export RETROXIDE_JWT_SECRET="$(openssl rand -base64 48)"
 ```
+
+Access tokens last one hour (`RETROXIDE_JWT_ACCESS_EXPIRY_SECS`) and refresh tokens seven days (`RETROXIDE_JWT_REFRESH_EXPIRY_SECS`). Every request re-checks the token against the user record, so logging out ends all of that user's sessions immediately and role changes apply on the next request.
+
+Login and token-refresh requests are throttled per client IP. By default the backend ignores `X-Forwarded-For`/`X-Real-IP` and uses the TCP peer address. Behind a reverse proxy, set `RETROXIDE_TRUSTED_PROXIES` to the proxy's addresses (comma-separated IPs or CIDR ranges, for example `127.0.0.1,10.0.0.0/8`) so throttling applies to real clients instead of the proxy.
 
 Run the backend from the repository root:
 

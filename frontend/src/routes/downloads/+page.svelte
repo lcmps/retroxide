@@ -1,12 +1,14 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
+	import { browser } from '$app/env';
 	import { onMount } from 'svelte';
-	import ActionButton from '$lib/components/ActionButton.svelte';
-	import IconButton from '$lib/components/IconButton.svelte';
-	import { downloadRom, i18n, listRoms } from '$lib';
-	import { useTranslate } from '$lib/i18n/helpers';
-	import { getErrorMessage } from '$lib/helpers/error';
-	import type { DownloadedRom, RomSummary } from '$lib';
+	import ActionButton from '#lib/components/ActionButton.svelte';
+	import IconButton from '#lib/components/IconButton.svelte';
+	import LoadMoreSentinel from '#lib/components/LoadMoreSentinel.svelte';
+	import { downloadRom, i18n } from '#lib';
+	import { RomPager } from '#lib/roms/pager.svelte.js';
+	import { useTranslate } from '#lib/i18n/helpers.js';
+	import { getErrorMessage } from '#lib/helpers/error.js';
+	import type { RomSummary } from '#lib';
 
 	type QueueItemStatus = 'ready' | 'downloading' | 'completed' | 'failed';
 
@@ -21,9 +23,9 @@
 
 	const DOWNLOAD_QUEUE_STORAGE_KEY = 'retroxide.download-queue';
 
-	let roms = $state<RomSummary[]>([]);
+	// The catalog loads page by page as the list scrolls instead of all at once.
+	const catalog = new RomPager();
 	let queue = $state<DownloadQueueItem[]>([]);
-	let loading = $state(false);
 	let errorMessage = $state('');
 	let statusMessage = $state('');
 
@@ -112,44 +114,12 @@
 		errorMessage = '';
 	}
 
-	function triggerBrowserDownload(result: DownloadedRom): void {
-		const url = URL.createObjectURL(result.blob);
-		const anchor = document.createElement('a');
-		anchor.href = url;
-		anchor.download = result.filename;
-		anchor.rel = 'noopener';
-		document.body.append(anchor);
-		anchor.click();
-		anchor.remove();
-		requestAnimationFrame(() => URL.revokeObjectURL(url));
-	}
-
-	async function loadAllRoms(): Promise<RomSummary[]> {
-		const items: RomSummary[] = [];
-		let cursor: string | undefined;
-
-		while (true) {
-			const response = await listRoms(100, cursor);
-			items.push(...response.item);
-
-			if (!response.next_cursor) {
-				return items;
-			}
-
-			cursor = response.next_cursor;
-		}
-	}
 
 	async function loadRoms(): Promise<void> {
-		loading = true;
 		errorMessage = '';
-
-		try {
-			roms = await loadAllRoms();
-		} catch (error) {
-			errorMessage = getErrorMessage(error, 'downloads.catalog.error', 'Failed to load ROMs', t);
-		} finally {
-			loading = false;
+		await catalog.reset();
+		if (catalog.error) {
+			errorMessage = getErrorMessage(catalog.error, 'downloads.catalog.error', 'Failed to load ROMs', t);
 		}
 	}
 
@@ -158,8 +128,8 @@
 		statusMessage = '';
 
 		try {
+			// The browser streams the file to disk through a signed link and shows its own progress.
 			const result = await downloadRom(romId);
-			triggerBrowserDownload(result);
 			updateQueueItem(romId, {
 				status: 'completed',
 				filename: result.filename,
@@ -202,17 +172,20 @@
 				</li>
 			{/each}
 		</ul>
-	{:else if loading}
+	{:else if catalog.loading && catalog.items.length === 0}
 		<p class="page-state">{t('downloads.catalog.loading', 'Loading ROMs...')}</p>
 	{:else}
 		<ul class="download-list" aria-label={t('downloads.catalog.title', 'Available ROMs')}>
-			{#each roms as rom (rom.rom_id)}
+			{#each catalog.items as rom (rom.rom_id)}
 				<li class="download-row">
 					<div><strong>{rom.title}</strong><span>{rom.platform}</span></div>
 					<ActionButton type="button" onclick={() => addToQueue(rom)}>{t('downloads.actions.add', 'Add to queue')}</ActionButton>
 				</li>
 			{/each}
 		</ul>
+		{#if !catalog.exhausted && !catalog.error}
+			<LoadMoreSentinel onvisible={() => void catalog.loadMore()} key={catalog.items.length} />
+		{/if}
 	{/if}
 
 	{#if statusMessage}

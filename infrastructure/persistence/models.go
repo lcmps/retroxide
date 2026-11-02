@@ -12,7 +12,7 @@ type UploadModel struct {
 func (UploadModel) TableName() string { return "upload" }
 
 type ROMFileModel struct {
-	ID          string `gorm:"column:id;primaryKey;size:64"`
+	ID          string `gorm:"column:id;primaryKey;size:67"`
 	SHA256      string `gorm:"column:sha256;not null;uniqueIndex;size:64"`
 	SHA1        string `gorm:"column:sha1;not null;size:40"`
 	MD5         string `gorm:"column:md5;not null;size:32"`
@@ -25,7 +25,7 @@ func (ROMFileModel) TableName() string { return "rom_file" }
 
 type ROMModel struct {
 	ID              string  `gorm:"column:id;primaryKey;size:64"`
-	ROMFileID       string  `gorm:"column:rom_file_id;not null;size:64;index:idx_rom_rom_file_id"`
+	ROMFileID       string  `gorm:"column:rom_file_id;not null;size:67;index:idx_rom_rom_file_id"`
 	UploaderID      string  `gorm:"column:uploader_id;not null;default:system;size:64;index:idx_rom_uploader_id"`
 	Title           string  `gorm:"column:title;not null;size:255"`
 	Platform        string  `gorm:"column:platform;not null;size:64;index:idx_rom_platform"`
@@ -47,7 +47,7 @@ type JobQueueModel struct {
 	ID          uint64  `gorm:"column:id;primaryKey;autoIncrement"`
 	Kind        string  `gorm:"column:kind;not null;size:64"`
 	UploadID    string  `gorm:"column:upload_id;not null;size:64"`
-	ROMFileID   string  `gorm:"column:rom_file_id;not null;size:64"`
+	ROMFileID   string  `gorm:"column:rom_file_id;not null;size:67"`
 	Attempt     uint8   `gorm:"column:attempt;not null"`
 	CreatedAt   string  `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP;autoCreateTime:false"`
 	ClaimedAt   *string `gorm:"column:claimed_at"`
@@ -60,7 +60,7 @@ type JobDeadLetterModel struct {
 	ID             uint64 `gorm:"column:id;primaryKey;autoIncrement"`
 	Kind           string `gorm:"column:kind;not null;size:64"`
 	UploadID       string `gorm:"column:upload_id;not null;size:64"`
-	ROMFileID      string `gorm:"column:rom_file_id;not null;size:64"`
+	ROMFileID      string `gorm:"column:rom_file_id;not null;size:67"`
 	Attempt        uint8  `gorm:"column:attempt;not null"`
 	Reason         string `gorm:"column:reason;not null;type:text"`
 	DeadLetteredAt string `gorm:"column:dead_lettered_at;not null;default:CURRENT_TIMESTAMP;autoCreateTime:false"`
@@ -89,6 +89,7 @@ type UserModel struct {
 	Email        string `gorm:"column:email;not null;uniqueIndex;size:255"`
 	PasswordHash string `gorm:"column:password_hash;not null;size:255"`
 	Role         string `gorm:"column:role;not null;size:32"`
+	TokenVersion uint64 `gorm:"column:token_version;not null;default:0"`
 }
 
 func (UserModel) TableName() string { return "user" }

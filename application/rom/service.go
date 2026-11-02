@@ -27,8 +27,8 @@ func NewService(repository Repository, storage Storage, audit Audit, scraper Scr
 	return &Service{repository: repository, storage: storage, audit: audit, scraper: scraper}
 }
 
-func (service *Service) List(ctx context.Context, limit int, cursor, platform *string, identified *bool) (ROMListResponseDTO, error) {
-	return NewListROMService(service.repository).List(ctx, limit, cursor, platform, identified)
+func (service *Service) List(ctx context.Context, requester identity.Requester, request ListRequest) (ROMListResponseDTO, error) {
+	return NewListROMService(service.repository).List(ctx, requester, request)
 }
 
 func (service *Service) Get(ctx context.Context, requester identity.Requester, romID string) (ROMDetailDTO, error) {
@@ -86,23 +86,20 @@ func (service *Service) Download(ctx context.Context, requester identity.Request
 	if romFile == nil {
 		return DownloadOutput{}, fault.Internal(fmt.Errorf("rom_file %s not found", rom.ROMFileID))
 	}
-	content, err := service.storage.Read(ctx, romFile.StoragePath)
+	content, err := service.storage.Open(ctx, romFile.StoragePath)
 	if err != nil {
 		return DownloadOutput{}, err
-	}
-	lastModified, err := service.storage.LastModified(ctx, romFile.StoragePath)
-	if err != nil {
-		return DownloadOutput{}, err
-	}
-	if service.audit != nil {
-		service.audit.DownloadServed(ctx, romID, romFile.ID, romFile.Hash.SHA256, uint64(len(content)))
 	}
 	return DownloadOutput{
-		Filename:                romID + ".rom",
-		MIMEType:                "application/octet-stream",
-		Bytes:                   content,
-		SHA256:                  romFile.Hash.SHA256,
-		LastModifiedUnixSeconds: lastModified,
+		Filename: romID + ".rom",
+		MIMEType: "application/octet-stream",
+		SHA256:   romFile.Hash.SHA256,
+		Content:  content,
+		Served: func(ctx context.Context, bytesSent int64) {
+			if service.audit != nil {
+				service.audit.DownloadServed(ctx, romID, romFile.ID, romFile.Hash.SHA256, uint64(max(bytesSent, 0)))
+			}
+		},
 	}, nil
 }
 
@@ -191,7 +188,7 @@ func (service *Service) Scrape(ctx context.Context, requester identity.Requester
 	if err := service.repository.SaveROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.detail(ctx, *rom)
+	return detailOf(*rom, *romFile), nil
 }
 
 func (service *Service) ReadMedia(ctx context.Context, requester identity.Requester, romID, kind string) ([]byte, error) {
@@ -237,18 +234,11 @@ func (service *Service) detail(ctx context.Context, rom romdomain.ROM) (ROMDetai
 	if romFile == nil {
 		return ROMDetailDTO{}, fault.Internal(fmt.Errorf("rom_file %s not found", rom.ROMFileID))
 	}
-	var coverArtURL *string
-	if rom.Identity.CoverArtPath != nil {
-		url := "/api/v1/rom/" + rom.ID + "/cover"
-		coverArtURL = &url
-	}
-	mediaURL := func(path *string, kind string) *string {
-		if path == nil {
-			return nil
-		}
-		url := "/api/v1/rom/" + rom.ID + "/media/" + kind
-		return &url
-	}
+	return detailOf(rom, *romFile), nil
+}
+
+// detailOf maps a ROM and its content file to the detail response.
+func detailOf(rom romdomain.ROM, romFile romdomain.ROMFile) ROMDetailDTO {
 	return ROMDetailDTO{
 		ROMID:          rom.ID,
 		Title:          rom.Identity.Title,
@@ -258,16 +248,16 @@ func (service *Service) detail(ctx context.Context, rom romdomain.ROM) (ROMDetai
 		Publisher:      rom.Identity.Publisher,
 		ReleaseYear:    rom.Identity.ReleaseYear,
 		Description:    rom.Identity.Description,
-		CoverArtURL:    coverArtURL,
-		TitleScreenURL: mediaURL(rom.Identity.TitleScreenPath, MediaTitleScreen),
-		ScreenshotURL:  mediaURL(rom.Identity.ScreenshotPath, MediaScreenshot),
+		CoverArtURL:    imageURL(rom.ID, "cover", rom.Identity.CoverArtPath),
+		TitleScreenURL: imageURL(rom.ID, "media/"+MediaTitleScreen, rom.Identity.TitleScreenPath),
+		ScreenshotURL:  imageURL(rom.ID, "media/"+MediaScreenshot, rom.Identity.ScreenshotPath),
 		Hash: ROMHashDTO{
 			SHA256: romFile.Hash.SHA256,
 			SHA1:   romFile.Hash.SHA1,
 			MD5:    romFile.Hash.MD5,
 			CRC32:  romFile.Hash.CRC32,
 		},
-	}, nil
+	}
 }
 
 func optionalUnlessWhitespace(value *string) *string {

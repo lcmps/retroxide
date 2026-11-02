@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 )
@@ -28,6 +29,7 @@ type Config struct {
 	JWTAccessExpirySecs     uint64
 	JWTRefreshExpirySecs    uint64
 	CORSAllowedOrigins      []string
+	TrustedProxies          []string
 	WorkerCount             int
 	AdminEmail              string
 	AdminPassword           string
@@ -53,7 +55,7 @@ func Load(lookup Lookup) (Config, error) {
 	if maxUploadBytes == 0 {
 		return Config{}, invalid("RETROXIDE_MAX_UPLOAD_BYTES", "must be greater than zero")
 	}
-	accessExpiry, err := unsigned(lookup, "RETROXIDE_JWT_ACCESS_EXPIRY_SECS", 900, 64)
+	accessExpiry, err := unsigned(lookup, "RETROXIDE_JWT_ACCESS_EXPIRY_SECS", 3600, 64)
 	if err != nil {
 		return Config{}, err
 	}
@@ -93,6 +95,12 @@ func Load(lookup Lookup) (Config, error) {
 		return Config{}, invalid("RETROXIDE_ALLOWED_UPLOAD_EXTENSIONS", "must contain at least one extension")
 	}
 	origins := parseList(get(lookup, "RETROXIDE_CORS_ALLOWED_ORIGINS", ""), false)
+	trustedProxies := parseList(get(lookup, "RETROXIDE_TRUSTED_PROXIES", ""), false)
+	for _, proxy := range trustedProxies {
+		if !validProxyAddress(proxy) {
+			return Config{}, invalid("RETROXIDE_TRUSTED_PROXIES", fmt.Sprintf("%q is not an IP address or CIDR range", proxy))
+		}
+	}
 	adminEmail, hasEmail := lookup("RETROXIDE_ADMIN_EMAIL")
 	adminPassword, hasPassword := lookup("RETROXIDE_ADMIN_PASSWORD")
 	if hasEmail != hasPassword {
@@ -110,7 +118,7 @@ func Load(lookup Lookup) (Config, error) {
 		MaxUploadBytes: int64(maxUploadBytes), AllowedUploadMIMETypes: mimeTypes,
 		AllowedUploadExtensions: extensions, JWTSecret: secret,
 		JWTAccessExpirySecs: accessExpiry, JWTRefreshExpirySecs: refreshExpiry,
-		CORSAllowedOrigins: origins, WorkerCount: int(workerCount),
+		CORSAllowedOrigins: origins, TrustedProxies: trustedProxies, WorkerCount: int(workerCount),
 		AdminEmail: adminEmail, AdminPassword: adminPassword,
 	}, nil
 }
@@ -159,6 +167,14 @@ func parseList(raw string, lowercase bool) []string {
 		values = append(values, value)
 	}
 	return values
+}
+
+func validProxyAddress(value string) bool {
+	if net.ParseIP(value) != nil {
+		return true
+	}
+	_, _, err := net.ParseCIDR(value)
+	return err == nil
 }
 
 func invalid(key, message string) error {

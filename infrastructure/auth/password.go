@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -20,18 +21,30 @@ const (
 	argonSaltLength  = 16
 )
 
-type Argon2PasswordHasher struct{}
-
-func NewArgon2PasswordHasher() Argon2PasswordHasher {
-	return Argon2PasswordHasher{}
+// Argon2PasswordHasher caps concurrent derivations: each one allocates argonMemory KiB,
+// so an unbounded burst of logins could otherwise exhaust process memory.
+type Argon2PasswordHasher struct {
+	slots chan struct{}
 }
 
-func (Argon2PasswordHasher) Hash(password string) (string, error) {
+func NewArgon2PasswordHasher() Argon2PasswordHasher {
+	return Argon2PasswordHasher{slots: make(chan struct{}, max(runtime.GOMAXPROCS(0), 1))}
+}
+
+func (hasher Argon2PasswordHasher) derive(password, salt []byte, iterations, memory uint32, parallelism uint8, keyLength uint32) []byte {
+	if hasher.slots != nil {
+		hasher.slots <- struct{}{}
+		defer func() { <-hasher.slots }()
+	}
+	return argon2.IDKey(password, salt, iterations, memory, parallelism, keyLength)
+}
+
+func (hasher Argon2PasswordHasher) Hash(password string) (string, error) {
 	salt := make([]byte, argonSaltLength)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generating password salt: %w", err)
 	}
-	derived := argon2.IDKey([]byte(password), salt, argonIterations, argonMemory, argonParallelism, argonKeyLength)
+	derived := hasher.derive([]byte(password), salt, argonIterations, argonMemory, argonParallelism, argonKeyLength)
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s",
 		argonMemory,
 		argonIterations,
@@ -41,7 +54,7 @@ func (Argon2PasswordHasher) Hash(password string) (string, error) {
 	), nil
 }
 
-func (Argon2PasswordHasher) Verify(password, encoded string) (bool, error) {
+func (hasher Argon2PasswordHasher) Verify(password, encoded string) (bool, error) {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" || parts[2] != "v=19" {
 		return false, errors.New("invalid argon2id password hash")
@@ -58,7 +71,7 @@ func (Argon2PasswordHasher) Verify(password, encoded string) (bool, error) {
 	if err != nil || len(expected) != int(argonKeyLength) {
 		return false, errors.New("invalid argon2id digest")
 	}
-	actual := argon2.IDKey([]byte(password), salt, parameters.iterations, parameters.memory, parameters.parallelism, uint32(len(expected)))
+	actual := hasher.derive([]byte(password), salt, parameters.iterations, parameters.memory, parameters.parallelism, uint32(len(expected)))
 	return subtle.ConstantTimeCompare(actual, expected) == 1, nil
 }
 

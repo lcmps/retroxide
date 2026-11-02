@@ -1,6 +1,29 @@
 package persistence
 
-import "testing"
+import (
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+)
+
+func TestROMFileIdentifierCapacity(t *testing.T) {
+	for _, model := range []any{ROMFileModel{}, ROMModel{}, JobQueueModel{}, JobDeadLetterModel{}} {
+		fieldName := "ROMFileID"
+		if _, ok := model.(ROMFileModel); ok {
+			fieldName = "ID"
+		}
+		field, _ := reflect.TypeOf(model).FieldByName(fieldName)
+		if !strings.Contains(field.Tag.Get("gorm"), "size:67") {
+			t.Errorf("%T.%s must accommodate rf_ plus SHA-256", model, fieldName)
+		}
+	}
+	if !slices.ContainsFunc(mysqlMigrations, func(item migration) bool {
+		return item.version == 11 && item.name == "widen_rom_file_identifiers"
+	}) {
+		t.Fatal("missing identifier-widening upgrade migration for existing MySQL databases")
+	}
+}
 
 func TestMigrationSetsStayInVersionNameParity(t *testing.T) {
 	if len(sqliteMigrations) != len(mysqlMigrations) {

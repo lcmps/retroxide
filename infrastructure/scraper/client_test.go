@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -158,5 +159,50 @@ func TestFetchImageRejectsNonImages(t *testing.T) {
 	client := NewClient(server.Client(), Endpoints{})
 	if _, err := client.fetchImage(context.Background(), server.URL); !errors.Is(err, errUpstreamNoHit) {
 		t.Fatalf("fetchImage() error = %v, want rejection", err)
+	}
+}
+
+func TestDatIndexSharesOneDownloadAcrossConcurrentLookups(t *testing.T) {
+	var requests atomic.Int32
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		if strings.Contains(request.URL.Path, "Super%20Nintendo") || strings.Contains(request.URL.Path, "Super Nintendo") {
+			<-release // hold the SNES download open until every caller is waiting on it
+		}
+		_, _ = writer.Write([]byte(snesDAT))
+	}))
+	t.Cleanup(server.Close)
+	client := NewClient(server.Client(), Endpoints{LibretroDatabase: server.URL})
+
+	const callers = 8
+	var waiting sync.WaitGroup
+	errs := make(chan error, callers)
+	for range callers {
+		waiting.Add(1)
+		go func() {
+			defer waiting.Done()
+			index, err := client.datIndex(context.Background(), libretroSystems["snes"])
+			if err == nil && index == nil {
+				err = errors.New("nil index")
+			}
+			errs <- err
+		}()
+	}
+
+	// Another system is not blocked behind the in-flight SNES download.
+	if _, err := client.datIndex(context.Background(), libretroSystems["gba"]); err != nil {
+		t.Fatalf("independent system lookup failed: %v", err)
+	}
+	close(release)
+	waiting.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("upstream requests = %d, want one per system", got)
 	}
 }

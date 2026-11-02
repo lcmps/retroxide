@@ -19,6 +19,7 @@
   "common.errors.load_rom": "Failed to load ROM",
   "common.errors.login": "Login failed",
   "common.errors.not_found": "Requested resource was not found",
+  "common.errors.rate_limited": "Too many attempts. Please wait a moment and try again.",
   "common.errors.unauthorized": "You need to sign in to continue",
   "common.errors.upload": "Failed to upload ROM",
   "common.status.completed": "Completed",

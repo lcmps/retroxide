@@ -1,17 +1,18 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import type { PageProps } from './$types';
   import { resolve } from '$app/paths';
   import { Dialog } from 'bits-ui';
-  import ActionButton from '$lib/components/ActionButton.svelte';
-  import { deleteRom, downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '$lib';
-  import { ApiClientError } from '$lib/api/errors';
-  import { getErrorMessage } from '$lib/helpers/error';
-  import { useTranslate } from '$lib/i18n/helpers';
-  import type { RomDetail } from '$lib';
+  import ActionButton from '#lib/components/ActionButton.svelte';
+  import { deleteRom, downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '#lib';
+  import { ApiClientError } from '#lib/api/errors.js';
+  import { getErrorMessage } from '#lib/helpers/error.js';
+  import { useTranslate } from '#lib/i18n/helpers.js';
+  import type { RomDetail } from '#lib';
   import { onMount } from 'svelte';
   import { onDestroy } from 'svelte';
 
-  let { data } = $props<{ data: { romId: string } }>();
+  let { data }: PageProps = $props();
 
   let rom = $state<RomDetail | null>(null);
   let loading = $state(false);
@@ -42,7 +43,7 @@
   async function loadCoverPreview(): Promise<void> {
     if (!rom?.cover_art_url) return;
     if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl);
-    coverPreviewUrl = URL.createObjectURL(await fetchRomCover(rom.rom_id));
+    coverPreviewUrl = URL.createObjectURL(await fetchRomCover(rom.rom_id, rom.cover_art_url));
   }
 
   onDestroy(() => {
@@ -57,13 +58,8 @@
     downloading = true;
     message = '';
     try {
-      const result = await downloadRom(rom.rom_id);
-      const url = URL.createObjectURL(result.blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = result.filename;
-      anchor.click();
-        requestAnimationFrame(() => URL.revokeObjectURL(url));
+      // The browser streams the file to disk through a signed link.
+      await downloadRom(rom.rom_id);
     } catch (error) {
       message = getErrorMessage(error, 'common.errors.download', 'Failed to download ROM', t);
     } finally {

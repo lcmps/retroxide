@@ -23,7 +23,17 @@ type ROMRepository interface {
 }
 
 type HashService interface {
-	Hash([]byte) (romdomain.ROMHash, error)
+	NewDigest() romdomain.Digest
+}
+
+// StagedContent is upload content written to storage but not yet visible at its content address.
+type StagedContent interface {
+	// Size is the number of bytes staged.
+	Size() int64
+	// Commit moves the content to its content address and returns the storage path.
+	Commit(ctx context.Context, contentAddress string) (string, error)
+	// Discard removes uncommitted content; it is a no-op after Commit.
+	Discard()
 }
 
 type UploadAudit interface {

@@ -18,6 +18,7 @@ const (
 	CodeUnsupportedUpload    Code = "upload_type_not_allowed"
 	CodeUnsupportedMediaType Code = "unsupported_media_type"
 	CodeUpstreamUnavailable  Code = "upstream_unavailable"
+	CodeRateLimited          Code = "rate_limited"
 	CodeInternal             Code = "internal_error"
 )
 
@@ -66,6 +67,10 @@ func Internal(cause error) *Error {
 
 func UpstreamUnavailable(message string, cause error) *Error {
 	return &Error{Code: CodeUpstreamUnavailable, Message: message, Cause: cause}
+}
+
+func RateLimited() *Error {
+	return &Error{Code: CodeRateLimited, Message: "too many attempts, try again later"}
 }
 
 func IsCode(err error, code Code) bool {

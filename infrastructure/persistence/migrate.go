@@ -51,6 +51,11 @@ ALTER TABLE rom ADD COLUMN release_year TEXT;
 ALTER TABLE rom ADD COLUMN description TEXT;
 ALTER TABLE rom ADD COLUMN title_screen_path TEXT;
 ALTER TABLE rom ADD COLUMN screenshot_path TEXT;`},
+	{11, "widen_rom_file_identifiers", `SELECT 1;`},
+	{12, "add_user_token_version", `ALTER TABLE user ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;`},
+	{13, "index_case_insensitive_platform", `ALTER TABLE rom ADD COLUMN platform_key TEXT GENERATED ALWAYS AS (LOWER(platform)) VIRTUAL;
+CREATE INDEX IF NOT EXISTS idx_rom_platform_key ON rom(platform_key);`},
+	{14, "index_job_queue_availability", `CREATE INDEX IF NOT EXISTS idx_job_queue_available_at ON job_queue(available_at);`},
 }
 
 var mysqlMigrations = []migration{
@@ -88,6 +93,16 @@ ALTER TABLE rom ADD COLUMN release_year VARCHAR(16) NULL;
 ALTER TABLE rom ADD COLUMN description TEXT NULL;
 ALTER TABLE rom ADD COLUMN title_screen_path TEXT NULL;
 ALTER TABLE rom ADD COLUMN screenshot_path TEXT NULL;`},
+	{11, "widen_rom_file_identifiers", `ALTER TABLE rom DROP FOREIGN KEY fk_rom_file;
+ALTER TABLE rom_file MODIFY COLUMN id VARCHAR(67) NOT NULL;
+ALTER TABLE rom MODIFY COLUMN rom_file_id VARCHAR(67) NOT NULL;
+ALTER TABLE job_queue MODIFY COLUMN rom_file_id VARCHAR(67) NOT NULL;
+ALTER TABLE job_dead_letter MODIFY COLUMN rom_file_id VARCHAR(67) NOT NULL;
+ALTER TABLE rom ADD CONSTRAINT fk_rom_file FOREIGN KEY (rom_file_id) REFERENCES rom_file(id);`},
+	{12, "add_user_token_version", `ALTER TABLE user ADD COLUMN token_version BIGINT UNSIGNED NOT NULL DEFAULT 0;`},
+	{13, "index_case_insensitive_platform", `ALTER TABLE rom ADD COLUMN platform_key VARCHAR(64) GENERATED ALWAYS AS (LOWER(platform)) STORED;
+CREATE INDEX idx_rom_platform_key ON rom(platform_key);`},
+	{14, "index_job_queue_availability", `CREATE INDEX idx_job_queue_available_at ON job_queue(available_at);`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {

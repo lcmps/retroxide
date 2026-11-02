@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$app/environment', () => ({ browser: true }));
+vi.mock('$app/env', () => ({ browser: true }));
 
-import { downloadRom, getRom, hasStoredSession, logoutSession, persistStoredSession, uploadRom } from './client';
+import { createDownloadLink, fetchRomCover, getRom, hasStoredSession, logoutSession, persistStoredSession, uploadRom } from './client';
 
 function jsonResponse(payload: unknown, status = 200): Response {
 	return new Response(JSON.stringify(payload), {
@@ -59,25 +59,38 @@ describe('authenticated API requests', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(5);
 	});
 
-	it('refreshes once and retries binary downloads', async () => {
+	it('refreshes once and retries download link requests', async () => {
 		persistStoredSession({ access_token: 'old-access', refresh_token: 'old-refresh', token_type: 'Bearer', expires_in: 900 });
 		let refreshCalls = 0;
-		const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+		const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
 			const authorization = new Headers(init?.headers).get('Authorization');
-			if (String(_input).endsWith('/session/refresh')) {
+			if (String(input).endsWith('/session/refresh')) {
 				refreshCalls++;
 				return jsonResponse({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'Bearer', expires_in: 900 });
 			}
 			if (authorization === 'Bearer old-access') return jsonResponse({}, 401);
-			return new Response('rom bytes', { headers: { 'Content-Disposition': 'attachment; filename="game.rom"', 'Content-Type': 'application/octet-stream' } });
+			expect(String(input)).toBe('/api/v1/rom/rom-1/download-link');
+			expect(init?.method).toBe('POST');
+			return jsonResponse({ url: '/api/v1/download?token=signed', expires_in: 60 });
 		});
 		vi.stubGlobal('fetch', fetchMock);
 
-		const downloaded = await downloadRom('rom-1');
+		const link = await createDownloadLink('rom-1');
 
 		expect(refreshCalls).toBe(1);
-		expect(downloaded.filename).toBe('game.rom');
-		expect(await downloaded.blob.text()).toBe('rom bytes');
+		expect(new URL(link.url).pathname + new URL(link.url).search).toBe('/api/v1/download?token=signed');
+		expect(link.filename).toBe('rom-1.rom');
+		expect(link.expiresIn).toBe(60);
+	});
+
+	it('keeps the cover content version so the HTTP cache can serve it', async () => {
+		persistStoredSession({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 });
+		const fetchMock = vi.fn<typeof fetch>(async () => new Response('png'));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await fetchRomCover('rom-1', '/api/v1/rom/rom-1/cover?v=0123456789abcdef');
+
+		expect(fetchMock).toHaveBeenCalledWith('/api/v1/rom/rom-1/cover?v=0123456789abcdef', expect.anything());
 	});
 
 	it('revokes the server session and always clears local credentials', async () => {
@@ -134,5 +147,46 @@ describe('authenticated API requests', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(result.upload_id).toBe('upl-1');
 		expect(progressHandler).toHaveBeenCalled();
+	});
+});
+
+describe('proactive session refresh', () => {
+	beforeEach(() => {
+		const values = new Map<string, string>();
+		vi.stubGlobal('sessionStorage', {
+			getItem: (key: string) => values.get(key) ?? null,
+			setItem: (key: string, value: string) => values.set(key, value),
+			removeItem: (key: string) => values.delete(key)
+		});
+		vi.stubGlobal('window', new EventTarget());
+		vi.restoreAllMocks();
+	});
+
+	it('refreshes a nearly expired token before the request instead of after a 401', async () => {
+		persistStoredSession({ access_token: 'expiring', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 30 });
+		const authorizations: (string | null)[] = [];
+		const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+			if (String(input).endsWith('/session/refresh')) {
+				return jsonResponse({ access_token: 'fresh', refresh_token: 'refresh-2', token_type: 'Bearer', expires_in: 3600 });
+			}
+			authorizations.push(new Headers(init?.headers).get('Authorization'));
+			return jsonResponse({ rom_id: 'rom-1' });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		await getRom('rom-1');
+
+		expect(authorizations).toEqual(['Bearer fresh']);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not refresh a token with plenty of lifetime left', async () => {
+		persistStoredSession({ access_token: 'valid', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 3600 });
+		const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ rom_id: 'rom-1' }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await getRom('rom-1');
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 });

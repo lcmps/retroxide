@@ -3,6 +3,7 @@ package rom
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/lcmps/retroxide/domain/identity"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
@@ -11,7 +12,8 @@ import (
 type Repository interface {
 	UpsertROMFile(context.Context, romdomain.ROMFile) (romdomain.ROMFile, error)
 	SaveROM(context.Context, romdomain.ROM) error
-	ListROMsWithFiles(context.Context, int, *string, *string) ([]romdomain.ROMWithFile, error)
+	// ListROMsWithFiles returns up to limit ROMs ordered by ID that match filter.
+	ListROMsWithFiles(ctx context.Context, limit int, filter ROMFilter) ([]romdomain.ROMWithFile, error)
 	FindROMByID(context.Context, string) (*romdomain.ROM, error)
 	FindROMFileByID(context.Context, string) (*romdomain.ROMFile, error)
 	FindROMFileBySHA256(context.Context, string) (*romdomain.ROMFile, error)
@@ -22,12 +24,39 @@ type Repository interface {
 	HardDeleteROM(context.Context, string, func(string) error) error
 }
 
+// StoredContent is an open, seekable handle on stored bytes; the caller must close it.
+type StoredContent struct {
+	io.ReadSeekCloser
+	Size       int64
+	ModifiedAt time.Time
+}
+
+// ROMFilter selects ROMs for listing; nil fields are not applied.
+type ROMFilter struct {
+	// AfterCursor returns only ROMs whose ID sorts after it.
+	AfterCursor *string
+	// Platform matches the platform case-insensitively.
+	Platform *string
+	// UploaderID restricts results to one owner's uploads.
+	UploaderID *string
+	// Search matches a case-insensitive substring of the title, platform, or ROM ID.
+	Search *string
+}
+
+// ListRequest holds the optional parameters of a ROM listing.
+type ListRequest struct {
+	Limit      int
+	Cursor     *string
+	Platform   *string
+	Search     *string
+	Identified *bool
+}
+
 type Storage interface {
-	Write(context.Context, string, []byte) (string, error)
-	Read(context.Context, string) ([]byte, error)
-	Open(context.Context, string) (io.ReadCloser, error)
-	LastModified(context.Context, string) (*uint64, error)
-	Delete(context.Context, string) error
+	Write(ctx context.Context, contentAddress string, content []byte) (string, error)
+	Read(ctx context.Context, storagePath string) ([]byte, error)
+	Open(ctx context.Context, storagePath string) (StoredContent, error)
+	Delete(ctx context.Context, storagePath string) error
 }
 
 type Audit interface {
@@ -65,7 +94,7 @@ type Scraper interface {
 }
 
 type API interface {
-	List(context.Context, int, *string, *string, *bool) (ROMListResponseDTO, error)
+	List(context.Context, identity.Requester, ListRequest) (ROMListResponseDTO, error)
 	Get(context.Context, identity.Requester, string) (ROMDetailDTO, error)
 	Update(context.Context, identity.Requester, string, UpdateROMRequest) (ROMDetailDTO, error)
 	Delete(context.Context, identity.Requester, string) error

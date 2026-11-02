@@ -11,34 +11,59 @@ import (
 	"github.com/lcmps/retroxide/domain/identity"
 )
 
+const bearerPrefix = "Bearer "
+
+type userReader interface {
+	FindByID(ctx context.Context, userID string) (*authdomain.User, error)
+}
+
 type clientTokenReader interface {
 	FindByTokenHash(ctx context.Context, tokenHash string) (*authdomain.Client, error)
 }
 
+// ExtractBearerToken returns the token from an "Authorization: Bearer <token>" header value.
 func ExtractBearerToken(header string) (string, bool) {
 	header = strings.TrimSpace(header)
-	if len(header) <= len("Bearer ") || !strings.EqualFold(header[:len("Bearer ")], "Bearer ") {
+	if len(header) <= len(bearerPrefix) || !strings.EqualFold(header[:len(bearerPrefix)], bearerPrefix) {
 		return "", false
 	}
-	token := strings.TrimSpace(header[len("Bearer "):])
-	if token == "" {
-		return "", false
-	}
-	return token, true
+	token := strings.TrimSpace(header[len(bearerPrefix):])
+	return token, token != ""
 }
 
-func ResolvePrincipal(ctx context.Context, token string, tokens TokenService, clients clientTokenReader) (identity.Requester, error) {
-	claims, err := tokens.VerifyAccess(token)
-	if err == nil {
-		role := identity.RoleUser
-		if claims.Role == "admin" {
-			role = identity.RoleAdmin
-		}
-		return identity.Requester{UserID: claims.UserID, Role: role}, nil
-	}
+// Authenticator resolves bearer tokens, either user access tokens or API client tokens, to requesters.
+type Authenticator struct {
+	tokens  TokenService
+	users   userReader
+	clients clientTokenReader
+}
 
+func NewAuthenticator(tokens TokenService, users userReader, clients clientTokenReader) *Authenticator {
+	return &Authenticator{tokens: tokens, users: users, clients: clients}
+}
+
+// Authenticate verifies token and returns the requester it represents.
+//
+// Access tokens are checked against the user's current record, so a logout (which bumps the
+// token version) or a role change applies to the very next request rather than at token expiry.
+func (authenticator *Authenticator) Authenticate(ctx context.Context, token string) (identity.Requester, error) {
+	claims, err := authenticator.tokens.VerifyAccess(token)
+	if err != nil {
+		return authenticator.authenticateClient(ctx, token)
+	}
+	user, err := authenticator.users.FindByID(ctx, claims.UserID)
+	if err != nil {
+		return identity.Requester{}, err
+	}
+	if user == nil || user.TokenVersion != claims.TokenVersion {
+		return identity.Requester{}, fault.Unauthorized()
+	}
+	return identity.Requester{UserID: user.ID, Role: user.Role}, nil
+}
+
+func (authenticator *Authenticator) authenticateClient(ctx context.Context, token string) (identity.Requester, error) {
 	digest := sha256.Sum256([]byte(token))
-	client, err := clients.FindByTokenHash(ctx, hex.EncodeToString(digest[:]))
+	client, err := authenticator.clients.FindByTokenHash(ctx, hex.EncodeToString(digest[:]))
 	if err != nil || client == nil {
 		return identity.Requester{}, fault.Unauthorized()
 	}
