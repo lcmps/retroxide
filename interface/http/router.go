@@ -64,6 +64,7 @@ func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 		}),
 		securityHeadersMiddleware(),
 		requestIDMiddleware(dependencies.Logger),
+		compressionMiddleware(),
 		corsMiddleware(options.CORSOrigins),
 		authMiddleware(dependencies.Authenticator),
 	)
