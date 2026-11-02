@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/url"
 	"strings"
@@ -93,6 +94,19 @@ func OpenDatabase(ctx context.Context, driver, sqlitePath, mysqlURL string) (*go
 		return nil, err
 	}
 	return db, nil
+}
+
+func PingMySQL(ctx context.Context, mysqlURL string) error {
+	dsn, err := mysqlDSN(mysqlURL)
+	if err != nil {
+		return err
+	}
+	database, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return fmt.Errorf("opening mysql connection: %w", err)
+	}
+	defer database.Close()
+	return database.PingContext(ctx)
 }
 
 func mysqlDSN(rawURL string) (string, error) {
