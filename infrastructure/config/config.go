@@ -55,7 +55,7 @@ func Load(lookup Lookup) (Config, error) {
 	if maxUploadBytes == 0 {
 		return Config{}, invalid("RETROXIDE_MAX_UPLOAD_BYTES", "must be greater than zero")
 	}
-	accessExpiry, err := unsigned(lookup, "RETROXIDE_JWT_ACCESS_EXPIRY_SECS", 900, 64)
+	accessExpiry, err := unsigned(lookup, "RETROXIDE_JWT_ACCESS_EXPIRY_SECS", 3600, 64)
 	if err != nil {
 		return Config{}, err
 	}
