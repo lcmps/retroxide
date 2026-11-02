@@ -5,19 +5,22 @@ import (
 
 	"github.com/lcmps/retroxide/domain/identity"
 	librariesdomain "github.com/lcmps/retroxide/domain/libraries"
+	romdomain "github.com/lcmps/retroxide/domain/rom"
 )
 
 type Repository interface {
 	SaveLibrary(context.Context, librariesdomain.Library) error
-	ListLibrary(context.Context) ([]librariesdomain.Library, error)
+	// ListLibrary returns libraries ordered by ID; a non-nil ownerID restricts them to that user.
+	ListLibrary(ctx context.Context, ownerID *string) ([]librariesdomain.Library, error)
 	FindLibraryByID(context.Context, string) (*librariesdomain.Library, error)
-	ListLibraryROMIDs(context.Context, string) ([]string, error)
+	// ListLibraryROMs returns the library's ROMs with their content hashes, ordered by ROM ID.
+	ListLibraryROMs(ctx context.Context, libraryID string) ([]romdomain.ROMWithFile, error)
 	AddLibraryItem(context.Context, string, string) error
 	RemoveLibraryItem(context.Context, string, string) (bool, error)
 }
 
 type ROMReader interface {
-	ROMExists(context.Context, string) (bool, error)
+	FindROMByID(context.Context, string) (*romdomain.ROM, error)
 }
 
 type API interface {

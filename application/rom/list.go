@@ -51,18 +51,23 @@ func (service *ListROMService) List(ctx context.Context, requester identity.Requ
 
 	items := make([]ROMSummaryDTO, 0, len(rows))
 	for _, row := range rows {
-		var coverArtURL *string
-		if row.ROM.Identity.CoverArtPath != nil {
-			url := "/api/v1/rom/" + row.ROM.ID + "/cover"
-			coverArtURL = &url
-		}
-		items = append(items, ROMSummaryDTO{
-			ROMID:       row.ROM.ID,
-			Title:       row.ROM.Identity.Title,
-			Platform:    row.ROM.Identity.Platform,
-			SHA256:      row.SHA256,
-			CoverArtURL: coverArtURL,
-		})
+		items = append(items, Summarize(row))
 	}
 	return ROMListResponseDTO{Item: items, NextCursor: nextCursor}, nil
+}
+
+// Summarize maps a ROM and its content hash to the summary shape used in listings.
+func Summarize(row romdomain.ROMWithFile) ROMSummaryDTO {
+	var coverArtURL *string
+	if row.ROM.Identity.CoverArtPath != nil {
+		url := "/api/v1/rom/" + row.ROM.ID + "/cover"
+		coverArtURL = &url
+	}
+	return ROMSummaryDTO{
+		ROMID:       row.ROM.ID,
+		Title:       row.ROM.Identity.Title,
+		Platform:    row.ROM.Identity.Platform,
+		SHA256:      row.SHA256,
+		CoverArtURL: coverArtURL,
+	}
 }
