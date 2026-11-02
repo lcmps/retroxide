@@ -103,7 +103,7 @@ func (service *UploadService) Create(ctx context.Context, requester identity.Req
 		return UploadAcceptedDTO{}, err
 	}
 	if existing != nil {
-		if existing.Hash != hash {
+		if !existing.Hash.MatchesContent(hash) {
 			return UploadAcceptedDTO{}, fault.Internal(errors.New("sha256 lookup returned different hashes"))
 		}
 		if service.audit != nil {

@@ -91,6 +91,13 @@ func (repositories *Repositories) DeadLetter(ctx context.Context, job jobsdomain
 		return fault.Validation("invalid job id")
 	}
 	return repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var queued JobQueueModel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).Take(&queued).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return databaseError("finding dead-letter queue job", err)
+		}
 		deadLetter := JobDeadLetterModel{
 			Kind: job.Payload.Kind, UploadID: job.Payload.UploadID, ROMFileID: job.Payload.ROMFileID,
 			Attempt: attempt, Reason: reason, DeadLetteredAt: sqlTimestamp(time.Now()),

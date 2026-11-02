@@ -102,6 +102,10 @@ export function getLocalizedErrorMessage(
 	fallback: string
 ): string {
 	if (error instanceof ApiClientError) {
+		if (error.status !== undefined && error.status >= 500 && error.requestId) {
+			const message = translate('common.errors.generic', 'Something went wrong');
+			return `${message} (${translate('common.errors.requestId', 'Request ID')}: ${error.requestId})`;
+		}
 		const translation = error.code ? ERROR_TRANSLATIONS[error.code] : undefined;
 		if (translation) {
 			return translate(translation.key, translation.fallback);

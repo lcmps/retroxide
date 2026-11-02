@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
+  import { resolve } from '$app/paths';
+  import { Dialog } from 'bits-ui';
   import ActionButton from '$lib/components/ActionButton.svelte';
-  import { downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '$lib';
+  import { deleteRom, downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '$lib';
   import { ApiClientError } from '$lib/api/errors';
   import { getErrorMessage } from '$lib/helpers/error';
   import { useTranslate } from '$lib/i18n/helpers';
@@ -14,6 +17,8 @@
   let loading = $state(false);
   let downloading = $state(false);
   let scraping = $state(false);
+  let deleting = $state(false);
+  let deleteOpen = $state(false);
   let coverPreviewUrl = $state<string | null>(null);
   let message = $state('');
 
@@ -90,6 +95,22 @@
     }
   }
 
+  async function deleteCurrentRom(): Promise<void> {
+    if (!rom || deleting) return;
+    deleting = true;
+    message = '';
+    try {
+      await deleteRom(rom.rom_id);
+      deleteOpen = false;
+      await goto(resolve('/library'));
+    } catch (error) {
+      deleteOpen = false;
+      message = getErrorMessage(error, 'rom.messages.deleteFailure', 'Failed to delete ROM', t);
+    } finally {
+      deleting = false;
+    }
+  }
+
   onMount(() => {
     void i18n.initialize().then(loadRom).catch((error: unknown) => {
       message = getErrorMessage(error, 'rom.messages.loadFailure', 'Failed to load ROM', t);
@@ -110,12 +131,32 @@
         <p>{rom.platform}</p>
         {#if rom.publisher}<p>{rom.publisher}</p>{/if}
         {#if rom.release_year}<p>{rom.release_year}</p>{/if}
-        <ActionButton type="button" onclick={downloadCurrentRom} disabled={downloading}>
+        <ActionButton type="button" onclick={downloadCurrentRom} disabled={downloading || deleting}>
           {downloading ? t('common.status.downloading', 'Downloading...') : t('rom.actions.download', 'Download')}
         </ActionButton>
-        <ActionButton type="button" variant="secondary" onclick={scrapeCurrentRom} disabled={scraping}>
+        <ActionButton type="button" variant="secondary" onclick={scrapeCurrentRom} disabled={scraping || deleting}>
           {scraping ? t('rom.actions.scraping', 'Scraping...') : t('rom.actions.scrape', 'Scrape')}
         </ActionButton>
+        <Dialog.Root bind:open={deleteOpen}>
+          <ActionButton type="button" variant="danger" disabled={deleting || scraping || downloading} onclick={() => { deleteOpen = true; }}>
+            {t('rom.actions.delete', 'Delete ROM')}
+          </ActionButton>
+          <Dialog.Portal>
+            <Dialog.Overlay class="rom-delete-overlay" />
+            <Dialog.Content class="rom-delete-dialog" onEscapeKeydown={(event) => { if (deleting) event.preventDefault(); }} onInteractOutside={(event) => { if (deleting) event.preventDefault(); }}>
+              <Dialog.Title class="rom-delete-title">{t('rom.delete.title', 'Delete this ROM?')}</Dialog.Title>
+              <Dialog.Description class="rom-delete-description">
+                {t('rom.delete.description', 'Permanently delete {title}, its stored file, and related records? Shared files still used by other ROMs will be kept. This cannot be undone.', { title: rom.title })}
+              </Dialog.Description>
+              <div class="rom-delete-actions">
+                <ActionButton type="button" variant="secondary" disabled={deleting} onclick={() => { deleteOpen = false; }}>{t('common.actions.cancel', 'Cancel')}</ActionButton>
+                <ActionButton type="button" variant="danger" disabled={deleting} onclick={deleteCurrentRom}>
+                  {deleting ? t('rom.actions.deleting', 'Deleting...') : t('rom.delete.confirm', 'Delete permanently')}
+                </ActionButton>
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
       </div>
     </article>
   {:else}
@@ -129,6 +170,12 @@
 </section>
 
 <style>
+  :global(.rom-delete-overlay) { position: fixed; inset: 0; z-index: 50; background: rgb(0 0 0 / 75%); }
+  :global(.rom-delete-dialog) { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); z-index: 51; width: min(32rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow-y: auto; padding: 1.5rem; border-radius: 0.4rem; background: var(--pixel-panel); color: var(--pixel-text); }
+  :global(.rom-delete-title) { margin: 0; font-size: 0.85rem; line-height: 1.6; }
+  :global(.rom-delete-description) { margin: 1rem 0; font-size: 0.6rem; line-height: 1.8; overflow-wrap: anywhere; }
+  .rom-delete-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.75rem; }
+
   .rom-card {
     display: grid;
     justify-items: center;

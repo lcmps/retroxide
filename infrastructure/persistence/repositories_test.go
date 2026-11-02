@@ -45,6 +45,20 @@ func validROMFile(id, title string) romdomain.ROMFile {
 	return romdomain.ROMFile{ID: id, Hash: romHash, Size: uint64(len(title)), StoragePath: "/storage/" + hash}
 }
 
+func TestRepositoriesRecognizeDuplicateWithLegacyCRC(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	file := validROMFile("rf-legacy", "payload")
+	legacy := file
+	legacy.Hash.CRC32 = "00000000"
+	if _, err := repositories.UpsertROMFile(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	file.ID = "rf-reupload"
+	if _, err := repositories.UpsertROMFile(ctx, file); !fault.IsCode(err, fault.CodeROMAlreadyExists) {
+		t.Fatalf("legacy duplicate error = %v, want rom_already_exists", err)
+	}
+}
+
 func TestRepositoriesDetectDuplicateContentAndVerifyFullHash(t *testing.T) {
 	repositories, ctx := openTestRepositories(t)
 	file := validROMFile("rf-first", "payload")

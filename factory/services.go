@@ -29,7 +29,7 @@ type Services struct {
 	Libraries  *libraries.Service
 	Sessions   *auth.SessionService
 	Clients    *auth.ClientService
-	Identifier *uploads.IdentifyService
+	Identifier *persistence.Identifier
 }
 
 func NewServices(settings config.Config, repositories *persistence.Repositories, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
@@ -47,6 +47,6 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 		Libraries:  libraries.NewService(repositories, repositories),
 		Sessions:   auth.NewSessionService(repositories, hasher, tokens, repositories),
 		Clients:    auth.NewClientService(repositories),
-		Identifier: uploads.NewIdentifyService(repositories, repositories),
+		Identifier: persistence.NewIdentifier(repositories.DB),
 	}
 }

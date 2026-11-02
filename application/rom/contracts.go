@@ -19,6 +19,7 @@ type Repository interface {
 	CountROMsByROMFileID(context.Context, string) (uint64, error)
 	DeleteROM(context.Context, string) error
 	DeleteROMFile(context.Context, string) error
+	HardDeleteROM(context.Context, string, func(string) error) error
 }
 
 type Storage interface {

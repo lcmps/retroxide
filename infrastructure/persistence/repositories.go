@@ -56,7 +56,7 @@ func (repositories *Repositories) UpsertROMFile(ctx context.Context, romFile rom
 }
 
 func classifyROMFileConflict(existingID string, existingHash, incomingHash romdomain.ROMHash) error {
-	if existingHash != incomingHash {
+	if !existingHash.MatchesContent(incomingHash) {
 		return fault.Internal(errors.New("sha256 collision with differing rom hash bundle"))
 	}
 	return fault.ROMAlreadyExists(existingID, incomingHash.SHA256)
@@ -197,6 +197,16 @@ func (repositories *Repositories) SaveUpload(ctx context.Context, upload uploads
 	model := UploadModel{
 		ID: upload.ID, UploaderID: upload.UploaderID, OriginalFilename: upload.OriginalFilename,
 		Status: string(upload.Status), ErrorMessage: upload.ErrorMessage, ROMID: upload.ROMID,
+	}
+	if upload.Status != uploadsdomain.UploadStatusProcessing {
+		result := repositories.DB.WithContext(ctx).Model(&UploadModel{}).Where("id = ?", upload.ID).Select("*").Updates(&model)
+		if result.Error != nil {
+			return databaseError("updating upload", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return fault.NotFound()
+		}
+		return nil
 	}
 	if err := repositories.DB.WithContext(ctx).Save(&model).Error; err != nil {
 		return databaseError("saving upload", err)
