@@ -11,7 +11,11 @@ skills-lock.json
 
 retroxide.sqlite3
 storage
-frontend
+bin
+frontend/node_modules
+frontend/.svelte-kit
+frontend/build
+interface/web/dist
 
 .env
 *.log

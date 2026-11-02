@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: retroxide-backend:local
-    container_name: retroxide-backend
+    image: retroxide:local
+    container_name: retroxide
     restart: unless-stopped
     ports:
       - "3000:3000"

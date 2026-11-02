@@ -1,10 +1,16 @@
 # syntax=docker/dockerfile:1.7
 
+FROM node:24-alpine AS frontend
+
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build
+
 FROM golang:1.27-alpine3.23 AS builder
 
 WORKDIR /app
-RUN apk add --no-cache build-base
-
 COPY go.mod go.sum ./
 RUN go mod download
 
@@ -15,7 +21,8 @@ COPY interface ./interface
 COPY factory ./factory
 COPY bootstrap ./bootstrap
 COPY main.go ./main.go
-RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/retroxide .
+COPY --from=frontend /app/interface/web/dist ./interface/web/dist
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/retroxide .
 
 FROM alpine:3.23 AS runtime
 
