@@ -1,8 +1,10 @@
 package http
 
 import (
+	"errors"
 	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -33,13 +35,30 @@ func registerUploadRoutes(api *gin.RouterGroup, service uploads.Service, maxByte
 }
 
 func (handler uploadHandler) create(c *gin.Context) {
-	input, err := handler.readUpload(c)
+	limit := handler.maxBytes
+	if limit <= 0 {
+		limit = defaultMaxUploadBytes
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, requestBodyLimit(limit))
+	part, err := uploadFilePart(c.Request)
 	if err != nil {
 		writeError(c, err)
 		return
 	}
+	defer part.Close()
+
 	requester := requesterFromContext(c)
-	input.UploaderID = requester.UserID
+	input := uploads.UploadInput{
+		UploaderID: requester.UserID,
+		Filename:   part.FileName(),
+		Content:    uploadBodyReader{part},
+	}
+	if input.Filename == "" {
+		input.Filename = defaultUploadFilename
+	}
+	if mimeType := part.Header.Get("Content-Type"); mimeType != "" {
+		input.MIMEType = &mimeType
+	}
 	accepted, err := handler.uploads.Create(c.Request.Context(), requester, input)
 	respondJSON(c, http.StatusAccepted, accepted, err)
 }
@@ -49,47 +68,43 @@ func (handler uploadHandler) status(c *gin.Context) {
 	respondJSON(c, http.StatusOK, status, err)
 }
 
-// readUpload buffers the multipart "file" field, enforcing the upload size limit.
-func (handler uploadHandler) readUpload(c *gin.Context) (uploads.UploadInput, error) {
-	limit := handler.maxBytes
-	if limit > 0 {
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, requestBodyLimit(limit))
-	} else {
-		limit = defaultMaxUploadBytes
-	}
-
-	fileHeader, err := c.FormFile("file")
+// uploadFilePart advances a streaming multipart reader to the "file" field without buffering
+// the upload in memory or spooling it to a temporary file.
+func uploadFilePart(request *http.Request) (*multipart.Part, error) {
+	reader, err := request.MultipartReader()
 	if err != nil {
-		if isBodyTooLarge(err) {
-			return uploads.UploadInput{}, &fault.Error{Code: fault.CodeUploadTooLarge, Message: "upload size exceeds limit while reading multipart body"}
+		return nil, fault.Validation("upload must be a multipart/form-data request")
+	}
+	for {
+		part, err := reader.NextPart()
+		switch {
+		case errors.Is(err, io.EOF):
+			return nil, fault.Validation(`missing or empty "file" field`)
+		case isBodyTooLarge(err):
+			return nil, errUploadBodyTooLarge
+		case err != nil:
+			return nil, fault.Validation("invalid multipart upload")
+		case part.FormName() == "file":
+			return part, nil
 		}
-		return uploads.UploadInput{}, fault.Validation(`missing or empty "file" field`)
+		_ = part.Close()
 	}
-	if fileHeader.Size > limit {
-		return uploads.UploadInput{}, fault.UploadTooLarge(fileHeader.Size, limit)
-	}
-	file, err := fileHeader.Open()
-	if err != nil {
-		return uploads.UploadInput{}, fault.Validation("invalid multipart file")
-	}
-	defer file.Close()
+}
 
-	content, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil {
-		return uploads.UploadInput{}, fault.Validation("invalid multipart file payload")
-	}
-	if int64(len(content)) > limit {
-		return uploads.UploadInput{}, fault.UploadTooLarge(int64(len(content)), limit)
-	}
+var errUploadBodyTooLarge = &fault.Error{Code: fault.CodeUploadTooLarge, Message: "upload size exceeds limit while reading multipart body"}
 
-	input := uploads.UploadInput{Filename: fileHeader.Filename, Bytes: content}
-	if input.Filename == "" {
-		input.Filename = defaultUploadFilename
+// uploadBodyReader reports the request size limit as an upload-too-large error rather than a
+// generic I/O failure when it trips mid-stream.
+type uploadBodyReader struct {
+	reader io.Reader
+}
+
+func (body uploadBodyReader) Read(buffer []byte) (int, error) {
+	n, err := body.reader.Read(buffer)
+	if isBodyTooLarge(err) {
+		return n, errUploadBodyTooLarge
 	}
-	if mimeType := fileHeader.Header.Get("Content-Type"); mimeType != "" {
-		input.MIMEType = &mimeType
-	}
-	return input, nil
+	return n, err
 }
 
 // requestBodyLimit is the whole-request limit for a multipart body carrying a file of up to fileLimit bytes.

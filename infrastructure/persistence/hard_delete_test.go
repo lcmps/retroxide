@@ -11,6 +11,7 @@ import (
 	"hash/crc32"
 	"io/fs"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -260,8 +261,11 @@ func TestROMHardDeleteAllowsUploadAgain(t *testing.T) {
 	files := storage.New(t.TempDir())
 	uploader := uploads.NewUploadService(repositories, repositories, files, hash.New(), repositories, nil, uploads.UploadPolicy{MaxUploadBytes: 1024, AllowedExtensions: []string{"nes"}})
 	requester := identity.Requester{UserID: "owner", Role: identity.RoleUser}
-	input := uploads.UploadInput{Filename: "game.nes", Bytes: []byte("actual ROM content")}
-	accepted, err := uploader.Create(ctx, requester, input)
+	// Each upload streams its content once, so every attempt needs a fresh reader.
+	input := func() uploads.UploadInput {
+		return uploads.UploadInput{Filename: "game.nes", Content: strings.NewReader("actual ROM content")}
+	}
+	accepted, err := uploader.Create(ctx, requester, input())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +285,7 @@ func TestROMHardDeleteAllowsUploadAgain(t *testing.T) {
 	if err := service.Delete(ctx, requester, *upload.ROMID); err != nil {
 		t.Fatal(err)
 	}
-	second, err := uploader.Create(ctx, requester, input)
+	second, err := uploader.Create(ctx, requester, input())
 	if err != nil {
 		t.Fatalf("reupload = %v", err)
 	}

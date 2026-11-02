@@ -1,9 +1,12 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +16,7 @@ import (
 	"github.com/lcmps/retroxide/application/auth"
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
+	uploadfeature "github.com/lcmps/retroxide/application/uploads"
 	"github.com/lcmps/retroxide/domain/identity"
 )
 
@@ -307,5 +311,71 @@ func TestRouterReportsAuthenticatorFailuresAsServerErrors(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("authenticator failure = %d %s, want 500 rather than a misleading 401", response.Code, response.Body.String())
+	}
+}
+
+// routerTestUploads records the streamed upload it receives.
+type routerTestUploads struct {
+	received *string
+}
+
+func (uploads routerTestUploads) Create(_ context.Context, _ identity.Requester, input uploadfeature.UploadInput) (uploadfeature.UploadAcceptedDTO, error) {
+	content, err := io.ReadAll(input.Content)
+	if err != nil {
+		return uploadfeature.UploadAcceptedDTO{}, err
+	}
+	*uploads.received = input.Filename + ":" + string(content)
+	return uploadfeature.UploadAcceptedDTO{UploadID: "upl_1", Status: "processing"}, nil
+}
+
+func (routerTestUploads) Status(context.Context, identity.Requester, string) (uploadfeature.UploadStatusDTO, error) {
+	return uploadfeature.UploadStatusDTO{}, nil
+}
+
+func multipartUpload(t *testing.T, field, filename, content string) (*bytes.Buffer, string) {
+	t.Helper()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("note", "ignored"); err != nil {
+		t.Fatal(err)
+	}
+	part, err := writer.CreateFormFile(field, filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body, writer.FormDataContentType()
+}
+
+func TestRouterStreamsMultipartUploads(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	authenticated := routerTestAuthenticator{requester: identity.Requester{UserID: "user-1", Role: identity.RoleUser}}
+	send := func(maxBytes int64, field, content string) (*httptest.ResponseRecorder, string) {
+		var received string
+		router := NewRouter(Dependencies{Uploads: routerTestUploads{received: &received}, Authenticator: authenticated}, Options{MaxUploadBytes: maxBytes})
+		body, contentType := multipartUpload(t, field, "game.sfc", content)
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+		request.Header.Set("Content-Type", contentType)
+		request.Header.Set("Authorization", "Bearer token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response, received
+	}
+
+	if response, received := send(1024, "file", "rom bytes"); response.Code != http.StatusAccepted || received != "game.sfc:rom bytes" {
+		t.Fatalf("upload = %d %s, service received %q", response.Code, response.Body.String(), received)
+	}
+	if response, _ := send(1024, "attachment", "rom bytes"); response.Code != http.StatusBadRequest {
+		t.Fatalf("upload without file field = %d, want 400", response.Code)
+	}
+	// The request limit is the file limit plus multipart overhead, so exceed both.
+	oversized := strings.Repeat("x", 16+multipartOverhead)
+	if response, _ := send(16, "file", oversized); !strings.Contains(response.Body.String(), `"code":"upload_too_large"`) {
+		t.Fatalf("oversized upload = %d %s, want upload_too_large", response.Code, response.Body.String())
 	}
 }
