@@ -324,3 +324,22 @@ func TestRepositoriesStoringRefreshTokenPurgesTheUsersExpiredTokens(t *testing.T
 		}
 	}
 }
+
+func TestRepositoriesQueueClaimUsesTheAvailabilityIndex(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	err := repositories.DB.WithContext(ctx).
+		Raw("EXPLAIN QUERY PLAN SELECT id FROM job_queue WHERE available_at <= ? AND (claimed_at IS NULL OR claimed_at <= ?)", "2026-01-01 00:00:00", "2026-01-01 00:00:00").
+		Scan(&plan).Error
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range plan {
+		if strings.Contains(step.Detail, "idx_job_queue_available_at") {
+			return
+		}
+	}
+	t.Fatalf("query plan %+v does not use idx_job_queue_available_at", plan)
+}
