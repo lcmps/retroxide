@@ -286,3 +286,60 @@ func TestRepositoriesPlatformFilterUsesTheCaseInsensitiveIndex(t *testing.T) {
 	}
 	t.Fatalf("query plan %+v does not use idx_rom_platform_key", plan)
 }
+
+func TestRepositoriesStoringRefreshTokenPurgesTheUsersExpiredTokens(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	for _, id := range []string{"user-1", "user-2"} {
+		if err := repositories.SaveUser(ctx, authdomain.User{ID: id, Email: id + "@example.com", PasswordHash: "hash", Role: identity.RoleUser}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := uint64(time.Now().Unix())
+	token := func(jti, userID string, expiresAt uint64, revoked bool) authdomain.RefreshToken {
+		return authdomain.RefreshToken{JTI: jti, UserID: userID, TokenHash: strings.Repeat(jti[len(jti)-1:], 64), CreatedAt: now - 7200, ExpiresAt: expiresAt, Revoked: revoked}
+	}
+	for _, seed := range []authdomain.RefreshToken{
+		token("expired-1", "user-1", now-60, false),
+		token("revoked-live-2", "user-1", now+3600, true),
+		token("expired-other-3", "user-2", now-60, false),
+	} {
+		if err := insertRefreshToken(repositories.DB.WithContext(ctx), authdomain.RefreshToken{
+			JTI: seed.JTI, UserID: seed.UserID, TokenHash: seed.TokenHash, CreatedAt: seed.CreatedAt, ExpiresAt: seed.ExpiresAt, Revoked: seed.Revoked,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh := token("fresh-4", "user-1", now+3600, false)
+	fresh.CreatedAt = now
+	if err := repositories.Store(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	for jti, wantKept := range map[string]bool{"expired-1": false, "revoked-live-2": true, "expired-other-3": true, "fresh-4": true} {
+		found, err := repositories.FindByJTI(ctx, jti)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (found != nil) != wantKept {
+			t.Errorf("token %s kept = %t, want %t", jti, found != nil, wantKept)
+		}
+	}
+}
+
+func TestRepositoriesQueueClaimUsesTheAvailabilityIndex(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	err := repositories.DB.WithContext(ctx).
+		Raw("EXPLAIN QUERY PLAN SELECT id FROM job_queue WHERE available_at <= ? AND (claimed_at IS NULL OR claimed_at <= ?)", "2026-01-01 00:00:00", "2026-01-01 00:00:00").
+		Scan(&plan).Error
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range plan {
+		if strings.Contains(step.Detail, "idx_job_queue_available_at") {
+			return
+		}
+	}
+	t.Fatalf("query plan %+v does not use idx_job_queue_available_at", plan)
+}

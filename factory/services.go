@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/lcmps/retroxide/application/auth"
+	"github.com/lcmps/retroxide/application/jobs"
 	"github.com/lcmps/retroxide/application/libraries"
 	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/application/uploads"
@@ -33,11 +34,11 @@ type Services struct {
 	Identifier    *persistence.Identifier
 }
 
-func NewServices(settings config.Config, repositories *persistence.Repositories, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
+func NewServices(settings config.Config, repositories *persistence.Repositories, queue jobs.Enqueuer, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
 	audit := observability.NewAuditLogger(logger)
 	return &Services{
 		Uploads: uploads.NewUploadService(
-			repositories, repositories, storage, hashadapter.New(), repositories, audit,
+			repositories, repositories, storage, hashadapter.New(), queue, audit,
 			uploads.UploadPolicy{
 				MaxUploadBytes:    settings.MaxUploadBytes,
 				AllowedMIMETypes:  settings.AllowedUploadMIMETypes,

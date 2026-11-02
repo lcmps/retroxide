@@ -92,7 +92,13 @@ func revokeUserRefreshTokens(db *gorm.DB, userID string) error {
 	return db.Model(&RefreshTokenModel{}).Where("user_id = ?", userID).Update("revoked", true).Error
 }
 
+// insertRefreshToken stores token after purging the user's expired tokens, so the table holds
+// only tokens that can still be presented. Revoked but unexpired tokens are kept: replay
+// detection needs them until they expire.
 func insertRefreshToken(db *gorm.DB, token authdomain.RefreshToken) error {
+	if err := purgeExpiredRefreshTokens(db, token.UserID, token.CreatedAt); err != nil {
+		return fmt.Errorf("purging expired refresh tokens: %w", err)
+	}
 	expiresAt, err := formatUnixTimestamp(token.ExpiresAt)
 	if err != nil {
 		return err
@@ -110,6 +116,18 @@ VALUES (?, ?, ?, FROM_UNIXTIME(?), ?, FROM_UNIXTIME(?))`, token.JTI, token.UserI
 		JTI: token.JTI, UserID: token.UserID, TokenHash: token.TokenHash,
 		ExpiresAt: expiresAt, Revoked: token.Revoked, CreatedAt: createdAt,
 	}).Error
+}
+
+func purgeExpiredRefreshTokens(db *gorm.DB, userID string, now uint64) error {
+	if isMySQL(db) {
+		return db.Where("user_id = ? AND expires_at < FROM_UNIXTIME(?)", userID, now).Delete(&RefreshTokenModel{}).Error
+	}
+	cutoff, err := formatUnixTimestamp(now)
+	if err != nil {
+		return err
+	}
+	// SQLite stores timestamps as fixed-width UTC text, which orders chronologically.
+	return db.Where("user_id = ? AND expires_at < ?", userID, cutoff).Delete(&RefreshTokenModel{}).Error
 }
 
 func refreshTokenEntity(model RefreshTokenModel) (authdomain.RefreshToken, error) {
