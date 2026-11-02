@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/lcmps/retroxide/application/rom"
 	"os"
 	"strings"
 	"testing"
@@ -70,7 +71,7 @@ func TestMySQLMigrationAndAtomicRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	platform := "snes"
-	romRows, err := repositories.ListROMsWithFiles(ctx, 10, nil, &platform, nil)
+	romRows, err := repositories.ListROMsWithFiles(ctx, 10, rom.ROMFilter{Platform: &platform})
 	if err != nil {
 		t.Fatal(err)
 	}

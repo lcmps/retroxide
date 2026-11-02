@@ -47,44 +47,38 @@ func registerROMRoutes(api *gin.RouterGroup, roms rom.API, links DownloadLinks) 
 	group.POST("/:rom_id/download-link", requireService(links != nil), handler.createDownloadLink)
 }
 
-// romListQuery holds the optional filters of GET /rom.
-type romListQuery struct {
-	limit      int
-	cursor     *string
-	platform   *string
-	identified *bool
-}
-
-func parseROMListQuery(c *gin.Context) (romListQuery, error) {
-	query := romListQuery{
-		limit:    defaultROMPageSize,
-		cursor:   optionalQuery(c, "cursor"),
-		platform: optionalQuery(c, "platform"),
+// parseROMListRequest reads GET /rom's query: limit, cursor, platform, q (search), identified.
+func parseROMListRequest(c *gin.Context) (rom.ListRequest, error) {
+	request := rom.ListRequest{
+		Limit:    defaultROMPageSize,
+		Cursor:   optionalQuery(c, "cursor"),
+		Platform: optionalQuery(c, "platform"),
+		Search:   optionalQuery(c, "q"),
 	}
 	if raw := c.Query("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
 		if err != nil || limit < 0 {
-			return romListQuery{}, fault.Validation("limit must be an integer")
+			return rom.ListRequest{}, fault.Validation("limit must be an integer")
 		}
-		query.limit = limit
+		request.Limit = limit
 	}
 	if raw := c.Query("identified"); raw != "" {
 		identified, err := strconv.ParseBool(raw)
 		if err != nil {
-			return romListQuery{}, fault.Validation("identified must be a boolean")
+			return rom.ListRequest{}, fault.Validation("identified must be a boolean")
 		}
-		query.identified = &identified
+		request.Identified = &identified
 	}
-	return query, nil
+	return request, nil
 }
 
 func (handler romHandler) list(c *gin.Context) {
-	query, err := parseROMListQuery(c)
+	request, err := parseROMListRequest(c)
 	if err != nil {
 		writeError(c, err)
 		return
 	}
-	page, err := handler.roms.List(c.Request.Context(), requesterFromContext(c), query.limit, query.cursor, query.platform, query.identified)
+	page, err := handler.roms.List(c.Request.Context(), requesterFromContext(c), request)
 	respondJSON(c, http.StatusOK, page, err)
 }
 

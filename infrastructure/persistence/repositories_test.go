@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/lcmps/retroxide/application/rom"
 	"strings"
 	"testing"
 
@@ -98,7 +99,7 @@ func TestRepositoriesFilterPlatformByCaseInsensitiveExactMatch(t *testing.T) {
 		}
 	}
 	platform := "sNeS"
-	rows, err := repositories.ListROMsWithFiles(ctx, 10, nil, &platform, nil)
+	rows, err := repositories.ListROMsWithFiles(ctx, 10, rom.ROMFilter{Platform: &platform})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,14 +126,14 @@ func TestRepositoriesFilterROMListByUploader(t *testing.T) {
 		}
 	}
 	uploader := "user-2"
-	rows, err := repositories.ListROMsWithFiles(ctx, 10, nil, nil, &uploader)
+	rows, err := repositories.ListROMsWithFiles(ctx, 10, rom.ROMFilter{UploaderID: &uploader})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 || rows[0].ROM.ID != "rom-2" {
 		t.Fatalf("uploader-filtered ROMs = %+v, want only rom-2", rows)
 	}
-	all, err := repositories.ListROMsWithFiles(ctx, 10, nil, nil, nil)
+	all, err := repositories.ListROMsWithFiles(ctx, 10, rom.ROMFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,4 +343,49 @@ func TestRepositoriesQueueClaimUsesTheAvailabilityIndex(t *testing.T) {
 		}
 	}
 	t.Fatalf("query plan %+v does not use idx_job_queue_available_at", plan)
+}
+
+func TestRepositoriesSearchMatchesTitlePlatformAndIDLiterally(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	for _, row := range []struct{ id, title, platform string }{
+		{"rom-mario", "Super Mario World", "SNES"},
+		{"rom-zelda", "Zelda: 100% Edition", "nes"},
+		{"rom-sonic", "Sonic_Pro", "genesis"},
+	} {
+		file := validROMFile("rf-"+row.id, row.id)
+		if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+		if err := repositories.SaveROM(ctx, romdomain.ROM{
+			ID: row.id, ROMFileID: file.ID, UploaderID: "user-1",
+			Identity: romdomain.ROMIdentity{Title: row.title, Platform: row.platform, IdentifiedBy: "test", Confidence: 100},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(term string) []string {
+		rows, err := repositories.ListROMsWithFiles(ctx, 10, rom.ROMFilter{Search: &term})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.ROM.ID)
+		}
+		return ids
+	}
+	for term, want := range map[string]string{
+		"MARIO":  "rom-mario", // title, case-insensitive
+		"snes":   "rom-mario", // platform
+		"zelda":  "rom-zelda", // title and ID
+		"100%":   "rom-zelda", // % is literal, not a wildcard
+		"c_pro":  "rom-sonic", // _ is literal
+		"o_p":    "",          // would match "o p"-like titles if _ were a wildcard
+		"nomatc": "",
+	} {
+		got := strings.Join(search(term), ",")
+		if got != want {
+			t.Errorf("search %q = %q, want %q", term, got, want)
+		}
+	}
 }

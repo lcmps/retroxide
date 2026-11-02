@@ -8,10 +8,14 @@ import (
 	romdomain "github.com/lcmps/retroxide/domain/rom"
 )
 
-const maxROMListLimit = 100
+const (
+	maxROMListLimit = 100
+	// maxSearchLength bounds search terms; titles are at most 255 characters.
+	maxSearchLength = 100
+)
 
 type romListReader interface {
-	ListROMsWithFiles(ctx context.Context, limit int, afterCursor, platform, uploaderID *string) ([]romdomain.ROMWithFile, error)
+	ListROMsWithFiles(ctx context.Context, limit int, filter ROMFilter) ([]romdomain.ROMWithFile, error)
 }
 
 type ListROMService struct {
@@ -23,22 +27,26 @@ func NewListROMService(repository romListReader) *ListROMService {
 }
 
 // List returns the catalog visible to requester: everything for broad-access roles, only their own uploads otherwise.
-func (service *ListROMService) List(ctx context.Context, requester identity.Requester, limit int, cursor, platform *string, identified *bool) (ROMListResponseDTO, error) {
+func (service *ListROMService) List(ctx context.Context, requester identity.Requester, request ListRequest) (ROMListResponseDTO, error) {
+	limit := request.Limit
 	if limit <= 0 {
 		return ROMListResponseDTO{}, fault.Validation("limit must be greater than zero")
 	}
 	if limit > maxROMListLimit {
 		limit = maxROMListLimit
 	}
-	if identified != nil && !*identified {
+	if request.Search != nil && len([]rune(*request.Search)) > maxSearchLength {
+		return ROMListResponseDTO{}, fault.Validation("search must be at most 100 characters")
+	}
+	if request.Identified != nil && !*request.Identified {
 		return ROMListResponseDTO{Item: []ROMSummaryDTO{}}, nil
 	}
 
-	var uploaderID *string
+	filter := ROMFilter{AfterCursor: request.Cursor, Platform: request.Platform, Search: request.Search}
 	if !requester.HasBroadAccess() {
-		uploaderID = &requester.UserID
+		filter.UploaderID = &requester.UserID
 	}
-	rows, err := service.repository.ListROMsWithFiles(ctx, limit, cursor, platform, uploaderID)
+	rows, err := service.repository.ListROMsWithFiles(ctx, limit, filter)
 	if err != nil {
 		return ROMListResponseDTO{}, err
 	}

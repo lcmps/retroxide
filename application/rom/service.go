@@ -27,8 +27,8 @@ func NewService(repository Repository, storage Storage, audit Audit, scraper Scr
 	return &Service{repository: repository, storage: storage, audit: audit, scraper: scraper}
 }
 
-func (service *Service) List(ctx context.Context, requester identity.Requester, limit int, cursor, platform *string, identified *bool) (ROMListResponseDTO, error) {
-	return NewListROMService(service.repository).List(ctx, requester, limit, cursor, platform, identified)
+func (service *Service) List(ctx context.Context, requester identity.Requester, request ListRequest) (ROMListResponseDTO, error) {
+	return NewListROMService(service.repository).List(ctx, requester, request)
 }
 
 func (service *Service) Get(ctx context.Context, requester identity.Requester, romID string) (ROMDetailDTO, error) {
