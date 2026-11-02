@@ -18,6 +18,9 @@ type Repository interface {
 	FindROMFileByID(context.Context, string) (*romdomain.ROMFile, error)
 	FindROMFileBySHA256(context.Context, string) (*romdomain.ROMFile, error)
 	FindROMFileByROMID(context.Context, string) (*romdomain.ROMFile, error)
+	// FindUploadedFilename returns the original filename of the upload that created the ROM,
+	// or nil when no upload is linked to it.
+	FindUploadedFilename(ctx context.Context, romID string) (*string, error)
 	CountROMsByROMFileID(context.Context, string) (uint64, error)
 	DeleteROM(context.Context, string) error
 	DeleteROMFile(context.Context, string) error
@@ -99,6 +102,8 @@ type API interface {
 	Update(context.Context, identity.Requester, string, UpdateROMRequest) (ROMDetailDTO, error)
 	Delete(context.Context, identity.Requester, string) error
 	Download(context.Context, identity.Requester, string) (DownloadOutput, error)
+	// DownloadFilename returns the name an accessible ROM is downloaded as.
+	DownloadFilename(context.Context, identity.Requester, string) (string, error)
 	UploadCover(context.Context, identity.Requester, string, []byte) (ROMDetailDTO, error)
 	ReadCover(context.Context, identity.Requester, string) ([]byte, error)
 	Scrape(context.Context, identity.Requester, string) (ROMDetailDTO, error)

@@ -13,6 +13,16 @@ import (
 type romTestRepository struct {
 	roms     map[string]romdomain.ROM
 	romFiles map[string]romdomain.ROMFile
+	// uploadedFilenames maps ROM IDs to the filename they were uploaded with.
+	uploadedFilenames map[string]string
+}
+
+func (repository *romTestRepository) FindUploadedFilename(_ context.Context, romID string) (*string, error) {
+	filename, ok := repository.uploadedFilenames[romID]
+	if !ok {
+		return nil, nil
+	}
+	return &filename, nil
 }
 
 func (repository *romTestRepository) UpsertROMFile(_ context.Context, romFile romdomain.ROMFile) (romdomain.ROMFile, error) {
@@ -167,5 +177,34 @@ func TestROMServiceConcealsROMFromOtherUser(t *testing.T) {
 	_, err := service.Get(context.Background(), identity.Requester{UserID: "other", Role: identity.RoleUser}, "rom-1")
 	if !fault.IsCode(err, fault.CodeNotFound) {
 		t.Fatalf("Get() error = %v, want not found", err)
+	}
+}
+
+func TestROMServiceDownloadsUnderTheTitleWithTheUploadedExtension(t *testing.T) {
+	repository := &romTestRepository{
+		roms: map[string]romdomain.ROM{"rom-1": {
+			ID: "rom-1", ROMFileID: "file-1", UploaderID: "owner",
+			Identity: romdomain.ROMIdentity{Title: "Super Mario Bros. 3", Platform: "nes"},
+		}},
+		romFiles:          map[string]romdomain.ROMFile{"file-1": {ID: "file-1", StoragePath: "/storage/file-1"}},
+		uploadedFilenames: map[string]string{"rom-1": "smb3 (USA) [!].NES"},
+	}
+	storage := &romTestStorage{files: map[string][]byte{"/storage/file-1": []byte("rom")}}
+	service := NewService(repository, storage, romTestAudit{}, nil)
+	owner := identity.Requester{UserID: "owner", Role: identity.RoleUser}
+
+	output, err := service.Download(context.Background(), owner, "rom-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Content.Close()
+	if output.Filename != "Super Mario Bros. 3.nes" {
+		t.Fatalf("Download().Filename = %q", output.Filename)
+	}
+	if name, err := service.DownloadFilename(context.Background(), owner, "rom-1"); err != nil || name != output.Filename {
+		t.Fatalf("DownloadFilename() = %q, %v; want %q", name, err, output.Filename)
+	}
+	if _, err := service.DownloadFilename(context.Background(), identity.Requester{UserID: "other", Role: identity.RoleUser}, "rom-1"); !fault.IsCode(err, fault.CodeNotFound) {
+		t.Fatalf("DownloadFilename() for another user error = %v, want not found", err)
 	}
 }

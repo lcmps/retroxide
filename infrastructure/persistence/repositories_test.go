@@ -389,3 +389,36 @@ func TestRepositoriesSearchMatchesTitlePlatformAndIDLiterally(t *testing.T) {
 		}
 	}
 }
+
+func TestRepositoriesFindUploadedFilenameByROMUsesTheIndex(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	romID := "rom-1"
+	if err := repositories.DB.WithContext(ctx).Create(&UploadModel{
+		ID: "upload-1", UploaderID: "user-1", OriginalFilename: "Zelda (USA).nes", Status: "completed", ROMID: &romID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	filename, err := repositories.FindUploadedFilename(ctx, romID)
+	if err != nil || filename == nil || *filename != "Zelda (USA).nes" {
+		t.Fatalf("FindUploadedFilename() = %v, %v", filename, err)
+	}
+	if missing, err := repositories.FindUploadedFilename(ctx, "rom-unknown"); err != nil || missing != nil {
+		t.Fatalf("FindUploadedFilename(unknown) = %v, %v; want nil, nil", missing, err)
+	}
+
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	if err := repositories.DB.WithContext(ctx).
+		Raw("EXPLAIN QUERY PLAN SELECT original_filename FROM upload WHERE rom_id = ?", romID).
+		Scan(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range plan {
+		if strings.Contains(step.Detail, "idx_upload_rom_id") {
+			return
+		}
+	}
+	t.Fatalf("query plan %+v does not use idx_upload_rom_id", plan)
+}

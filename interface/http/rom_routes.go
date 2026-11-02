@@ -132,13 +132,15 @@ func (handler romHandler) download(c *gin.Context) {
 // downloadLinkResponse is a URL the browser can open directly to stream a ROM download.
 type downloadLinkResponse struct {
 	URL       string `json:"url"`
+	Filename  string `json:"filename"`
 	ExpiresIn int64  `json:"expires_in"`
 }
 
 func (handler romHandler) createDownloadLink(c *gin.Context) {
 	requester, romID := requesterFromContext(c), c.Param("rom_id")
 	// Only sign links for ROMs the requester can access; inaccessible ROMs stay not found.
-	if _, err := handler.roms.Get(c.Request.Context(), requester, romID); err != nil {
+	filename, err := handler.roms.DownloadFilename(c.Request.Context(), requester, romID)
+	if err != nil {
 		writeError(c, err)
 		return
 	}
@@ -149,6 +151,7 @@ func (handler romHandler) createDownloadLink(c *gin.Context) {
 	}
 	c.JSON(http.StatusCreated, downloadLinkResponse{
 		URL:       downloadLinkPath + "?" + url.Values{"token": {token}}.Encode(),
+		Filename:  filename,
 		ExpiresIn: int64(time.Until(expiresAt).Round(time.Second).Seconds()),
 	})
 }

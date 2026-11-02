@@ -472,11 +472,11 @@ export function uploadStatus(uploadId: string): Promise<UploadStatusResponse> {
  * disk with its own download UI, instead of buffering the whole ROM in page memory.
  */
 export async function createDownloadLink(romId: string): Promise<DownloadLink> {
-  const link = await requestJson<{ url: string; expires_in: number }>(
+  const link = await requestJson<{ url: string; filename: string; expires_in: number }>(
     `/rom/${encodeURIComponent(romId)}/download-link`,
     { method: 'POST', withAuth: true }
   );
-  return { url: resolveApiLink(link.url), filename: `${romId}.rom`, expiresIn: link.expires_in };
+  return { url: resolveApiLink(link.url), filename: link.filename, expiresIn: link.expires_in };
 }
 
 /** Starts a native browser download of a ROM and returns the link it opened. */
