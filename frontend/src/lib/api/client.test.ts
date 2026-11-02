@@ -71,7 +71,7 @@ describe('authenticated API requests', () => {
 			if (authorization === 'Bearer old-access') return jsonResponse({}, 401);
 			expect(String(input)).toBe('/api/v1/rom/rom-1/download-link');
 			expect(init?.method).toBe('POST');
-			return jsonResponse({ url: '/api/v1/download?token=signed', expires_in: 60 });
+			return jsonResponse({ url: '/api/v1/download?token=signed', filename: 'Super Mario Bros.nes', expires_in: 60 });
 		});
 		vi.stubGlobal('fetch', fetchMock);
 
@@ -79,7 +79,7 @@ describe('authenticated API requests', () => {
 
 		expect(refreshCalls).toBe(1);
 		expect(new URL(link.url).pathname + new URL(link.url).search).toBe('/api/v1/download?token=signed');
-		expect(link.filename).toBe('rom-1.rom');
+		expect(link.filename).toBe('Super Mario Bros.nes');
 		expect(link.expiresIn).toBe(60);
 	});
 

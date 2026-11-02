@@ -4,43 +4,48 @@
 	import { i18n } from '#lib/i18n/store.svelte.js';
 
 	type Props = {
-		uploading: boolean;
-		/** Called whenever the picked file changes. */
-		onselect?: (file: File | null) => void;
-		onupload: (file: File) => void;
+		/** Called with every picked file; the picker is then cleared for the next batch. */
+		onupload: (files: File[]) => void;
 	};
 
-	let { uploading, onselect, onupload }: Props = $props();
+	let { onupload }: Props = $props();
 
 	const ACCEPTED_EXTENSIONS = '.rom,.bin,.nes,.sfc,.smc,.gba,.gb,.gbc,.n64,.z64,.v64,.iso,.cue,.chd';
 	const t = useTranslate(i18n);
-	let file = $state<File | null>(null);
+	let files = $state<File[]>([]);
+	let input = $state<HTMLInputElement>();
+
+	const selection = $derived.by(() => {
+		if (files.length === 0) return t('uploads.form.none', 'No file selected.');
+		if (files.length === 1) return t('uploads.form.selected', 'Selected file: {name}', { name: files[0].name });
+		return t('uploads.form.selectedMany', '{count} files selected', { count: files.length });
+	});
 
 	function select(event: Event & { currentTarget: HTMLInputElement }): void {
-		file = event.currentTarget.files?.[0] ?? null;
-		onselect?.(file);
+		files = Array.from(event.currentTarget.files ?? []);
 	}
 
 	function submit(event: SubmitEvent): void {
 		event.preventDefault();
-		if (file) {
-			onupload(file);
-		}
+		if (files.length === 0) return;
+		onupload(files);
+		files = [];
+		if (input) input.value = '';
 	}
 </script>
 
 <form class="upload-form" onsubmit={submit}>
 	<label class="upload-picker">
-		<span>{t('uploads.pick_file', 'Choose a ROM file')}</span>
-		<input type="file" accept={ACCEPTED_EXTENSIONS} onchange={select} />
+		<span>{t('uploads.pick_file', 'Choose ROM files')}</span>
+		<input bind:this={input} type="file" multiple accept={ACCEPTED_EXTENSIONS} onchange={select} />
 	</label>
 
-	<p class="muted">
-		{file ? t('uploads.form.selected', 'Selected file: {name}', { name: file.name }) : t('uploads.form.none', 'No file selected.')}
-	</p>
+	<p class="muted">{selection}</p>
 
-	<ActionButton type="submit" disabled={uploading || !file}>
-		{uploading ? t('common.status.uploading', 'Uploading...') : t('uploads.form.submit', 'Upload ROM')}
+	<ActionButton type="submit" disabled={files.length === 0}>
+		{files.length > 1
+			? t('uploads.form.submitMany', 'Upload {count} ROMs', { count: files.length })
+			: t('uploads.form.submit', 'Upload ROM')}
 	</ActionButton>
 </form>
 

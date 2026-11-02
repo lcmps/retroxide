@@ -427,12 +427,19 @@ func (roms linkTestROMs) Get(_ context.Context, requester identity.Requester, ro
 	return rom.ROMDetailDTO{ROMID: romID}, nil
 }
 
+func (roms linkTestROMs) DownloadFilename(ctx context.Context, requester identity.Requester, romID string) (string, error) {
+	if _, err := roms.Get(ctx, requester, romID); err != nil {
+		return "", err
+	}
+	return "Title of " + romID + ".nes", nil
+}
+
 func (roms linkTestROMs) Download(ctx context.Context, requester identity.Requester, romID string) (rom.DownloadOutput, error) {
 	if _, err := roms.Get(ctx, requester, romID); err != nil {
 		return rom.DownloadOutput{}, err
 	}
 	return rom.DownloadOutput{
-		Filename: romID + ".rom", MIMEType: "application/octet-stream", SHA256: "abc",
+		Filename: "Title of " + romID + ".nes", MIMEType: "application/octet-stream", SHA256: "abc",
 		Content: rom.StoredContent{ReadSeekCloser: nopSeekCloser{strings.NewReader("rom bytes")}, Size: 9},
 	}, nil
 }
@@ -474,7 +481,7 @@ func TestRouterDownloadLinksStreamWithoutBearerTokenAndCheckAccess(t *testing.T)
 	}
 	response := createLink("user-1")
 	var link downloadLinkResponse
-	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &link) != nil || link.ExpiresIn <= 0 {
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &link) != nil || link.ExpiresIn <= 0 || link.Filename != "Title of rom-1.nes" {
 		t.Fatalf("create link = %d %s", response.Code, response.Body.String())
 	}
 
@@ -485,7 +492,7 @@ func TestRouterDownloadLinksStreamWithoutBearerTokenAndCheckAccess(t *testing.T)
 	if download.Code != http.StatusOK || download.Body.String() != "rom bytes" {
 		t.Fatalf("download via link = %d %q", download.Code, download.Body.String())
 	}
-	if !strings.HasPrefix(download.Header().Get("Content-Disposition"), "attachment") {
+	if got := download.Header().Get("Content-Disposition"); got != `attachment; filename="Title of rom-1.nes"` {
 		t.Fatalf("Content-Disposition = %q", download.Header().Get("Content-Disposition"))
 	}
 
@@ -494,5 +501,18 @@ func TestRouterDownloadLinksStreamWithoutBearerTokenAndCheckAccess(t *testing.T)
 		ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/v1/download?token=garbage", nil))
 	if invalid.Code != http.StatusForbidden || !strings.Contains(invalid.Body.String(), "invalid_download_link") {
 		t.Fatalf("invalid link = %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestAttachmentDispositionEncodesUnicodeAndStripsPaths(t *testing.T) {
+	tests := map[string]string{
+		"Super Mario Bros. 3.nes": `attachment; filename="Super Mario Bros. 3.nes"`,
+		`..\..\evil.nes`:          `attachment; filename=.._.._evil.nes`,
+		"ポケットモンスター 赤.gb":          "attachment; filename*=utf-8''%E3%83%9D%E3%82%B1%E3%83%83%E3%83%88%E3%83%A2%E3%83%B3%E3%82%B9%E3%82%BF%E3%83%BC%20%E8%B5%A4.gb",
+	}
+	for filename, want := range tests {
+		if got := attachmentDisposition(filename); got != want {
+			t.Errorf("attachmentDisposition(%q) = %q, want %q", filename, got, want)
+		}
 	}
 }

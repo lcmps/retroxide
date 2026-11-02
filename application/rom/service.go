@@ -86,12 +86,16 @@ func (service *Service) Download(ctx context.Context, requester identity.Request
 	if romFile == nil {
 		return DownloadOutput{}, fault.Internal(fmt.Errorf("rom_file %s not found", rom.ROMFileID))
 	}
+	filename, err := service.downloadFilename(ctx, *rom)
+	if err != nil {
+		return DownloadOutput{}, err
+	}
 	content, err := service.storage.Open(ctx, romFile.StoragePath)
 	if err != nil {
 		return DownloadOutput{}, err
 	}
 	return DownloadOutput{
-		Filename: romID + ".rom",
+		Filename: filename,
 		MIMEType: "application/octet-stream",
 		SHA256:   romFile.Hash.SHA256,
 		Content:  content,
@@ -101,6 +105,22 @@ func (service *Service) Download(ctx context.Context, requester identity.Request
 			}
 		},
 	}, nil
+}
+
+func (service *Service) DownloadFilename(ctx context.Context, requester identity.Requester, romID string) (string, error) {
+	rom, err := service.findAccessibleROM(ctx, requester, romID)
+	if err != nil {
+		return "", err
+	}
+	return service.downloadFilename(ctx, *rom)
+}
+
+func (service *Service) downloadFilename(ctx context.Context, rom romdomain.ROM) (string, error) {
+	uploaded, err := service.repository.FindUploadedFilename(ctx, rom.ID)
+	if err != nil {
+		return "", err
+	}
+	return downloadFilename(rom, uploaded), nil
 }
 
 func (service *Service) UploadCover(ctx context.Context, requester identity.Requester, romID string, content []byte) (ROMDetailDTO, error) {
