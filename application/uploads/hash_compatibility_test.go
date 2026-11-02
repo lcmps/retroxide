@@ -44,12 +44,12 @@ func TestUploadServiceDuplicateHashCompatibility(t *testing.T) {
 				UploadPolicy{MaxUploadBytes: 1024, AllowedExtensions: []string{"sfc"}},
 			)
 			_, err := service.Create(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser}, UploadInput{
-				Filename: "game.sfc", Bytes: []byte("abc"),
+				Filename: "game.sfc", Content: strings.NewReader("abc"),
 			})
 			if !fault.IsCode(err, test.code) {
 				t.Fatalf("Create() error = %v, want %s", err, test.code)
 			}
-			if storage.writes != 0 || len(queue.payloads) != 0 {
+			if storage.writes != 0 || storage.pending() != 0 || len(queue.payloads) != 0 {
 				t.Fatal("existing content must not be written or enqueued again")
 			}
 		})

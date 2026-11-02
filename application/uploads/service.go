@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 
@@ -26,12 +27,12 @@ type uploadRecordRepository interface {
 }
 
 type uploadStorage interface {
-	Write(context.Context, string, []byte) (string, error)
-	Delete(context.Context, string) error
+	Stage(ctx context.Context, content io.Reader) (StagedContent, error)
+	Delete(ctx context.Context, storagePath string) error
 }
 
 type uploadHasher interface {
-	Hash([]byte) (romdomain.ROMHash, error)
+	NewDigest() romdomain.Digest
 }
 
 type uploadQueue interface {
@@ -80,20 +81,37 @@ func NewUploadService(
 }
 
 func (service *UploadService) Create(ctx context.Context, requester identity.Requester, input UploadInput) (UploadAcceptedDTO, error) {
-	if len(input.Bytes) == 0 {
-		return UploadAcceptedDTO{}, fault.Validation("empty upload")
-	}
-	if int64(len(input.Bytes)) > service.policy.MaxUploadBytes {
-		return UploadAcceptedDTO{}, fault.UploadTooLarge(int64(len(input.Bytes)), service.policy.MaxUploadBytes)
-	}
 	if err := ValidateFilename(input.Filename); err != nil {
 		return UploadAcceptedDTO{}, err
 	}
 	if !service.isAllowedUploadType(input.Filename, input.MIMEType) {
 		return UploadAcceptedDTO{}, fault.UnsupportedUploadType("mime type or extension is not allowed")
 	}
+	if input.Content == nil {
+		return UploadAcceptedDTO{}, fault.Validation("empty upload")
+	}
 
-	hash, err := service.hasher.Hash(input.Bytes)
+	// Stage and hash in one pass, reading at most one byte past the limit to detect oversize uploads.
+	limit := service.policy.MaxUploadBytes
+	digest := service.hasher.NewDigest()
+	staged, err := service.storage.Stage(ctx, io.TeeReader(io.LimitReader(input.Content, limit+1), digest))
+	if err != nil {
+		return UploadAcceptedDTO{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			staged.Discard()
+		}
+	}()
+	size := staged.Size()
+	if size == 0 {
+		return UploadAcceptedDTO{}, fault.Validation("empty upload")
+	}
+	if size > limit {
+		return UploadAcceptedDTO{}, fault.UploadTooLarge(size, limit)
+	}
+	hash, err := digest.Sum()
 	if err != nil {
 		return UploadAcceptedDTO{}, fault.Internal(fmt.Errorf("hashing upload: %w", err))
 	}
@@ -112,10 +130,11 @@ func (service *UploadService) Create(ctx context.Context, requester identity.Req
 		return UploadAcceptedDTO{}, fault.ROMAlreadyExists(existing.ID, hash.SHA256)
 	}
 
-	storagePath, err := service.storage.Write(ctx, hash.SHA256, input.Bytes)
+	storagePath, err := staged.Commit(ctx, hash.SHA256)
 	if err != nil {
 		return UploadAcceptedDTO{}, err
 	}
+	committed = true
 	removeStoredContent := func() {
 		cleanupContext := context.WithoutCancel(ctx)
 		if deleteErr := service.storage.Delete(cleanupContext, storagePath); deleteErr != nil {
@@ -127,7 +146,7 @@ func (service *UploadService) Create(ctx context.Context, requester identity.Req
 	romFile := romdomain.ROMFile{
 		ID:          romFileID,
 		Hash:        hash,
-		Size:        uint64(len(input.Bytes)),
+		Size:        uint64(size),
 		StoragePath: storagePath,
 	}
 	savedROMFile, err := service.romRepository.UpsertROMFile(ctx, romFile)

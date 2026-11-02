@@ -1,10 +1,13 @@
 package uploads
 
+import "io"
+
 type UploadInput struct {
 	UploaderID string
 	Filename   string
 	MIMEType   *string
-	Bytes      []byte
+	// Content streams the upload; the service reads it once while staging and hashing.
+	Content io.Reader
 }
 
 type UploadAcceptedDTO struct {

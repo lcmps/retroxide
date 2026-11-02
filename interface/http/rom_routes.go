@@ -125,7 +125,11 @@ func (handler romHandler) download(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	defer output.Content.Close()
 	writeDownload(c, output)
+	if bodyWasServed(c) && output.Served != nil {
+		output.Served(c.Request.Context(), int64(c.Writer.Size()))
+	}
 }
 
 // readCoverUpload reads the first multipart part as a cover image of at most maxCoverArtBytes.
