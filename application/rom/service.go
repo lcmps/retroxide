@@ -188,7 +188,7 @@ func (service *Service) Scrape(ctx context.Context, requester identity.Requester
 	if err := service.repository.SaveROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.detail(ctx, *rom)
+	return detailOf(*rom, *romFile), nil
 }
 
 func (service *Service) ReadMedia(ctx context.Context, requester identity.Requester, romID, kind string) ([]byte, error) {
@@ -234,6 +234,11 @@ func (service *Service) detail(ctx context.Context, rom romdomain.ROM) (ROMDetai
 	if romFile == nil {
 		return ROMDetailDTO{}, fault.Internal(fmt.Errorf("rom_file %s not found", rom.ROMFileID))
 	}
+	return detailOf(rom, *romFile), nil
+}
+
+// detailOf maps a ROM and its content file to the detail response.
+func detailOf(rom romdomain.ROM, romFile romdomain.ROMFile) ROMDetailDTO {
 	return ROMDetailDTO{
 		ROMID:          rom.ID,
 		Title:          rom.Identity.Title,
@@ -252,7 +257,7 @@ func (service *Service) detail(ctx context.Context, rom romdomain.ROM) (ROMDetai
 			MD5:    romFile.Hash.MD5,
 			CRC32:  romFile.Hash.CRC32,
 		},
-	}, nil
+	}
 }
 
 func optionalUnlessWhitespace(value *string) *string {
