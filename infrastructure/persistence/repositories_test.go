@@ -220,3 +220,29 @@ func TestRepositoriesRefreshRotationIsAtomicAndReplayRevokesReplacement(t *testi
 		t.Fatalf("replacement after replay = %+v, %v, want revoked", storedReplacement, err)
 	}
 }
+
+func TestRepositoriesIncrementTokenVersionAtomicallyAndPersistIt(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	if err := repositories.SaveUser(ctx, authdomain.User{ID: "user-1", Email: "user@example.com", PasswordHash: "hash", Role: identity.RoleUser}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := repositories.IncrementTokenVersion(ctx, "user-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	user, err := repositories.FindByID(ctx, "user-1")
+	if err != nil || user == nil || user.TokenVersion != 2 {
+		t.Fatalf("user after two increments = %+v, %v, want token version 2", user, err)
+	}
+	user.Email = "renamed@example.com"
+	if err := repositories.SaveUser(ctx, *user); err != nil {
+		t.Fatal(err)
+	}
+	if saved, _ := repositories.FindByID(ctx, "user-1"); saved.TokenVersion != 2 {
+		t.Fatalf("SaveUser reset token version to %d", saved.TokenVersion)
+	}
+	if err := repositories.IncrementTokenVersion(ctx, "missing"); !fault.IsCode(err, fault.CodeNotFound) {
+		t.Fatalf("increment for unknown user = %v, want not found", err)
+	}
+}

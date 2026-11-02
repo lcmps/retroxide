@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -17,9 +18,10 @@ func TestROMFileIdentifierCapacity(t *testing.T) {
 			t.Errorf("%T.%s must accommodate rf_ plus SHA-256", model, fieldName)
 		}
 	}
-	latest := mysqlMigrations[len(mysqlMigrations)-1]
-	if latest.version != 11 || latest.name != "widen_rom_file_identifiers" {
-		t.Fatalf("missing upgrade migration for existing MySQL databases: %+v", latest)
+	if !slices.ContainsFunc(mysqlMigrations, func(item migration) bool {
+		return item.version == 11 && item.name == "widen_rom_file_identifiers"
+	}) {
+		t.Fatal("missing identifier-widening upgrade migration for existing MySQL databases")
 	}
 }
 

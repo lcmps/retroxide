@@ -17,7 +17,7 @@ type principalTestTokens struct {
 	err    error
 }
 
-func (tokens principalTestTokens) Issue(string, string) (TokenPair, error) {
+func (tokens principalTestTokens) Issue(string, string, uint64) (TokenPair, error) {
 	return TokenPair{}, nil
 }
 func (tokens principalTestTokens) VerifyAccess(string) (AccessClaims, error) {
@@ -25,6 +25,16 @@ func (tokens principalTestTokens) VerifyAccess(string) (AccessClaims, error) {
 }
 func (tokens principalTestTokens) VerifyRefresh(string) (AccessClaims, error) {
 	return AccessClaims{}, fault.Unauthorized()
+}
+
+type principalTestUsers map[string]authdomain.User
+
+func (users principalTestUsers) FindByID(_ context.Context, userID string) (*authdomain.User, error) {
+	user, ok := users[userID]
+	if !ok {
+		return nil, nil
+	}
+	return &user, nil
 }
 
 type principalTestClients struct {
@@ -65,11 +75,12 @@ func TestExtractBearerToken(t *testing.T) {
 	}
 }
 
-func TestResolvePrincipalPrefersVerifiedJWT(t *testing.T) {
+func TestAuthenticatorPrefersVerifiedJWT(t *testing.T) {
 	clients := &principalTestClients{client: &authdomain.Client{ID: "client-1", UserID: "owner-1"}}
-	requester, err := ResolvePrincipal(context.Background(), "signed", principalTestTokens{
-		claims: AccessClaims{UserID: "admin-1", Role: "admin"},
-	}, clients)
+	users := principalTestUsers{"admin-1": {ID: "admin-1", Role: identity.RoleAdmin}}
+	authenticator := NewAuthenticator(principalTestTokens{claims: AccessClaims{UserID: "admin-1", Role: "admin"}}, users, clients)
+
+	requester, err := authenticator.Authenticate(context.Background(), "signed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,12 +89,46 @@ func TestResolvePrincipalPrefersVerifiedJWT(t *testing.T) {
 	}
 }
 
-func TestResolvePrincipalFallsBackToHashedClientToken(t *testing.T) {
+func TestAuthenticatorTakesRoleFromCurrentUserRecord(t *testing.T) {
+	users := principalTestUsers{"user-1": {ID: "user-1", Role: identity.RoleUser}}
+	authenticator := NewAuthenticator(principalTestTokens{claims: AccessClaims{UserID: "user-1", Role: "admin"}}, users, &principalTestClients{})
+
+	requester, err := authenticator.Authenticate(context.Background(), "signed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requester.Role != identity.RoleUser {
+		t.Fatalf("role = %v, want the demoted database role", requester.Role)
+	}
+}
+
+func TestAuthenticatorRejectsRevokedOrOrphanedAccessTokens(t *testing.T) {
+	users := principalTestUsers{"user-1": {ID: "user-1", Role: identity.RoleUser, TokenVersion: 3}}
+	clients := &principalTestClients{client: &authdomain.Client{ID: "client-1", UserID: "user-1"}}
+	for name, claims := range map[string]AccessClaims{
+		"issued before logout": {UserID: "user-1", Role: "user", TokenVersion: 2},
+		"deleted user":         {UserID: "gone", Role: "user"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewAuthenticator(principalTestTokens{claims: claims}, users, clients).Authenticate(context.Background(), "signed")
+			if !fault.IsCode(err, fault.CodeUnauthorized) {
+				t.Fatalf("Authenticate() error = %v, want unauthorized", err)
+			}
+			if clients.gotHash != "" {
+				t.Fatal("a verified but revoked JWT fell back to client-token lookup")
+			}
+		})
+	}
+}
+
+func TestAuthenticatorFallsBackToHashedClientToken(t *testing.T) {
 	plainToken := "rtx-secret"
 	digest := sha256.Sum256([]byte(plainToken))
 	expectedHash := hex.EncodeToString(digest[:])
 	clients := &principalTestClients{client: &authdomain.Client{ID: "client-1", UserID: "owner-1"}}
-	requester, err := ResolvePrincipal(context.Background(), plainToken, principalTestTokens{err: fault.Unauthorized()}, clients)
+	authenticator := NewAuthenticator(principalTestTokens{err: fault.Unauthorized()}, principalTestUsers{}, clients)
+
+	requester, err := authenticator.Authenticate(context.Background(), plainToken)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,10 +137,10 @@ func TestResolvePrincipalFallsBackToHashedClientToken(t *testing.T) {
 	}
 }
 
-func TestResolvePrincipalRejectsUnknownToken(t *testing.T) {
+func TestAuthenticatorRejectsUnknownToken(t *testing.T) {
 	clients := &principalTestClients{err: errors.New("database offline")}
-	_, err := ResolvePrincipal(context.Background(), "bad", principalTestTokens{err: fault.Unauthorized()}, clients)
-	if !fault.IsCode(err, fault.CodeUnauthorized) {
-		t.Fatalf("ResolvePrincipal() error = %v, want unauthorized", err)
+	authenticator := NewAuthenticator(principalTestTokens{err: fault.Unauthorized()}, principalTestUsers{}, clients)
+	if _, err := authenticator.Authenticate(context.Background(), "bad"); !fault.IsCode(err, fault.CodeUnauthorized) {
+		t.Fatalf("Authenticate() error = %v, want unauthorized", err)
 	}
 }

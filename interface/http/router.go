@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -12,20 +13,25 @@ import (
 	"github.com/lcmps/retroxide/application/libraries"
 	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/application/uploads"
+	"github.com/lcmps/retroxide/domain/identity"
 )
+
+// Authenticator resolves a bearer token to the requester it represents.
+type Authenticator interface {
+	Authenticate(ctx context.Context, token string) (identity.Requester, error)
+}
 
 // Dependencies are the application services the API exposes. A nil service answers its routes
 // with an internal error instead of panicking.
 type Dependencies struct {
-	Uploads    uploads.Service
-	ROMs       rom.API
-	Libraries  libraries.API
-	Sessions   auth.SessionAPI
-	Clients    auth.ClientAPI
-	Tokens     auth.TokenService
-	ClientRepo auth.ClientRepository
-	Locales    map[string][]byte
-	Logger     *slog.Logger
+	Uploads       uploads.Service
+	ROMs          rom.API
+	Libraries     libraries.API
+	Sessions      auth.SessionAPI
+	Clients       auth.ClientAPI
+	Authenticator Authenticator
+	Locales       map[string][]byte
+	Logger        *slog.Logger
 }
 
 type Options struct {
@@ -51,7 +57,7 @@ func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 		securityHeadersMiddleware(),
 		requestIDMiddleware(dependencies.Logger),
 		corsMiddleware(options.CORSOrigins),
-		authMiddleware(dependencies.Tokens, dependencies.ClientRepo),
+		authMiddleware(dependencies.Authenticator),
 	)
 
 	router.GET("/health", func(c *gin.Context) {
