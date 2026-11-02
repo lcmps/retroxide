@@ -26,6 +26,26 @@ func TestLoadUsesRustDefaultsAndSingleWorker(t *testing.T) {
 	if len(config.AllowedUploadExtensions) == 0 || len(config.AllowedUploadMIMETypes) == 0 {
 		t.Fatalf("upload allowlists are empty: %+v", config)
 	}
+	if len(config.TrustedProxies) != 0 {
+		t.Fatalf("trusted proxies default = %v, want none", config.TrustedProxies)
+	}
+}
+
+func TestLoadParsesTrustedProxies(t *testing.T) {
+	values := map[string]string{
+		"RETROXIDE_JWT_SECRET":      strings.Repeat("s", 32),
+		"RETROXIDE_TRUSTED_PROXIES": " 10.0.0.0/8, 192.168.1.1 ,::1",
+	}
+	config, err := Load(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(config.TrustedProxies, ",") != "10.0.0.0/8,192.168.1.1,::1" {
+		t.Fatalf("trusted proxies = %v", config.TrustedProxies)
+	}
 }
 
 func TestLoadRequiresSetupWhenSecretMissingOrEmpty(t *testing.T) {
@@ -122,6 +142,7 @@ func TestLoadRejectsInvalidExplicitValues(t *testing.T) {
 		{name: "zero port", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_PORT": "0"}},
 		{name: "unknown driver", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_DB_DRIVER": "postgres"}},
 		{name: "worker count exceeds bound", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_WORKER_COUNT": "65"}},
+		{name: "malformed trusted proxy", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_TRUSTED_PROXIES": "10.0.0.0/8,proxy.local"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

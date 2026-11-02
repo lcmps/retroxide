@@ -24,7 +24,8 @@ const maxCoverArtBytes = 5 << 20
 
 func registerRoutes(router *gin.Engine, dependencies Dependencies, options Options) {
 	api := router.Group("/api/v1")
-	api.POST("/session", func(context *gin.Context) {
+	credentialLimiter := rateLimitMiddleware(newAttemptLimiter(credentialRefill, credentialBurst))
+	api.POST("/session", credentialLimiter, func(context *gin.Context) {
 		if !requireDependencies(context, dependencies.Sessions) {
 			return
 		}
@@ -47,7 +48,7 @@ func registerRoutes(router *gin.Engine, dependencies Dependencies, options Optio
 		}
 		context.JSON(http.StatusOK, response)
 	})
-	api.POST("/session/refresh", func(context *gin.Context) {
+	api.POST("/session/refresh", credentialLimiter, func(context *gin.Context) {
 		if !requireDependencies(context, dependencies.Sessions) {
 			return
 		}
@@ -180,7 +181,7 @@ func registerRoutes(router *gin.Engine, dependencies Dependencies, options Optio
 			}
 			identified = &parsed
 		}
-		page, err := dependencies.ROMs.List(context.Request.Context(), limit, cursor, platform, identified)
+		page, err := dependencies.ROMs.List(context.Request.Context(), requesterFromContext(context), limit, cursor, platform, identified)
 		if err != nil {
 			writeError(context, err)
 			return

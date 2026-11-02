@@ -70,7 +70,7 @@ func TestMySQLMigrationAndAtomicRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	platform := "snes"
-	romRows, err := repositories.ListROMsWithFiles(ctx, 10, nil, &platform)
+	romRows, err := repositories.ListROMsWithFiles(ctx, 10, nil, &platform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

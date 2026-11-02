@@ -70,11 +70,14 @@ func (repositories *Repositories) SaveROM(ctx context.Context, rom romdomain.ROM
 	return nil
 }
 
-func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit int, afterCursor, platform *string) ([]romdomain.ROMWithFile, error) {
+func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit int, afterCursor, platform, uploaderID *string) ([]romdomain.ROMWithFile, error) {
 	query := repositories.DB.WithContext(ctx).
 		Table("rom AS r").
 		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, f.sha256").
 		Joins("JOIN rom_file AS f ON f.id = r.rom_file_id")
+	if uploaderID != nil {
+		query = query.Where("r.uploader_id = ?", *uploaderID)
+	}
 	if afterCursor != nil {
 		query = query.Where("r.id > ?", *afterCursor)
 	}

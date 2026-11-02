@@ -38,6 +38,10 @@ const ERROR_TRANSLATIONS: Record<string, { key: string; fallback: string }> = {
 		key: 'uploads.errors.alreadyExists',
 		fallback: 'This ROM already exists in the library.'
 	},
+	rate_limited: {
+		key: 'common.errors.rate_limited',
+		fallback: 'Too many attempts. Please wait a moment and try again.'
+	},
 	internal_error: {
 		key: 'common.errors.generic',
 		fallback: 'Something went wrong'

@@ -2,18 +2,24 @@ package rom
 
 import (
 	"context"
-	romdomain "github.com/lcmps/retroxide/domain/rom"
 	"testing"
+
+	"github.com/lcmps/retroxide/domain/identity"
+	romdomain "github.com/lcmps/retroxide/domain/rom"
 )
 
+var adminRequester = identity.Requester{UserID: "admin-1", Role: identity.RoleAdmin}
+
 type listROMRepository struct {
-	rows      []romdomain.ROMWithFile
-	limit     int
-	callCount int
+	rows       []romdomain.ROMWithFile
+	limit      int
+	uploaderID *string
+	callCount  int
 }
 
-func (repository *listROMRepository) ListROMsWithFiles(_ context.Context, limit int, _, _ *string) ([]romdomain.ROMWithFile, error) {
+func (repository *listROMRepository) ListROMsWithFiles(_ context.Context, limit int, _, _, uploaderID *string) ([]romdomain.ROMWithFile, error) {
 	repository.limit = limit
+	repository.uploaderID = uploaderID
 	repository.callCount++
 	return repository.rows, nil
 }
@@ -26,7 +32,7 @@ func TestListROMServiceReturnsCursorAtLastIncludedROM(t *testing.T) {
 	}}
 	service := NewListROMService(repository)
 
-	result, err := service.List(context.Background(), 2, nil, nil, nil)
+	result, err := service.List(context.Background(), adminRequester, 2, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +49,7 @@ func TestListROMServiceClampsAndSkipsUnidentifiedFalse(t *testing.T) {
 	service := NewListROMService(repository)
 	identified := false
 
-	result, err := service.List(context.Background(), 500, nil, nil, &identified)
+	result, err := service.List(context.Background(), adminRequester, 500, nil, nil, &identified)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +58,7 @@ func TestListROMServiceClampsAndSkipsUnidentifiedFalse(t *testing.T) {
 	}
 
 	identified = true
-	_, err = service.List(context.Background(), 500, nil, nil, &identified)
+	_, err = service.List(context.Background(), adminRequester, 500, nil, nil, &identified)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,4 +69,25 @@ func TestListROMServiceClampsAndSkipsUnidentifiedFalse(t *testing.T) {
 
 func stringPointer(value string) *string {
 	return &value
+}
+
+func TestListROMServiceScopesRegularUsersToTheirOwnUploads(t *testing.T) {
+	repository := &listROMRepository{}
+	service := NewListROMService(repository)
+
+	if _, err := service.List(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser}, 10, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if repository.uploaderID == nil || *repository.uploaderID != "user-1" {
+		t.Fatalf("uploader filter = %v, want user-1", repository.uploaderID)
+	}
+
+	for _, role := range []identity.RequesterRole{identity.RoleAdmin, identity.RoleClient} {
+		if _, err := service.List(context.Background(), identity.Requester{UserID: "user-1", Role: role}, 10, nil, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if repository.uploaderID != nil {
+			t.Fatalf("role %d uploader filter = %v, want none", role, *repository.uploaderID)
+		}
+	}
 }

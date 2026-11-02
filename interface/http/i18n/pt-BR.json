@@ -19,6 +19,7 @@
   "common.errors.load_rom": "Falha ao carregar ROM",
   "common.errors.login": "Falha no login",
   "common.errors.not_found": "Recurso solicitado nao foi encontrado",
+  "common.errors.rate_limited": "Muitas tentativas. Aguarde um momento e tente novamente.",
   "common.errors.unauthorized": "Voce precisa entrar para continuar",
   "common.errors.upload": "Falha ao enviar ROM",
   "common.status.completed": "Concluido",

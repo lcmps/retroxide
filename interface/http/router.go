@@ -33,16 +33,23 @@ type Dependencies struct {
 type Options struct {
 	MaxUploadBytes int64
 	CORSOrigins    []string
+	// TrustedProxies lists proxy IPs/CIDRs whose forwarding headers are believed; empty trusts none.
+	TrustedProxies []string
 	// Frontend serves non-API paths; nil leaves them as 404s.
 	Frontend http.Handler
 }
 
 func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 	router := gin.New()
+	if err := router.SetTrustedProxies(options.TrustedProxies); err != nil {
+		slog.Warn("ignoring invalid trusted proxies; forwarding headers will not be trusted", "error", err)
+		_ = router.SetTrustedProxies(nil)
+	}
 	router.Use(gin.CustomRecovery(func(context *gin.Context, recovered any) {
 		slog.ErrorContext(context.Request.Context(), "http handler panic", "panic", recovered)
 		writeError(context, fault.Internal(errors.New("http handler panic")))
 	}))
+	router.Use(securityHeadersMiddleware())
 	router.Use(requestIDMiddleware(dependencies.Logger))
 	router.Use(corsMiddleware(options.CORSOrigins))
 	router.Use(authMiddleware(dependencies.Tokens, dependencies.ClientRepo))
@@ -241,7 +248,12 @@ func bindJSON(context *gin.Context, target any) bool {
 		writeError(context, fault.UnsupportedMediaType("request content type must be application/json"))
 		return false
 	}
+	context.Request.Body = http.MaxBytesReader(context.Writer, context.Request.Body, maxJSONBodyBytes)
 	if err := context.ShouldBindJSON(target); err != nil {
+		if isBodyTooLarge(err) {
+			writeError(context, fault.Validation("request body is too large"))
+			return false
+		}
 		writeError(context, fault.Validation("invalid JSON request body"))
 		return false
 	}

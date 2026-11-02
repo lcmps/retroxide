@@ -4,13 +4,14 @@ import (
 	"context"
 
 	"github.com/lcmps/retroxide/application/fault"
+	"github.com/lcmps/retroxide/domain/identity"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
 )
 
 const maxROMListLimit = 100
 
 type romListReader interface {
-	ListROMsWithFiles(ctx context.Context, limit int, afterCursor, platform *string) ([]romdomain.ROMWithFile, error)
+	ListROMsWithFiles(ctx context.Context, limit int, afterCursor, platform, uploaderID *string) ([]romdomain.ROMWithFile, error)
 }
 
 type ListROMService struct {
@@ -21,7 +22,8 @@ func NewListROMService(repository romListReader) *ListROMService {
 	return &ListROMService{repository: repository}
 }
 
-func (service *ListROMService) List(ctx context.Context, limit int, cursor, platform *string, identified *bool) (ROMListResponseDTO, error) {
+// List returns the catalog visible to requester: everything for broad-access roles, only their own uploads otherwise.
+func (service *ListROMService) List(ctx context.Context, requester identity.Requester, limit int, cursor, platform *string, identified *bool) (ROMListResponseDTO, error) {
 	if limit <= 0 {
 		return ROMListResponseDTO{}, fault.Validation("limit must be greater than zero")
 	}
@@ -32,7 +34,11 @@ func (service *ListROMService) List(ctx context.Context, limit int, cursor, plat
 		return ROMListResponseDTO{Item: []ROMSummaryDTO{}}, nil
 	}
 
-	rows, err := service.repository.ListROMsWithFiles(ctx, limit, cursor, platform)
+	var uploaderID *string
+	if !requester.HasBroadAccess() {
+		uploaderID = &requester.UserID
+	}
+	rows, err := service.repository.ListROMsWithFiles(ctx, limit, cursor, platform, uploaderID)
 	if err != nil {
 		return ROMListResponseDTO{}, err
 	}
