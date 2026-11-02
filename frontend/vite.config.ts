@@ -1,4 +1,4 @@
-import adapter from '@sveltejs/adapter-auto';
+import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig, loadEnv } from 'vite';
 
@@ -14,8 +14,13 @@ export default defineConfig(({ mode }) => {
 					runes: ({ filename }) =>
 						filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 				},
-				// adapter-auto requires selecting a deployment adapter for production hosting.
-				adapter: adapter()
+				// Output lands in the Go package that embeds it into the single binary.
+				adapter: adapter({
+					pages: '../interface/web/dist',
+					assets: '../interface/web/dist',
+					fallback: 'index.html',
+					precompress: true
+				})
 			})
 		],
 		server: {
