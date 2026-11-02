@@ -138,6 +138,21 @@ function refreshStoredSession(): Promise<boolean> {
   return refreshInFlight;
 }
 
+/** Refresh this long before expiry, so requests never go out with a token about to lapse. */
+const REFRESH_AHEAD_MS = 60_000;
+
+/**
+ * Refreshes the session ahead of expiry instead of waiting for a 401. Besides saving a wasted
+ * round trip, this keeps a large upload from being sent twice when the token lapses first.
+ * A failed refresh is not fatal here: the request proceeds and normal 401 handling applies.
+ */
+async function ensureFreshSession(): Promise<void> {
+  const session = readStoredSession();
+  if (session && session.expiresAt - Date.now() < REFRESH_AHEAD_MS) {
+    await refreshStoredSession();
+  }
+}
+
 function createHeaders(init: ApiRequestOptions | undefined): Headers {
   const headers = new Headers(init?.headers);
   const shouldAttachAuth = init?.withAuth ?? false;
@@ -157,6 +172,9 @@ function createHeaders(init: ApiRequestOptions | undefined): Headers {
 }
 
 async function requestResponse(path: string, init?: ApiRequestOptions): Promise<Response> {
+  if (init?.withAuth) {
+    await ensureFreshSession();
+  }
   let response = await fetch(createApiUrl(path), {
     ...init,
     headers: createHeaders(init)
@@ -417,6 +435,7 @@ export function uploadRom(
   });
 
   return (async () => {
+  await ensureFreshSession();
   let request = await sendUpload();
   if (request.status === 401 && await refreshStoredSession()) request = await sendUpload();
   if (request.status < 200 || request.status >= 300) {

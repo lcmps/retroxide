@@ -149,3 +149,44 @@ describe('authenticated API requests', () => {
 		expect(progressHandler).toHaveBeenCalled();
 	});
 });
+
+describe('proactive session refresh', () => {
+	beforeEach(() => {
+		const values = new Map<string, string>();
+		vi.stubGlobal('sessionStorage', {
+			getItem: (key: string) => values.get(key) ?? null,
+			setItem: (key: string, value: string) => values.set(key, value),
+			removeItem: (key: string) => values.delete(key)
+		});
+		vi.stubGlobal('window', new EventTarget());
+		vi.restoreAllMocks();
+	});
+
+	it('refreshes a nearly expired token before the request instead of after a 401', async () => {
+		persistStoredSession({ access_token: 'expiring', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 30 });
+		const authorizations: (string | null)[] = [];
+		const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+			if (String(input).endsWith('/session/refresh')) {
+				return jsonResponse({ access_token: 'fresh', refresh_token: 'refresh-2', token_type: 'Bearer', expires_in: 3600 });
+			}
+			authorizations.push(new Headers(init?.headers).get('Authorization'));
+			return jsonResponse({ rom_id: 'rom-1' });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		await getRom('rom-1');
+
+		expect(authorizations).toEqual(['Bearer fresh']);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not refresh a token with plenty of lifetime left', async () => {
+		persistStoredSession({ access_token: 'valid', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 3600 });
+		const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ rom_id: 'rom-1' }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await getRom('rom-1');
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+});
