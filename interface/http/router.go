@@ -68,6 +68,14 @@ func requestIDMiddleware(logger *slog.Logger) gin.HandlerFunc {
 		context.Header("x-request-id", requestID)
 		started := time.Now()
 		context.Next()
+		if context.Writer.Status() >= http.StatusInternalServerError && len(context.Errors) > 0 {
+			logger.ErrorContext(context.Request.Context(), "http request failed",
+				"request_id", requestID,
+				"method", context.Request.Method,
+				"path", context.Request.URL.Path,
+				"error", context.Errors.Last().Err,
+			)
+		}
 		logger.InfoContext(context.Request.Context(), "http request handled",
 			"request_id", requestID,
 			"method", context.Request.Method,
@@ -209,6 +217,7 @@ func requesterFromContext(context *gin.Context) identity.Requester {
 }
 
 func writeError(context *gin.Context, err error) {
+	_ = context.Error(err)
 	status, response := PresentError(err, requestIDFromContext(context))
 	writeErrorResponse(context, status, response)
 }
