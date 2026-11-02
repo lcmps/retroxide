@@ -35,14 +35,24 @@ func NewROMHash(sha256, sha1, md5, crc32 string) (ROMHash, error) {
 	return ROMHash{SHA256: sha256, SHA1: sha1, MD5: md5, CRC32: crc32}, nil
 }
 
+const (
+	IdentifiedByFilename = "retroxide_filename_v1"
+	IdentifiedByManual   = "manual"
+)
+
 type ROMIdentity struct {
-	Title        string
-	Platform     string
-	Region       *string
-	Version      *string
-	CoverArtPath *string
-	IdentifiedBy string
-	Confidence   uint8
+	Title           string
+	Platform        string
+	Region          *string
+	Version         *string
+	Publisher       *string
+	ReleaseYear     *string
+	Description     *string
+	CoverArtPath    *string
+	TitleScreenPath *string
+	ScreenshotPath  *string
+	IdentifiedBy    string
+	Confidence      uint8
 }
 
 type ROM struct {

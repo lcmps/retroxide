@@ -24,16 +24,21 @@ type ROMFileModel struct {
 func (ROMFileModel) TableName() string { return "rom_file" }
 
 type ROMModel struct {
-	ID           string  `gorm:"column:id;primaryKey;size:64"`
-	ROMFileID    string  `gorm:"column:rom_file_id;not null;size:64;index:idx_rom_rom_file_id"`
-	UploaderID   string  `gorm:"column:uploader_id;not null;default:system;size:64;index:idx_rom_uploader_id"`
-	Title        string  `gorm:"column:title;not null;size:255"`
-	Platform     string  `gorm:"column:platform;not null;size:64;index:idx_rom_platform"`
-	Region       *string `gorm:"column:region;size:64"`
-	Version      *string `gorm:"column:version;size:64"`
-	IdentifiedBy string  `gorm:"column:identified_by;not null;size:128"`
-	Confidence   uint8   `gorm:"column:confidence;not null"`
-	CoverArtPath *string `gorm:"column:cover_art_path;type:text"`
+	ID              string  `gorm:"column:id;primaryKey;size:64"`
+	ROMFileID       string  `gorm:"column:rom_file_id;not null;size:64;index:idx_rom_rom_file_id"`
+	UploaderID      string  `gorm:"column:uploader_id;not null;default:system;size:64;index:idx_rom_uploader_id"`
+	Title           string  `gorm:"column:title;not null;size:255"`
+	Platform        string  `gorm:"column:platform;not null;size:64;index:idx_rom_platform"`
+	Region          *string `gorm:"column:region;size:64"`
+	Version         *string `gorm:"column:version;size:64"`
+	IdentifiedBy    string  `gorm:"column:identified_by;not null;size:128"`
+	Confidence      uint8   `gorm:"column:confidence;not null"`
+	CoverArtPath    *string `gorm:"column:cover_art_path;type:text"`
+	Publisher       *string `gorm:"column:publisher;size:255"`
+	ReleaseYear     *string `gorm:"column:release_year;size:16"`
+	Description     *string `gorm:"column:description;type:text"`
+	TitleScreenPath *string `gorm:"column:title_screen_path;type:text"`
+	ScreenshotPath  *string `gorm:"column:screenshot_path;type:text"`
 }
 
 func (ROMModel) TableName() string { return "rom" }

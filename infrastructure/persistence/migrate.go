@@ -46,6 +46,11 @@ ALTER TABLE library ADD COLUMN user_id TEXT NOT NULL DEFAULT 'system';
 CREATE INDEX IF NOT EXISTS idx_rom_uploader_id ON rom(uploader_id);
 CREATE INDEX IF NOT EXISTS idx_library_user_id ON library(user_id);`},
 	{9, "add_rom_cover_art", `ALTER TABLE rom ADD COLUMN cover_art_path TEXT;`},
+	{10, "add_rom_scraped_metadata", `ALTER TABLE rom ADD COLUMN publisher TEXT;
+ALTER TABLE rom ADD COLUMN release_year TEXT;
+ALTER TABLE rom ADD COLUMN description TEXT;
+ALTER TABLE rom ADD COLUMN title_screen_path TEXT;
+ALTER TABLE rom ADD COLUMN screenshot_path TEXT;`},
 }
 
 var mysqlMigrations = []migration{
@@ -78,6 +83,11 @@ ALTER TABLE library ADD COLUMN user_id VARCHAR(64) NOT NULL DEFAULT 'system';
 CREATE INDEX idx_rom_uploader_id ON rom(uploader_id);
 CREATE INDEX idx_library_user_id ON library(user_id);`},
 	{9, "add_rom_cover_art", `ALTER TABLE rom ADD COLUMN cover_art_path TEXT NULL;`},
+	{10, "add_rom_scraped_metadata", `ALTER TABLE rom ADD COLUMN publisher VARCHAR(255) NULL;
+ALTER TABLE rom ADD COLUMN release_year VARCHAR(16) NULL;
+ALTER TABLE rom ADD COLUMN description TEXT NULL;
+ALTER TABLE rom ADD COLUMN title_screen_path TEXT NULL;
+ALTER TABLE rom ADD COLUMN screenshot_path TEXT NULL;`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {

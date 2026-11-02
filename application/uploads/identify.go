@@ -101,7 +101,7 @@ func InferIdentityFromFilename(filename string) romdomain.ROMIdentity {
 		Platform:     platform,
 		Region:       region,
 		Version:      version,
-		IdentifiedBy: "retroxide_filename_v1",
+		IdentifiedBy: romdomain.IdentifiedByFilename,
 		Confidence:   confidence,
 	}
 }

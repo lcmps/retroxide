@@ -480,6 +480,8 @@ func romModel(rom romdomain.ROM) ROMModel {
 		Title: rom.Identity.Title, Platform: rom.Identity.Platform, Region: rom.Identity.Region,
 		Version: rom.Identity.Version, IdentifiedBy: rom.Identity.IdentifiedBy,
 		Confidence: rom.Identity.Confidence, CoverArtPath: rom.Identity.CoverArtPath,
+		Publisher: rom.Identity.Publisher, ReleaseYear: rom.Identity.ReleaseYear, Description: rom.Identity.Description,
+		TitleScreenPath: rom.Identity.TitleScreenPath, ScreenshotPath: rom.Identity.ScreenshotPath,
 	}
 }
 
@@ -489,6 +491,8 @@ func romEntity(model ROMModel) romdomain.ROM {
 		Identity: romdomain.ROMIdentity{
 			Title: model.Title, Platform: model.Platform, Region: model.Region, Version: model.Version,
 			CoverArtPath: model.CoverArtPath, IdentifiedBy: model.IdentifiedBy, Confidence: model.Confidence,
+			Publisher: model.Publisher, ReleaseYear: model.ReleaseYear, Description: model.Description,
+			TitleScreenPath: model.TitleScreenPath, ScreenshotPath: model.ScreenshotPath,
 		},
 	}
 }
