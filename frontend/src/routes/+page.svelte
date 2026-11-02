@@ -4,6 +4,6 @@
 	import { onMount } from 'svelte';
 
 	onMount(() => {
-		void goto(resolve('/library'), { replaceState: true });
+		void goto(resolve('/library'), { replace: true });
 	});
 </script>

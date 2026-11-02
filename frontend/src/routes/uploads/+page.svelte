@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import ActionButton from '$lib/components/ActionButton.svelte';
+	import ActionButton from '#lib/components/ActionButton.svelte';
 	import {
 		getUploadProcessingErrorMessage,
 		getUploadStatusRetryMessage
-	} from '$lib/helpers/error';
-	import { i18n, uploadRom, uploadStatus } from '$lib';
-	import { useTranslate } from '$lib/i18n/helpers';
-	import { getErrorMessage } from '$lib/helpers/error';
-	import type { UploadAcceptedResponse, UploadState, UploadStatusResponse } from '$lib';
+	} from '#lib/helpers/error.js';
+	import { i18n, uploadRom, uploadStatus } from '#lib';
+	import { useTranslate } from '#lib/i18n/helpers.js';
+	import { getErrorMessage } from '#lib/helpers/error.js';
+	import type { UploadAcceptedResponse, UploadState, UploadStatusResponse } from '#lib';
 
 	let selectedFile = $state<File | null>(null);
 	let uploading = $state(false);

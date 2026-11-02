@@ -12,7 +12,7 @@ Retroxide is a Go backend and SvelteKit frontend maintained in one repository an
 - `interface/web/`: embedded frontend build (`dist/`, generated) and its static file server
 - `factory/`: explicit factories for configuration, repositories, storage, services, routing, and application assembly
 - `bootstrap/`: HTTP/worker lifecycle, signals, and shutdown
-- `frontend/`: SvelteKit 2, Svelte 5, Vite, TypeScript, and Vitest frontend
+- `frontend/`: SvelteKit 3, Svelte 5, Vite, TypeScript, and Vitest frontend
 
 ## Backend Architecture
 

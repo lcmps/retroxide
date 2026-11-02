@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
   import { resolve } from '$app/paths';
-  import { browser } from '$app/environment';
+  import { browser } from '$app/env';
 	import { onMount } from 'svelte';
-	import ActionButton from '$lib/components/ActionButton.svelte';
-	import FormField from '$lib/components/FormField.svelte';
-	import TextInput from '$lib/components/TextInput.svelte';
-  import { createSession, hasStoredSession, i18n, persistStoredSession } from '$lib';
-	import { useTranslate } from '$lib/i18n/helpers';
-	import { getErrorMessage } from '$lib/helpers/error';
+	import ActionButton from '#lib/components/ActionButton.svelte';
+	import FormField from '#lib/components/FormField.svelte';
+	import TextInput from '#lib/components/TextInput.svelte';
+  import { createSession, hasStoredSession, i18n, persistStoredSession } from '#lib';
+	import { useTranslate } from '#lib/i18n/helpers.js';
+	import { getErrorMessage } from '#lib/helpers/error.js';
 
 	let email = $state('');
 	let password = $state('');
@@ -40,7 +40,7 @@
 
   onMount(() => {
     if (hasStoredSession()) {
-      void goto(resolve('/library'), { replaceState: true });
+      void goto(resolve('/library'), { replace: true });
       return;
     }
 

@@ -1,5 +1,5 @@
-import { ApiClientError, getLocalizedErrorMessage as apiGetLocalizedErrorMessage } from '$lib/api/errors';
-import type { TranslateFunction } from '$lib/i18n/helpers';
+import { ApiClientError, getLocalizedErrorMessage as apiGetLocalizedErrorMessage } from '#lib/api/errors.js';
+import type { TranslateFunction } from '#lib/i18n/helpers.js';
 
 /**
  * Extract a user-friendly error message from various error types.
@@ -47,4 +47,4 @@ export function getErrorStatus(error: unknown): number | undefined {
 }
 
 // Re-export commonly used error utilities
-export { getLocalizedErrorMessage, getUploadStatusRetryMessage, getUploadProcessingErrorMessage } from '$lib/api/errors';
+export { getLocalizedErrorMessage, getUploadStatusRetryMessage, getUploadProcessingErrorMessage } from '#lib/api/errors.js';

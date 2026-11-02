@@ -1,15 +1,15 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
+	import { browser } from '$app/env';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { Tooltip } from 'bits-ui';
-	import AppShell from '$lib/components/AppShell.svelte';
-	import { getSetupStatus, hasStoredSession } from '$lib/api/client';
+	import AppShell from '#lib/components/AppShell.svelte';
+	import { getSetupStatus, hasStoredSession } from '#lib/api/client.js';
 	import '@fontsource/press-start-2p';
-	import '$lib/styles/layout.css';
-	import '$lib/styles/pixel.css';
+	import '#lib/styles/layout.css';
+	import '#lib/styles/pixel.css';
 
 	let { children } = $props();
 
@@ -29,16 +29,16 @@
 		}
 		if (setupState === 'required') {
 			if (activePath !== '/setup') {
-				void goto(resolve('/setup'), { replaceState: true });
+				void goto(resolve('/setup'), { replace: true });
 			}
 			return;
 		}
 		if (activePath === '/setup') {
-			void goto(resolve('/login'), { replaceState: true });
+			void goto(resolve('/login'), { replace: true });
 			return;
 		}
 		if (useShell && !isAuthenticated) {
-			void goto(resolve('/login'), { replaceState: true });
+			void goto(resolve('/login'), { replace: true });
 		}
 	}
 
