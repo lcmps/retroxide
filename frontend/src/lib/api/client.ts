@@ -2,7 +2,7 @@ import { browser } from '$app/env';
 
 import type {
   ApiError,
-  DownloadedRom,
+  DownloadLink,
   LoginRequest,
   MySQLConnection,
   RomDetail,
@@ -263,33 +263,6 @@ function getXmlHttpRequestError(request: XMLHttpRequest): ApiClientError {
   });
 }
 
-function getDownloadFilename(headerValue: string | null, romId: string): string {
-  if (!headerValue) {
-    return `${romId}.rom`;
-  }
-
-  const utf8Match = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utf8Match?.[1]) {
-    try {
-      return decodeURIComponent(utf8Match[1]);
-    } catch {
-      return utf8Match[1];
-    }
-  }
-
-  const quotedMatch = headerValue.match(/filename="([^"]+)"/i);
-  if (quotedMatch?.[1]) {
-    return quotedMatch[1];
-  }
-
-  const plainMatch = headerValue.match(/filename=([^;]+)/i);
-  if (plainMatch?.[1]) {
-    return plainMatch[1].trim();
-  }
-
-  return `${romId}.rom`;
-}
-
 export async function checkHealth(): Promise<boolean> {
   const response = await fetch('/health', { method: 'GET' });
   if (!response.ok) {
@@ -463,18 +436,33 @@ export function uploadStatus(uploadId: string): Promise<UploadStatusResponse> {
   });
 }
 
-export async function downloadRom(romId: string): Promise<DownloadedRom> {
-  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/download`, {
-    method: 'GET',
-    withAuth: true,
-    headers: { Accept: 'application/octet-stream' }
-  });
+/**
+ * Requests a signed, short-lived download link. Opening it lets the browser stream the file to
+ * disk with its own download UI, instead of buffering the whole ROM in page memory.
+ */
+export async function createDownloadLink(romId: string): Promise<DownloadLink> {
+  const link = await requestJson<{ url: string; expires_in: number }>(
+    `/rom/${encodeURIComponent(romId)}/download-link`,
+    { method: 'POST', withAuth: true }
+  );
+  return { url: resolveApiLink(link.url), filename: `${romId}.rom`, expiresIn: link.expires_in };
+}
 
-  const blob = await response.blob();
-  return {
-    blob,
-    filename: getDownloadFilename(response.headers.get('Content-Disposition'), romId),
-    contentType:
-      response.headers.get('Content-Type') ?? blob.type ?? 'application/octet-stream'
-  };
+/** Starts a native browser download of a ROM and returns the link it opened. */
+export async function downloadRom(romId: string): Promise<DownloadLink> {
+  const link = await createDownloadLink(romId);
+  const anchor = document.createElement('a');
+  anchor.href = link.url;
+  anchor.download = link.filename;
+  anchor.rel = 'noopener';
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  return link;
+}
+
+/** Resolves a server-relative link against the API origin, which may differ from the page's. */
+function resolveApiLink(path: string): string {
+  const pageURL = globalThis.location?.href ?? 'http://localhost';
+  return new URL(path, new URL(API_BASE_URL, pageURL)).href;
 }

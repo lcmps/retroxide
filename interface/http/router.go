@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -21,6 +22,12 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, token string) (identity.Requester, error)
 }
 
+// DownloadLinks issues and verifies short-lived signed download capabilities.
+type DownloadLinks interface {
+	Sign(requester identity.Requester, romID string) (token string, expiresAt time.Time, err error)
+	Verify(token string) (requester identity.Requester, romID string, err error)
+}
+
 // Dependencies are the application services the API exposes. A nil service answers its routes
 // with an internal error instead of panicking.
 type Dependencies struct {
@@ -30,6 +37,7 @@ type Dependencies struct {
 	Sessions      auth.SessionAPI
 	Clients       auth.ClientAPI
 	Authenticator Authenticator
+	DownloadLinks DownloadLinks
 	Locales       map[string][]byte
 	Logger        *slog.Logger
 }

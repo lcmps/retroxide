@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lcmps/retroxide/application/auth"
@@ -211,6 +213,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"POST /api/v1/upload", "GET /api/v1/upload/:upload_id",
 		"GET /api/v1/rom", "GET /api/v1/rom/:rom_id", "PATCH /api/v1/rom/:rom_id", "DELETE /api/v1/rom/:rom_id",
 		"GET /api/v1/rom/:rom_id/cover", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
+		"POST /api/v1/rom/:rom_id/download-link", "GET /api/v1/download",
 		"POST /api/v1/rom/:rom_id/scrape", "GET /api/v1/rom/:rom_id/media/:kind",
 		"GET /api/v1/library", "POST /api/v1/library", "GET /api/v1/library/:library_id",
 		"POST /api/v1/library/:library_id/item", "DELETE /api/v1/library/:library_id/item/:rom_id",
@@ -408,5 +411,88 @@ func TestServeImageCachesVersionedURLsAndRevalidatesOthers(t *testing.T) {
 	}
 	if unchanged := serve("/cover", `"`+contentHash+`"`); unchanged.Code != http.StatusNotModified || unchanged.Body.Len() != 0 {
 		t.Fatalf("revalidation = %d with %d body bytes, want empty 304", unchanged.Code, unchanged.Body.Len())
+	}
+}
+
+// linkTestROMs implements only what the download-link flow uses; other rom.API methods panic.
+type linkTestROMs struct {
+	rom.API
+	owner string
+}
+
+func (roms linkTestROMs) Get(_ context.Context, requester identity.Requester, romID string) (rom.ROMDetailDTO, error) {
+	if !requester.CanAccess(roms.owner) {
+		return rom.ROMDetailDTO{}, fault.NotFound()
+	}
+	return rom.ROMDetailDTO{ROMID: romID}, nil
+}
+
+func (roms linkTestROMs) Download(ctx context.Context, requester identity.Requester, romID string) (rom.DownloadOutput, error) {
+	if _, err := roms.Get(ctx, requester, romID); err != nil {
+		return rom.DownloadOutput{}, err
+	}
+	return rom.DownloadOutput{
+		Filename: romID + ".rom", MIMEType: "application/octet-stream", SHA256: "abc",
+		Content: rom.StoredContent{ReadSeekCloser: nopSeekCloser{strings.NewReader("rom bytes")}, Size: 9},
+	}, nil
+}
+
+// linkTestSigner encodes the requester and ROM into the token without cryptography.
+type linkTestSigner struct{}
+
+func (linkTestSigner) Sign(requester identity.Requester, romID string) (string, time.Time, error) {
+	return requester.UserID + ":" + romID, time.Now().Add(time.Minute), nil
+}
+
+func (linkTestSigner) Verify(token string) (identity.Requester, string, error) {
+	userID, romID, ok := strings.Cut(token, ":")
+	if !ok {
+		return identity.Requester{}, "", fault.Unauthorized()
+	}
+	return identity.Requester{UserID: userID, Role: identity.RoleUser}, romID, nil
+}
+
+func TestRouterDownloadLinksStreamWithoutBearerTokenAndCheckAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	asUser := func(userID string) Dependencies {
+		return Dependencies{
+			ROMs:          linkTestROMs{owner: "user-1"},
+			DownloadLinks: linkTestSigner{},
+			Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: userID, Role: identity.RoleUser}},
+		}
+	}
+	createLink := func(userID string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/rom/rom-1/download-link", nil)
+		request.Header.Set("Authorization", "Bearer token")
+		response := httptest.NewRecorder()
+		NewRouter(asUser(userID), Options{}).ServeHTTP(response, request)
+		return response
+	}
+
+	if response := createLink("user-2"); response.Code != http.StatusNotFound {
+		t.Fatalf("link for inaccessible ROM = %d, want 404", response.Code)
+	}
+	response := createLink("user-1")
+	var link downloadLinkResponse
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &link) != nil || link.ExpiresIn <= 0 {
+		t.Fatalf("create link = %d %s", response.Code, response.Body.String())
+	}
+
+	// The link works without any Authorization header.
+	download := httptest.NewRecorder()
+	NewRouter(Dependencies{ROMs: linkTestROMs{owner: "user-1"}, DownloadLinks: linkTestSigner{}}, Options{}).
+		ServeHTTP(download, httptest.NewRequest(http.MethodGet, link.URL, nil))
+	if download.Code != http.StatusOK || download.Body.String() != "rom bytes" {
+		t.Fatalf("download via link = %d %q", download.Code, download.Body.String())
+	}
+	if !strings.HasPrefix(download.Header().Get("Content-Disposition"), "attachment") {
+		t.Fatalf("Content-Disposition = %q", download.Header().Get("Content-Disposition"))
+	}
+
+	invalid := httptest.NewRecorder()
+	NewRouter(Dependencies{ROMs: linkTestROMs{owner: "user-1"}, DownloadLinks: linkTestSigner{}}, Options{}).
+		ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/v1/download?token=garbage", nil))
+	if invalid.Code != http.StatusForbidden || !strings.Contains(invalid.Body.String(), "invalid_download_link") {
+		t.Fatalf("invalid link = %d %s", invalid.Code, invalid.Body.String())
 	}
 }
