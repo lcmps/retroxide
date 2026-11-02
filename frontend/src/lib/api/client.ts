@@ -386,6 +386,13 @@ export async function fetchRomCover(romId: string): Promise<Blob> {
   return response.blob();
 }
 
+export function scrapeRom(romId: string): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/scrape`, {
+    method: 'POST',
+    withAuth: true
+  });
+}
+
 export function uploadRom(
   file: File,
   onProgress?: (loadedBytes: number, totalBytes: number) => void

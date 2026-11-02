@@ -58,7 +58,12 @@ export type RomDetail = {
   platform: string;
   region: string | null;
   version: string | null;
+  publisher?: string | null;
+  release_year?: string | null;
+  description?: string | null;
   cover_art_url?: string | null;
+  title_screen_url?: string | null;
+  screenshot_url?: string | null;
   hash: RomHash;
 };
 

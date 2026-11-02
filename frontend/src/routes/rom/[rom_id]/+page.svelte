@@ -1,6 +1,7 @@
 <script lang="ts">
   import ActionButton from '$lib/components/ActionButton.svelte';
-  import { downloadRom, fetchRomCover, getRom, i18n } from '$lib';
+  import { downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '$lib';
+  import { ApiClientError } from '$lib/api/errors';
   import { getErrorMessage } from '$lib/helpers/error';
   import { useTranslate } from '$lib/i18n/helpers';
   import type { RomDetail } from '$lib';
@@ -12,6 +13,7 @@
   let rom = $state<RomDetail | null>(null);
   let loading = $state(false);
   let downloading = $state(false);
+  let scraping = $state(false);
   let coverPreviewUrl = $state<string | null>(null);
   let message = $state('');
 
@@ -64,6 +66,30 @@
     }
   }
 
+  async function scrapeCurrentRom(): Promise<void> {
+    if (!rom) {
+      return;
+    }
+
+    scraping = true;
+    message = '';
+    try {
+      rom = await scrapeRom(rom.rom_id);
+      await loadCoverPreview();
+      message = t('rom.messages.scrapeSuccess', 'Scrape complete.');
+    } catch (error) {
+      if (error instanceof ApiClientError && error.code === 'not_found') {
+        message = t('rom.messages.scrapeNoMatch', 'No match found for this ROM.');
+      } else if (error instanceof ApiClientError && error.code === 'upstream_unavailable') {
+        message = t('rom.messages.scrapeUnavailable', 'Metadata services are unavailable. Try again later.');
+      } else {
+        message = getErrorMessage(error, 'rom.messages.scrapeFailure', 'Scrape failed.', t);
+      }
+    } finally {
+      scraping = false;
+    }
+  }
+
   onMount(() => {
     void i18n.initialize().then(loadRom).catch((error: unknown) => {
       message = getErrorMessage(error, 'rom.messages.loadFailure', 'Failed to load ROM', t);
@@ -82,8 +108,13 @@
       <div class="rom-details stack">
         <h1 id="rom-title">{rom.title}</h1>
         <p>{rom.platform}</p>
+        {#if rom.publisher}<p>{rom.publisher}</p>{/if}
+        {#if rom.release_year}<p>{rom.release_year}</p>{/if}
         <ActionButton type="button" onclick={downloadCurrentRom} disabled={downloading}>
           {downloading ? t('common.status.downloading', 'Downloading...') : t('rom.actions.download', 'Download')}
+        </ActionButton>
+        <ActionButton type="button" variant="secondary" onclick={scrapeCurrentRom} disabled={scraping}>
+          {scraping ? t('rom.actions.scraping', 'Scraping...') : t('rom.actions.scrape', 'Scrape')}
         </ActionButton>
       </div>
     </article>
