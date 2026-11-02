@@ -1,6 +1,8 @@
 GO ?= go
 NPM ?= npm
 BINARY ?= retroxide
+VERSION ?= dev
+GO_LDFLAGS := -s -w -X main.version=$(VERSION)
 WEB_DIST := interface/web/dist
 RELEASE_PLATFORMS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
@@ -13,13 +15,13 @@ BENCH_COUNT ?= 5
 build: frontend-build backend-build
 
 backend-build:
-	$(GO) build -trimpath -ldflags="-s -w" -o bin/$(BINARY) .
+	$(GO) build -trimpath -ldflags="$(GO_LDFLAGS)" -o bin/$(BINARY) .
 
 release: frontend-build
 	@for platform in $(RELEASE_PLATFORMS); do \
 		os=$${platform%/*}; arch=$${platform#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
 		echo "building bin/$(BINARY)-$$os-$$arch$$ext"; \
-		GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags="-s -w" -o bin/$(BINARY)-$$os-$$arch$$ext . || exit 1; \
+		GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags="$(GO_LDFLAGS)" -o bin/$(BINARY)-$$os-$$arch$$ext . || exit 1; \
 	done
 
 run:

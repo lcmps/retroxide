@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-alpine AS frontend
+# BuildKit sets BUILDPLATFORM; the legacy builder leaves it empty, so default to amd64 hosts.
+ARG BUILDPLATFORM
+
+# Frontend and Go stages run on the build host; Go cross-compiles for the target platform.
+FROM --platform=${BUILDPLATFORM:-linux/amd64} node:24-alpine AS frontend
 
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
@@ -8,7 +12,11 @@ RUN npm ci
 COPY frontend ./
 RUN npm run build
 
-FROM golang:1.27-alpine3.23 AS builder
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.27-alpine3.23 AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -22,7 +30,7 @@ COPY factory ./factory
 COPY bootstrap ./bootstrap
 COPY main.go ./main.go
 COPY --from=frontend /app/interface/web/dist ./interface/web/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/retroxide .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/retroxide .
 
 FROM alpine:3.23 AS runtime
 
