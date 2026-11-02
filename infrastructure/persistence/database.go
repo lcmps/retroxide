@@ -83,7 +83,12 @@ func OpenDatabase(ctx context.Context, driver, sqlitePath, mysqlURL string) (*go
 	default:
 		return nil, fault.Validation("unsupported database driver " + driver)
 	}
-	db, err := gorm.Open(dialector, &gorm.Config{Logger: gormlogger.Default.LogMode(gormlogger.Silent)})
+	db, err := gorm.Open(dialector, &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+		// Multi-statement writes already use explicit transactions; wrapping every single
+		// statement in its own transaction only adds round trips.
+		SkipDefaultTransaction: true,
+	})
 	if err != nil {
 		return nil, fault.Internal(fmt.Errorf("opening %s database: %w", driver, err))
 	}
