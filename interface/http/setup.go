@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/setup"
 )
@@ -17,65 +18,64 @@ const setupPath = "/api/v1/setup"
 func NewSetupRouter(service setup.Service, locales map[string][]byte, logger *slog.Logger, frontend http.Handler) *gin.Engine {
 	router := gin.New()
 	_ = router.SetTrustedProxies(nil)
-	router.Use(gin.CustomRecovery(func(context *gin.Context, recovered any) {
-		slog.ErrorContext(context.Request.Context(), "http handler panic", "panic", recovered)
-		writeError(context, fault.Internal(errors.New("http handler panic")))
-	}))
-	router.Use(securityHeadersMiddleware())
-	router.Use(requestIDMiddleware(logger))
+	router.Use(
+		gin.CustomRecovery(func(c *gin.Context, recovered any) {
+			slog.ErrorContext(c.Request.Context(), "http handler panic", "panic", recovered)
+			writeError(c, fault.Internal(errors.New("http handler panic")))
+		}),
+		securityHeadersMiddleware(),
+		requestIDMiddleware(logger),
+	)
 
-	router.GET("/health", func(context *gin.Context) {
-		context.String(http.StatusOK, "ok")
+	router.GET("/health", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
 	})
-	router.GET("/api/v1/i18n/:locale", func(context *gin.Context) {
-		catalog, ok := locales[context.Param("locale")]
-		if !ok {
-			writeError(context, fault.NotFound())
-			return
-		}
-		context.Data(http.StatusOK, "application/json", catalog)
-	})
-	router.GET(setupPath, func(context *gin.Context) {
-		context.JSON(http.StatusOK, service.Status())
-	})
-	router.POST(setupPath+"/mysql/test", func(context *gin.Context) {
-		var connection setup.MySQLConnection
-		if !bindJSON(context, &connection) {
-			return
-		}
-		if err := service.TestMySQL(context.Request.Context(), connection); err != nil {
-			writeError(context, err)
-			return
-		}
-		context.Status(http.StatusNoContent)
-	})
-	router.POST(setupPath, func(context *gin.Context) {
-		var request setup.Request
-		if !bindJSON(context, &request) {
-			return
-		}
-		if err := service.Complete(context.Request.Context(), request); err != nil {
-			writeError(context, err)
-			return
-		}
-		context.Status(http.StatusNoContent)
-	})
-	router.NoRoute(frontendFallback(frontend, func(context *gin.Context) {
-		writeSpecificError(context, http.StatusServiceUnavailable, "setup_required", "server configuration is required")
+	registerLocaleRoutes(router.Group("/api/v1"), locales)
+
+	handler := setupHandler{setup: service}
+	router.GET(setupPath, handler.status)
+	router.POST(setupPath+"/mysql/test", handler.testMySQL)
+	router.POST(setupPath, handler.complete)
+	router.NoRoute(frontendFallback(frontend, func(c *gin.Context) {
+		writeSpecificError(c, http.StatusServiceUnavailable, "setup_required", "server configuration is required")
 	}))
 	return router
 }
 
+type setupHandler struct {
+	setup setup.Service
+}
+
+func (handler setupHandler) status(c *gin.Context) {
+	c.JSON(http.StatusOK, handler.setup.Status())
+}
+
+func (handler setupHandler) testMySQL(c *gin.Context) {
+	var connection setup.MySQLConnection
+	if !bindJSON(c, &connection) {
+		return
+	}
+	respondNoContent(c, handler.setup.TestMySQL(c.Request.Context(), connection))
+}
+
+func (handler setupHandler) complete(c *gin.Context) {
+	var request setup.Request
+	if !bindJSON(c, &request) {
+		return
+	}
+	respondNoContent(c, handler.setup.Complete(c.Request.Context(), request))
+}
+
 // frontendFallback sends unmatched non-API requests to the web app and everything else to apiFallback.
 func frontendFallback(frontend http.Handler, apiFallback gin.HandlerFunc) gin.HandlerFunc {
-	return func(context *gin.Context) {
-		if frontend == nil || isAPIPath(context.Request.URL.Path) {
-			apiFallback(context)
+	return func(c *gin.Context) {
+		if frontend == nil || isAPIPath(c.Request.URL.Path) {
+			apiFallback(c)
 			return
 		}
 		// Gin presets 404 for unmatched routes; the frontend decides the real status.
-		context.Status(http.StatusOK)
-		frontend.ServeHTTP(context.Writer, context.Request)
+		c.Status(http.StatusOK)
+		frontend.ServeHTTP(c.Writer, c.Request)
 	}
 }
 
@@ -83,8 +83,9 @@ func isAPIPath(path string) bool {
 	return path == "/api" || strings.HasPrefix(path, "/api/")
 }
 
+// registerSetupStatusRoute tells the frontend, once configured, that setup is no longer required.
 func registerSetupStatusRoute(router *gin.Engine) {
-	router.GET(setupPath, func(context *gin.Context) {
-		context.JSON(http.StatusOK, setup.Status{Required: false})
+	router.GET(setupPath, func(c *gin.Context) {
+		c.JSON(http.StatusOK, setup.Status{Required: false})
 	})
 }
