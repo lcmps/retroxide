@@ -43,7 +43,7 @@
   async function loadCoverPreview(): Promise<void> {
     if (!rom?.cover_art_url) return;
     if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl);
-    coverPreviewUrl = URL.createObjectURL(await fetchRomCover(rom.rom_id));
+    coverPreviewUrl = URL.createObjectURL(await fetchRomCover(rom.rom_id, rom.cover_art_url));
   }
 
   onDestroy(() => {

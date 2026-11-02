@@ -381,8 +381,13 @@ export function uploadRomCover(romId: string, file: File): Promise<RomDetail> {
   });
 }
 
-export async function fetchRomCover(romId: string): Promise<Blob> {
-  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/cover`, { withAuth: true });
+/**
+ * Fetches a ROM's cover. Passing the summary's cover_art_url keeps its content version, so the
+ * browser can serve repeat requests from its HTTP cache.
+ */
+export async function fetchRomCover(romId: string, coverArtUrl?: string | null): Promise<Blob> {
+  const version = coverArtUrl ? new URL(coverArtUrl, 'http://localhost').search : '';
+  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/cover${version}`, { withAuth: true });
   return response.blob();
 }
 
