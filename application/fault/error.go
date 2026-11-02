@@ -17,6 +17,7 @@ const (
 	CodeUploadTooLarge       Code = "upload_too_large"
 	CodeUnsupportedUpload    Code = "upload_type_not_allowed"
 	CodeUnsupportedMediaType Code = "unsupported_media_type"
+	CodeUpstreamUnavailable  Code = "upstream_unavailable"
 	CodeInternal             Code = "internal_error"
 )
 
@@ -61,6 +62,10 @@ func UnsupportedMediaType(message string) *Error {
 
 func Internal(cause error) *Error {
 	return &Error{Code: CodeInternal, Message: "internal error", Cause: cause}
+}
+
+func UpstreamUnavailable(message string, cause error) *Error {
+	return &Error{Code: CodeUpstreamUnavailable, Message: message, Cause: cause}
 }
 
 func IsCode(err error, code Code) bool {

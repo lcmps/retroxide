@@ -14,13 +14,18 @@ type ROMListResponseDTO struct {
 }
 
 type ROMDetailDTO struct {
-	ROMID       string     `json:"rom_id"`
-	Title       string     `json:"title"`
-	Platform    string     `json:"platform"`
-	Region      *string    `json:"region"`
-	Version     *string    `json:"version"`
-	CoverArtURL *string    `json:"cover_art_url"`
-	Hash        ROMHashDTO `json:"hash"`
+	ROMID          string     `json:"rom_id"`
+	Title          string     `json:"title"`
+	Platform       string     `json:"platform"`
+	Region         *string    `json:"region"`
+	Version        *string    `json:"version"`
+	Publisher      *string    `json:"publisher"`
+	ReleaseYear    *string    `json:"release_year"`
+	Description    *string    `json:"description"`
+	CoverArtURL    *string    `json:"cover_art_url"`
+	TitleScreenURL *string    `json:"title_screen_url"`
+	ScreenshotURL  *string    `json:"screenshot_url"`
+	Hash           ROMHashDTO `json:"hash"`
 }
 
 type ROMHashDTO struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -17,10 +18,13 @@ type Service struct {
 	repository Repository
 	storage    Storage
 	audit      Audit
+	scraper    Scraper
 }
 
-func NewService(repository Repository, storage Storage, audit Audit) *Service {
-	return &Service{repository: repository, storage: storage, audit: audit}
+const scrapedConfidence = 95
+
+func NewService(repository Repository, storage Storage, audit Audit, scraper Scraper) *Service {
+	return &Service{repository: repository, storage: storage, audit: audit, scraper: scraper}
 }
 
 func (service *Service) List(ctx context.Context, limit int, cursor, platform *string, identified *bool) (ROMListResponseDTO, error) {
@@ -43,7 +47,12 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
-	rom.Identity.Title = strings.TrimSpace(input.Title)
+	title := strings.TrimSpace(input.Title)
+	if title != rom.Identity.Title {
+		rom.Identity.IdentifiedBy = romdomain.IdentifiedByManual
+		rom.Identity.Confidence = 100
+	}
+	rom.Identity.Title = title
 	rom.Identity.Platform = strings.ToLower(strings.TrimSpace(input.Platform))
 	rom.Identity.Region = optionalUnlessWhitespace(input.Region)
 	rom.Identity.Version = optionalUnlessWhitespace(input.Version)
@@ -143,6 +152,90 @@ func (service *Service) ReadCover(ctx context.Context, requester identity.Reques
 	return service.storage.Read(ctx, *rom.Identity.CoverArtPath)
 }
 
+// Scrape fills only missing metadata and images; titles are replaced only while still inferred from the filename.
+func (service *Service) Scrape(ctx context.Context, requester identity.Requester, romID string) (ROMDetailDTO, error) {
+	if service.scraper == nil {
+		return ROMDetailDTO{}, fault.Internal(errors.New("scraper is not configured"))
+	}
+	rom, err := service.findAccessibleROM(ctx, requester, romID)
+	if err != nil {
+		return ROMDetailDTO{}, err
+	}
+	romFile, err := service.repository.FindROMFileByID(ctx, rom.ROMFileID)
+	if err != nil {
+		return ROMDetailDTO{}, err
+	}
+	if romFile == nil {
+		return ROMDetailDTO{}, fault.Internal(fmt.Errorf("rom_file %s not found", rom.ROMFileID))
+	}
+	result, err := service.scraper.Scrape(ctx, ScrapeQuery{
+		Platform: rom.Identity.Platform, SHA1: romFile.Hash.SHA1, CRC32: romFile.Hash.CRC32, MD5: romFile.Hash.MD5,
+	})
+	if err != nil {
+		return ROMDetailDTO{}, err
+	}
+	if result == nil {
+		return ROMDetailDTO{}, &fault.Error{Code: fault.CodeNotFound, Message: "no match found for this ROM"}
+	}
+
+	identity := &rom.Identity
+	if title := strings.TrimSpace(result.Title); title != "" && identity.IdentifiedBy == romdomain.IdentifiedByFilename {
+		identity.Title = title
+		identity.IdentifiedBy = result.Source
+		identity.Confidence = scrapedConfidence
+	}
+	fillMissing(&identity.Region, result.Region)
+	fillMissing(&identity.Publisher, result.Publisher)
+	fillMissing(&identity.ReleaseYear, result.ReleaseYear)
+	fillMissing(&identity.Description, result.Description)
+	for _, image := range []struct {
+		target  **string
+		content []byte
+	}{
+		{&identity.CoverArtPath, result.Cover},
+		{&identity.TitleScreenPath, result.TitleScreen},
+		{&identity.ScreenshotPath, result.Screenshot},
+	} {
+		if *image.target != nil || len(image.content) == 0 {
+			continue
+		}
+		digest := sha256.Sum256(image.content)
+		storagePath, err := service.storage.Write(ctx, hex.EncodeToString(digest[:]), image.content)
+		if err != nil {
+			return ROMDetailDTO{}, err
+		}
+		*image.target = &storagePath
+	}
+	if err := service.repository.SaveROM(ctx, *rom); err != nil {
+		return ROMDetailDTO{}, err
+	}
+	return service.detail(ctx, *rom)
+}
+
+func (service *Service) ReadMedia(ctx context.Context, requester identity.Requester, romID, kind string) ([]byte, error) {
+	rom, err := service.findAccessibleROM(ctx, requester, romID)
+	if err != nil {
+		return nil, err
+	}
+	var path *string
+	switch kind {
+	case MediaTitleScreen:
+		path = rom.Identity.TitleScreenPath
+	case MediaScreenshot:
+		path = rom.Identity.ScreenshotPath
+	}
+	if path == nil {
+		return nil, fault.NotFound()
+	}
+	return service.storage.Read(ctx, *path)
+}
+
+func fillMissing(target **string, value string) {
+	if value = strings.TrimSpace(value); *target == nil && value != "" {
+		*target = &value
+	}
+}
+
 func (service *Service) findAccessibleROM(ctx context.Context, requester identity.Requester, romID string) (*romdomain.ROM, error) {
 	rom, err := service.repository.FindROMByID(ctx, romID)
 	if err != nil {
@@ -167,13 +260,25 @@ func (service *Service) detail(ctx context.Context, rom romdomain.ROM) (ROMDetai
 		url := "/api/v1/rom/" + rom.ID + "/cover"
 		coverArtURL = &url
 	}
+	mediaURL := func(path *string, kind string) *string {
+		if path == nil {
+			return nil
+		}
+		url := "/api/v1/rom/" + rom.ID + "/media/" + kind
+		return &url
+	}
 	return ROMDetailDTO{
-		ROMID:       rom.ID,
-		Title:       rom.Identity.Title,
-		Platform:    rom.Identity.Platform,
-		Region:      rom.Identity.Region,
-		Version:     rom.Identity.Version,
-		CoverArtURL: coverArtURL,
+		ROMID:          rom.ID,
+		Title:          rom.Identity.Title,
+		Platform:       rom.Identity.Platform,
+		Region:         rom.Identity.Region,
+		Version:        rom.Identity.Version,
+		Publisher:      rom.Identity.Publisher,
+		ReleaseYear:    rom.Identity.ReleaseYear,
+		Description:    rom.Identity.Description,
+		CoverArtURL:    coverArtURL,
+		TitleScreenURL: mediaURL(rom.Identity.TitleScreenPath, MediaTitleScreen),
+		ScreenshotURL:  mediaURL(rom.Identity.ScreenshotPath, MediaScreenshot),
 		Hash: ROMHashDTO{
 			SHA256: romFile.Hash.SHA256,
 			SHA1:   romFile.Hash.SHA1,

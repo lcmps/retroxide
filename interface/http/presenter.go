@@ -64,6 +64,8 @@ func httpStatusForError(code fault.Code) int {
 		return http.StatusRequestEntityTooLarge
 	case fault.CodeUnsupportedUpload, fault.CodeUnsupportedMediaType:
 		return http.StatusUnsupportedMediaType
+	case fault.CodeUpstreamUnavailable:
+		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError
 	}

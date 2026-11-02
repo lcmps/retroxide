@@ -132,7 +132,7 @@ func TestROMServiceUpdateNormalizesRequiredMetadata(t *testing.T) {
 		},
 		romFiles: map[string]romdomain.ROMFile{"file-1": {ID: "file-1", Hash: hash}},
 	}
-	service := NewService(repository, &romTestStorage{files: make(map[string][]byte)}, romTestAudit{})
+	service := NewService(repository, &romTestStorage{files: make(map[string][]byte)}, romTestAudit{}, nil)
 	emptyRegion := "  "
 	version := "Rev A"
 
@@ -155,7 +155,7 @@ func TestROMServiceConcealsROMFromOtherUser(t *testing.T) {
 		roms:     map[string]romdomain.ROM{"rom-1": {ID: "rom-1", UploaderID: "owner"}},
 		romFiles: make(map[string]romdomain.ROMFile),
 	}
-	service := NewService(repository, &romTestStorage{files: make(map[string][]byte)}, romTestAudit{})
+	service := NewService(repository, &romTestStorage{files: make(map[string][]byte)}, romTestAudit{}, nil)
 	_, err := service.Get(context.Background(), identity.Requester{UserID: "other", Role: identity.RoleUser}, "rom-1")
 	if !fault.IsCode(err, fault.CodeNotFound) {
 		t.Fatalf("Get() error = %v, want not found", err)

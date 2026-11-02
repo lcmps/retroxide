@@ -33,6 +33,36 @@ type Audit interface {
 	DownloadServed(context.Context, string, string, string, uint64)
 }
 
+const (
+	MediaTitleScreen = "title_screen"
+	MediaScreenshot  = "screenshot"
+)
+
+type ScrapeQuery struct {
+	Platform string
+	SHA1     string
+	CRC32    string
+	MD5      string
+}
+
+// ScrapeResult leaves fields empty when the source had no value; images are validated PNG, JPEG, or WebP bytes.
+type ScrapeResult struct {
+	Source      string
+	Title       string
+	Region      string
+	Publisher   string
+	ReleaseYear string
+	Description string
+	Cover       []byte
+	TitleScreen []byte
+	Screenshot  []byte
+}
+
+// Scraper returns nil, nil when no source recognizes the ROM.
+type Scraper interface {
+	Scrape(context.Context, ScrapeQuery) (*ScrapeResult, error)
+}
+
 type API interface {
 	List(context.Context, int, *string, *string, *bool) (ROMListResponseDTO, error)
 	Get(context.Context, identity.Requester, string) (ROMDetailDTO, error)
@@ -41,4 +71,6 @@ type API interface {
 	Download(context.Context, identity.Requester, string) (DownloadOutput, error)
 	UploadCover(context.Context, identity.Requester, string, []byte) (ROMDetailDTO, error)
 	ReadCover(context.Context, identity.Requester, string) ([]byte, error)
+	Scrape(context.Context, identity.Requester, string) (ROMDetailDTO, error)
+	ReadMedia(context.Context, identity.Requester, string, string) ([]byte, error)
 }
