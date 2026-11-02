@@ -86,23 +86,20 @@ func (service *Service) Download(ctx context.Context, requester identity.Request
 	if romFile == nil {
 		return DownloadOutput{}, fault.Internal(fmt.Errorf("rom_file %s not found", rom.ROMFileID))
 	}
-	content, err := service.storage.Read(ctx, romFile.StoragePath)
+	content, err := service.storage.Open(ctx, romFile.StoragePath)
 	if err != nil {
 		return DownloadOutput{}, err
-	}
-	lastModified, err := service.storage.LastModified(ctx, romFile.StoragePath)
-	if err != nil {
-		return DownloadOutput{}, err
-	}
-	if service.audit != nil {
-		service.audit.DownloadServed(ctx, romID, romFile.ID, romFile.Hash.SHA256, uint64(len(content)))
 	}
 	return DownloadOutput{
-		Filename:                romID + ".rom",
-		MIMEType:                "application/octet-stream",
-		Bytes:                   content,
-		SHA256:                  romFile.Hash.SHA256,
-		LastModifiedUnixSeconds: lastModified,
+		Filename: romID + ".rom",
+		MIMEType: "application/octet-stream",
+		SHA256:   romFile.Hash.SHA256,
+		Content:  content,
+		Served: func(ctx context.Context, bytesSent int64) {
+			if service.audit != nil {
+				service.audit.DownloadServed(ctx, romID, romFile.ID, romFile.Hash.SHA256, uint64(max(bytesSent, 0)))
+			}
+		},
 	}, nil
 }
 

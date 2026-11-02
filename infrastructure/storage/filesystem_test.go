@@ -67,3 +67,26 @@ func TestStorageConcurrentWritesRemainComplete(t *testing.T) {
 		t.Fatalf("stored content length = %d, want %d", len(stored), len(content))
 	}
 }
+
+func TestStorageOpenReturnsSeekableContentWithMetadata(t *testing.T) {
+	filesystem := New(t.TempDir())
+	path, err := filesystem.Write(context.Background(), strings.Repeat("c", 64), []byte("abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := filesystem.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer content.Close()
+	if content.Size != 6 || content.ModifiedAt.IsZero() {
+		t.Fatalf("metadata size=%d modified=%v", content.Size, content.ModifiedAt)
+	}
+	if _, err := content.Seek(4, 0); err != nil {
+		t.Fatal(err)
+	}
+	rest := make([]byte, 2)
+	if _, err := content.Read(rest); err != nil || string(rest) != "ef" {
+		t.Fatalf("read after seek = %q, %v", rest, err)
+	}
+}

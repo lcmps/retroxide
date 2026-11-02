@@ -1,13 +1,10 @@
 package http
 
 import (
-	"fmt"
 	"mime"
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -16,57 +13,23 @@ import (
 
 const fallbackContentDisposition = `attachment; filename="download.rom"`
 
-// writeDownload serves a ROM file as an attachment, honouring conditional requests and single byte ranges.
+// writeDownload streams a ROM file as an attachment. http.ServeContent handles byte ranges and
+// conditional requests (If-None-Match against the SHA-256 ETag, If-Modified-Since), reading only
+// the bytes it sends rather than loading the file into memory.
 func writeDownload(c *gin.Context, output rom.DownloadOutput) {
-	etag := `"` + output.SHA256 + `"`
-	var modified time.Time
-	if output.LastModifiedUnixSeconds != nil {
-		modified = time.Unix(int64(*output.LastModifiedUnixSeconds), 0).UTC()
-	}
-
-	c.Header("ETag", etag)
-	c.Header("Accept-Ranges", "bytes")
-	c.Header("Cache-Control", "private, max-age=0, must-revalidate")
-	if !modified.IsZero() {
-		c.Header("Last-Modified", modified.Format(http.TimeFormat))
-	}
-	if notModified(c, etag, modified) {
-		c.Status(http.StatusNotModified)
-		c.Writer.WriteHeaderNow()
-		return
-	}
-
-	c.Header("Content-Disposition", attachmentDisposition(output.Filename))
-	c.Header("Content-Type", output.MIMEType)
-	content := output.Bytes
-	rangeHeader := c.GetHeader("Range")
-	if rangeHeader == "" {
-		c.Header("Content-Length", strconv.Itoa(len(content)))
-		c.Data(http.StatusOK, output.MIMEType, content)
-		return
-	}
-	start, end, ok := parseByteRange(rangeHeader, len(content))
-	if !ok {
-		c.Header("Content-Range", fmt.Sprintf("bytes */%d", len(content)))
-		c.Status(http.StatusRequestedRangeNotSatisfiable)
-		c.Writer.WriteHeaderNow()
-		return
-	}
-	c.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(content)))
-	c.Header("Content-Length", strconv.Itoa(end-start+1))
-	c.Data(http.StatusPartialContent, output.MIMEType, content[start:end+1])
+	header := c.Writer.Header()
+	header.Set("ETag", `"`+output.SHA256+`"`)
+	header.Set("Cache-Control", "private, max-age=0, must-revalidate")
+	header.Set("Content-Disposition", attachmentDisposition(output.Filename))
+	header.Set("Content-Type", output.MIMEType)
+	http.ServeContent(c.Writer, c.Request, output.Filename, output.Content.ModifiedAt, output.Content)
 }
 
-// notModified evaluates If-None-Match, then If-Modified-Since, against the file's validators.
-func notModified(c *gin.Context, etag string, modified time.Time) bool {
-	if c.GetHeader("If-None-Match") == etag {
-		return true
-	}
-	if modified.IsZero() {
-		return false
-	}
-	since, err := http.ParseTime(c.GetHeader("If-Modified-Since"))
-	return err == nil && !modified.After(since)
+// bodyWasServed reports whether the response delivered file content (in full or as a range),
+// as opposed to a 304, a 416, or a body-less request.
+func bodyWasServed(c *gin.Context) bool {
+	status := c.Writer.Status()
+	return c.Request.Method != http.MethodHead && (status == http.StatusOK || status == http.StatusPartialContent)
 }
 
 // attachmentDisposition builds a Content-Disposition header that cannot smuggle a path.
@@ -76,35 +39,4 @@ func attachmentDisposition(filename string) string {
 		return disposition
 	}
 	return fallbackContentDisposition
-}
-
-// parseByteRange parses a single "bytes=" range against a body of total bytes, returning inclusive offsets.
-func parseByteRange(value string, total int) (int, int, bool) {
-	if total <= 0 || !strings.HasPrefix(value, "bytes=") || strings.Contains(value, ",") {
-		return 0, 0, false
-	}
-	startPart, endPart, found := strings.Cut(strings.TrimPrefix(value, "bytes="), "-")
-	if !found {
-		return 0, 0, false
-	}
-	if startPart == "" {
-		suffix, err := strconv.Atoi(endPart)
-		if err != nil || suffix <= 0 {
-			return 0, 0, false
-		}
-		return max(total-suffix, 0), total - 1, true
-	}
-	start, err := strconv.Atoi(startPart)
-	if err != nil || start < 0 || start >= total {
-		return 0, 0, false
-	}
-	end := total - 1
-	if endPart != "" {
-		parsedEnd, err := strconv.Atoi(endPart)
-		if err != nil || parsedEnd < start {
-			return 0, 0, false
-		}
-		end = min(parsedEnd, total-1)
-	}
-	return start, end, true
 }

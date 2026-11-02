@@ -3,6 +3,7 @@ package rom
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/lcmps/retroxide/domain/identity"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
@@ -22,12 +23,18 @@ type Repository interface {
 	HardDeleteROM(context.Context, string, func(string) error) error
 }
 
+// StoredContent is an open, seekable handle on stored bytes; the caller must close it.
+type StoredContent struct {
+	io.ReadSeekCloser
+	Size       int64
+	ModifiedAt time.Time
+}
+
 type Storage interface {
-	Write(context.Context, string, []byte) (string, error)
-	Read(context.Context, string) ([]byte, error)
-	Open(context.Context, string) (io.ReadCloser, error)
-	LastModified(context.Context, string) (*uint64, error)
-	Delete(context.Context, string) error
+	Write(ctx context.Context, contentAddress string, content []byte) (string, error)
+	Read(ctx context.Context, storagePath string) ([]byte, error)
+	Open(ctx context.Context, storagePath string) (StoredContent, error)
+	Delete(ctx context.Context, storagePath string) error
 }
 
 type Audit interface {

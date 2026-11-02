@@ -220,74 +220,55 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 	}
 }
 
-func TestParseByteRange(t *testing.T) {
-	tests := []struct {
-		name      string
-		header    string
-		total     int
-		wantStart int
-		wantEnd   int
-		wantOK    bool
-	}{
-		{name: "closed range", header: "bytes=1-3", total: 8, wantStart: 1, wantEnd: 3, wantOK: true},
-		{name: "open range", header: "bytes=4-", total: 8, wantStart: 4, wantEnd: 7, wantOK: true},
-		{name: "suffix range", header: "bytes=-3", total: 8, wantStart: 5, wantEnd: 7, wantOK: true},
-		{name: "suffix longer than body", header: "bytes=-30", total: 8, wantStart: 0, wantEnd: 7, wantOK: true},
-		{name: "multi range rejected", header: "bytes=0-1,3-4", total: 8},
-		{name: "start after end rejected", header: "bytes=4-2", total: 8},
-		{name: "start beyond body rejected", header: "bytes=8-", total: 8},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			start, end, ok := parseByteRange(test.header, test.total)
-			if start != test.wantStart || end != test.wantEnd || ok != test.wantOK {
-				t.Fatalf("parseByteRange() = %d-%d %t, want %d-%d %t", start, end, ok, test.wantStart, test.wantEnd, test.wantOK)
-			}
-		})
-	}
-}
+type nopSeekCloser struct{ *strings.Reader }
 
-func TestWriteDownloadRangeAndETagResponses(t *testing.T) {
+func (nopSeekCloser) Close() error { return nil }
+
+func TestWriteDownloadStreamsRangesAndConditionalResponses(t *testing.T) {
 	tests := []struct {
 		name       string
-		request    func(*http.Request)
+		header     string
+		value      string
 		wantStatus int
 		wantBody   string
 		wantRange  string
+		wantServed bool
 	}{
-		{
-			name:       "partial range",
-			request:    func(request *http.Request) { request.Header.Set("Range", "bytes=1-3") },
-			wantStatus: http.StatusPartialContent, wantBody: "bcd", wantRange: "bytes 1-3/6",
-		},
-		{
-			name:       "not modified",
-			request:    func(request *http.Request) { request.Header.Set("If-None-Match", `"abc"`) },
-			wantStatus: http.StatusNotModified, wantBody: "",
-		},
-		{
-			name:       "unsatisfiable range",
-			request:    func(request *http.Request) { request.Header.Set("Range", "bytes=9-") },
-			wantStatus: http.StatusRequestedRangeNotSatisfiable, wantBody: "", wantRange: "bytes */6",
-		},
+		{name: "full body", wantStatus: http.StatusOK, wantBody: "abcdef", wantServed: true},
+		{name: "partial range", header: "Range", value: "bytes=1-3", wantStatus: http.StatusPartialContent, wantBody: "bcd", wantRange: "bytes 1-3/6", wantServed: true},
+		{name: "suffix range", header: "Range", value: "bytes=-2", wantStatus: http.StatusPartialContent, wantBody: "ef", wantRange: "bytes 4-5/6", wantServed: true},
+		{name: "not modified", header: "If-None-Match", value: `"abc"`, wantStatus: http.StatusNotModified},
+		{name: "unsatisfiable range", header: "Range", value: "bytes=9-", wantStatus: http.StatusRequestedRangeNotSatisfiable, wantRange: "bytes */6"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
-			request := httptest.NewRequest(http.MethodGet, "/download", nil)
-			test.request(request)
-			context.Request = request
-			writeDownload(context, rom.DownloadOutput{Filename: "game.rom", MIMEType: "application/octet-stream", Bytes: []byte("abcdef"), SHA256: "abc"})
-			if recorder.Code != test.wantStatus || recorder.Body.String() != test.wantBody {
-				t.Fatalf("response = %d %q, want %d %q", recorder.Code, recorder.Body.String(), test.wantStatus, test.wantBody)
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/download", nil)
+			if test.header != "" {
+				c.Request.Header.Set(test.header, test.value)
 			}
-			if test.wantRange != "" && recorder.Header().Get("Content-Range") != test.wantRange {
-				t.Fatalf("Content-Range = %q, want %q", recorder.Header().Get("Content-Range"), test.wantRange)
+			writeDownload(c, rom.DownloadOutput{
+				Filename: "game.rom", MIMEType: "application/octet-stream", SHA256: "abc",
+				Content: rom.StoredContent{ReadSeekCloser: nopSeekCloser{strings.NewReader("abcdef")}, Size: 6},
+			})
+			c.Writer.WriteHeaderNow() // gin flushes body-less statuses when the handler returns
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
 			}
-			if recorder.Header().Get("ETag") != `"abc"` {
+			if test.wantBody != "" && recorder.Body.String() != test.wantBody {
+				t.Fatalf("body = %q, want %q", recorder.Body.String(), test.wantBody)
+			}
+			if got := recorder.Header().Get("Content-Range"); got != test.wantRange {
+				t.Fatalf("Content-Range = %q, want %q", got, test.wantRange)
+			}
+			// net/http strips validators from 416 error responses.
+			if test.wantStatus != http.StatusRequestedRangeNotSatisfiable && recorder.Header().Get("ETag") != `"abc"` {
 				t.Fatalf("ETag = %q", recorder.Header().Get("ETag"))
+			}
+			if served := bodyWasServed(c); served != test.wantServed {
+				t.Fatalf("bodyWasServed = %t, want %t", served, test.wantServed)
 			}
 		})
 	}

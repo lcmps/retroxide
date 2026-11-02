@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/lcmps/retroxide/application/rom"
 )
 
 type Filesystem struct {
@@ -65,40 +66,25 @@ func (filesystem *Filesystem) Read(ctx context.Context, storagePath string) ([]b
 	return content, nil
 }
 
-func (filesystem *Filesystem) Open(ctx context.Context, storagePath string) (io.ReadCloser, error) {
+// Open returns a seekable handle on stored content, suitable for streaming with range support.
+func (filesystem *Filesystem) Open(ctx context.Context, storagePath string) (rom.StoredContent, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return rom.StoredContent{}, err
 	}
 	path, err := filesystem.resolve(storagePath)
 	if err != nil {
-		return nil, err
+		return rom.StoredContent{}, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("opening rom content: %w", err)
+		return rom.StoredContent{}, fmt.Errorf("opening rom content: %w", err)
 	}
-	return file, nil
-}
-
-func (filesystem *Filesystem) LastModified(ctx context.Context, storagePath string) (*uint64, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	path, err := filesystem.resolve(storagePath)
+	info, err := file.Stat()
 	if err != nil {
-		return nil, err
+		_ = file.Close()
+		return rom.StoredContent{}, fmt.Errorf("reading rom metadata: %w", err)
 	}
-	metadata, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading rom metadata: %w", err)
-	}
-	modified := metadata.ModTime().Unix()
-	if modified < 0 {
-		zero := uint64(0)
-		return &zero, nil
-	}
-	modifiedSeconds := uint64(modified)
-	return &modifiedSeconds, nil
+	return rom.StoredContent{ReadSeekCloser: file, Size: info.Size(), ModifiedAt: info.ModTime()}, nil
 }
 
 func (filesystem *Filesystem) Delete(ctx context.Context, storagePath string) error {
@@ -146,3 +132,5 @@ func isContentAddress(value string) bool {
 	}
 	return true
 }
+
+var _ rom.Storage = (*Filesystem)(nil)

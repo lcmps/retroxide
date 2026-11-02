@@ -3,7 +3,6 @@ package rom
 import (
 	"bytes"
 	"context"
-	"io"
 	"testing"
 
 	"github.com/lcmps/retroxide/application/fault"
@@ -105,12 +104,13 @@ func (storage *romTestStorage) Read(_ context.Context, path string) ([]byte, err
 	return append([]byte(nil), storage.files[path]...), nil
 }
 
-func (storage *romTestStorage) Open(_ context.Context, path string) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(storage.files[path])), nil
-}
+type romTestContent struct{ *bytes.Reader }
 
-func (*romTestStorage) LastModified(context.Context, string) (*uint64, error) {
-	return nil, nil
+func (romTestContent) Close() error { return nil }
+
+func (storage *romTestStorage) Open(_ context.Context, path string) (StoredContent, error) {
+	content := storage.files[path]
+	return StoredContent{ReadSeekCloser: romTestContent{bytes.NewReader(content)}, Size: int64(len(content))}, nil
 }
 
 func (storage *romTestStorage) Delete(_ context.Context, path string) error {
