@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"fmt"
+	"github.com/lcmps/retroxide/application/rom"
 	"path/filepath"
 	"testing"
 )
@@ -16,7 +17,7 @@ func BenchmarkListROMsWithFiles(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				rows, err := repositories.ListROMsWithFiles(context.Background(), 50, nil, nil, nil)
+				rows, err := repositories.ListROMsWithFiles(context.Background(), 50, rom.ROMFilter{})
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -29,7 +30,7 @@ func BenchmarkListROMsWithFiles(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				rows, err := repositories.ListROMsWithFiles(context.Background(), 50, nil, &platform, nil)
+				rows, err := repositories.ListROMsWithFiles(context.Background(), 50, rom.ROMFilter{Platform: &platform})
 				if err != nil {
 					b.Fatal(err)
 				}

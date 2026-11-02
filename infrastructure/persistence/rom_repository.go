@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/lcmps/retroxide/application/fault"
+	"github.com/lcmps/retroxide/application/rom"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
 	"gorm.io/gorm"
 )
@@ -47,22 +48,33 @@ func (repositories *Repositories) SaveROM(ctx context.Context, rom romdomain.ROM
 }
 
 // ListROMsWithFiles returns up to limit+1 ROMs ordered by ID, so callers can detect a next page.
-// Nil filters are not applied; uploaderID restricts results to one owner.
-func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit int, afterCursor, platform, uploaderID *string) ([]romdomain.ROMWithFile, error) {
+func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit int, filter rom.ROMFilter) ([]romdomain.ROMWithFile, error) {
 	query := repositories.DB.WithContext(ctx).
 		Table("rom AS r").
 		Joins("JOIN rom_file AS f ON f.id = r.rom_file_id")
-	if uploaderID != nil {
-		query = query.Where("r.uploader_id = ?", *uploaderID)
+	if filter.UploaderID != nil {
+		query = query.Where("r.uploader_id = ?", *filter.UploaderID)
 	}
-	if afterCursor != nil {
-		query = query.Where("r.id > ?", *afterCursor)
+	if filter.AfterCursor != nil {
+		query = query.Where("r.id > ?", *filter.AfterCursor)
 	}
-	if platform != nil && *platform != "" {
+	if filter.Platform != nil && *filter.Platform != "" {
 		// platform_key is the generated, indexed LOWER(platform) column.
-		query = query.Where("r.platform_key = ?", strings.ToLower(*platform))
+		query = query.Where("r.platform_key = ?", strings.ToLower(*filter.Platform))
+	}
+	if filter.Search != nil && strings.TrimSpace(*filter.Search) != "" {
+		pattern := "%" + escapeLike(strings.ToLower(strings.TrimSpace(*filter.Search))) + "%"
+		query = query.Where("(LOWER(r.title) LIKE ? ESCAPE '!' OR r.platform_key LIKE ? ESCAPE '!' OR LOWER(r.id) LIKE ? ESCAPE '!')", pattern, pattern, pattern)
 	}
 	return scanROMsWithFiles(query.Order("r.id ASC").Limit(limit+1), "listing roms")
+}
+
+// likeEscaper escapes LIKE wildcards with '!', which behaves the same in SQLite and MySQL
+// (unlike backslash, which MySQL also treats as a string-literal escape).
+var likeEscaper = strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
+
+func escapeLike(value string) string {
+	return likeEscaper.Replace(value)
 }
 
 // scanROMsWithFiles selects ROM summary columns from a query joining rom AS r and rom_file AS f.

@@ -25,7 +25,7 @@ func (repository *romTestRepository) SaveROM(_ context.Context, rom romdomain.RO
 	return nil
 }
 
-func (*romTestRepository) ListROMsWithFiles(context.Context, int, *string, *string, *string) ([]romdomain.ROMWithFile, error) {
+func (*romTestRepository) ListROMsWithFiles(context.Context, int, ROMFilter) ([]romdomain.ROMWithFile, error) {
 	return nil, nil
 }
 

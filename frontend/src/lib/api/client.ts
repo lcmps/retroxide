@@ -315,10 +315,22 @@ export async function fetchCatalog(locale: Locale): Promise<TranslationCatalog> 
   return parseTranslationCatalog(await requestJson<unknown>(`/i18n/${encodeURIComponent(locale)}`));
 }
 
-export function listRoms(limit = 10, cursor?: string): Promise<RomListResponse> {
+/** Server-side ROM list filters: exact platform and case-insensitive search. */
+export type RomListFilters = {
+  platform?: string;
+  q?: string;
+};
+
+export function listRoms(limit = 10, cursor?: string, filters: RomListFilters = {}): Promise<RomListResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) {
     params.set('cursor', cursor);
+  }
+  if (filters.platform) {
+    params.set('platform', filters.platform);
+  }
+  if (filters.q) {
+    params.set('q', filters.q);
   }
 
   return requestJson<unknown>(`/rom?${params.toString()}`, { withAuth: true }).then(parseRomListResponse);
