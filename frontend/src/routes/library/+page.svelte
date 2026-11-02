@@ -1,0 +1,226 @@
+<script lang="ts">
+	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
+	import { Tooltip } from 'bits-ui';
+	import { fetchRomCover, i18n, listRoms } from '$lib';
+	import type { RomSummary } from '$lib';
+	import { useTranslate } from '$lib/i18n/helpers';
+	import { getErrorMessage } from '$lib/helpers/error';
+	import { onMount } from 'svelte';
+
+	let roms = $state<RomSummary[]>([]);
+	let loading = $state(false);
+	let loadErrorMessage = $state('');
+	let coverPreviews = $state<Record<string, string>>({});
+
+	const t = useTranslate(i18n);
+
+	const selectedPlatform = $derived(page.url.searchParams.get('platform')?.trim() ?? '');
+	const searchQuery = $derived(page.url.searchParams.get('q')?.trim().toLowerCase() ?? '');
+	const pageTitle = $derived(
+		selectedPlatform
+			? formatPlatformName(selectedPlatform)
+			: t('library.title', 'Library')
+	);
+	const filteredRoms = $derived.by(() =>
+		roms.filter((rom) => {
+			const matchesPlatform = !selectedPlatform || rom.platform === selectedPlatform;
+			const matchesQuery =
+				!searchQuery ||
+				rom.title.toLowerCase().includes(searchQuery) ||
+				rom.platform.toLowerCase().includes(searchQuery) ||
+				rom.rom_id.toLowerCase().includes(searchQuery);
+
+			return matchesPlatform && matchesQuery;
+		})
+	);
+
+	function formatPlatformName(platform: string): string {
+		const labels: Record<string, string> = {
+			nes: 'NES',
+			snes: 'SNES',
+			gba: 'Game Boy Advance',
+			gb: 'Game Boy',
+			gbc: 'Game Boy Color',
+			n64: 'Nintendo 64',
+			psx: 'PlayStation'
+		};
+
+		return labels[platform.toLowerCase()] ?? platform;
+	}
+
+	async function loadRoms() {
+		loading = true;
+		loadErrorMessage = '';
+
+		try {
+			roms = await loadAllRoms();
+			await loadCoverPreviews(roms);
+		} catch (error) {
+			loadErrorMessage = getErrorMessage(error, 'library.roms.error', 'Failed to load ROMs', t);
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function loadCoverPreviews(items: RomSummary[]): Promise<void> {
+		for (const url of Object.values(coverPreviews)) URL.revokeObjectURL(url);
+		const previews = await Promise.allSettled(items.filter((rom) => rom.cover_art_url).map(async (rom) => [rom.rom_id, URL.createObjectURL(await fetchRomCover(rom.rom_id))] as const));
+		const successful = previews.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+		coverPreviews = Object.fromEntries(successful);
+	}
+
+	async function loadAllRoms(): Promise<RomSummary[]> {
+		const items: RomSummary[] = [];
+		let cursor: string | undefined;
+
+		while (true) {
+			const response = await listRoms(100, cursor);
+			items.push(...response.item);
+
+			if (!response.next_cursor) {
+				return items;
+			}
+
+			cursor = response.next_cursor;
+		}
+	}
+
+	onMount(() => {
+		void i18n.initialize().then(loadRoms).catch((error: unknown) => {
+			loadErrorMessage = getErrorMessage(error, 'library.roms.error', 'Failed to load ROMs', t);
+		});
+	});
+</script>
+
+<section class="page-shell stack" aria-labelledby="library-title" style="--layout-gap: 2.75rem">
+	<div class="library-heading">
+		<h1 id="library-title">{pageTitle}</h1>
+	</div>
+
+	{#if loading}
+		<p class="library-state">{t('library.roms.loading', 'Loading ROMs...')}</p>
+	{:else if filteredRoms.length === 0}
+		<p class="library-state">{t('library.roms.empty', 'No ROMs matched the current filters.')}</p>
+	{:else}
+		<ul class="rom-gallery" aria-label={t('library.roms.title', 'ROM Catalog')}>
+			{#each filteredRoms as rom (rom.rom_id)}
+				<li>
+					<a class="rom-tile" href={resolve(`/rom/${rom.rom_id}`)} aria-label={rom.title}>
+						<div class="rom-cover" aria-hidden="true">{#if coverPreviews[rom.rom_id]}<img src={coverPreviews[rom.rom_id]} alt="" />{/if}</div>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<span {...props}>{rom.title}</span>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Portal>
+								<Tooltip.Content class="rom-tooltip" sideOffset={6}>
+									<p class="rom-tooltip__title">{rom.title}</p>
+									<p class="rom-tooltip__platform">{formatPlatformName(rom.platform)}</p>
+								</Tooltip.Content>
+							</Tooltip.Portal>
+						</Tooltip.Root>
+					</a>
+				</li>
+			{/each}
+		</ul>
+	{/if}
+
+  {#if loadErrorMessage}
+    <p class="message message--error" role="alert">{loadErrorMessage}</p>
+  {/if}
+</section>
+
+<style>
+	h1 {
+		margin: 0;
+		font-size: 1.5rem;
+		line-height: 1.35;
+	}
+
+	.library-state {
+		margin: -1.75rem 0 0;
+		font-size: 0.6rem;
+		color: var(--pixel-muted);
+	}
+
+	.rom-gallery {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(7.75rem, 1fr));
+		gap: 1.5rem;
+		margin: -1.25rem 0 0;
+		padding: 0;
+		list-style: none;
+		justify-items: start;
+	}
+
+	.rom-tile {
+		display: grid;
+		gap: 0.55rem;
+		width: 7.75rem;
+		color: var(--pixel-text);
+		font-size: 0.5rem;
+		line-height: 1.5;
+	}
+
+	.rom-cover {
+		width: 7.75rem;
+		aspect-ratio: 25 / 36;
+		background: #353535;
+		border-radius: 0.5rem;
+		overflow: hidden;
+	}
+
+	.rom-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+	.rom-tile:hover .rom-cover,
+	.rom-tile:focus-visible .rom-cover {
+		outline: 2px solid var(--pixel-focus);
+		outline-offset: 3px;
+	}
+
+	.rom-tile span {
+		display: block;
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+	}
+
+	:global(.rom-tooltip) {
+		z-index: 30;
+		max-width: 16rem;
+		padding: 0.6rem 0.75rem;
+		background: var(--pixel-panel-strong);
+		border: 2px solid var(--pixel-border-strong);
+		box-shadow: var(--pixel-shadow, 4px 4px 0 rgba(0, 0, 0, 0.4));
+	}
+
+	:global(.rom-tooltip__title) {
+		margin: 0;
+		font-size: 0.55rem;
+		line-height: 1.5;
+		color: var(--pixel-text);
+		word-break: break-word;
+	}
+
+	:global(.rom-tooltip__platform) {
+		margin: 0.4rem 0 0;
+		font-size: 0.5rem;
+		color: var(--pixel-muted);
+	}
+
+	.message {
+		margin: 0;
+		font-size: 0.55rem;
+		color: var(--pixel-danger);
+	}
+
+	@media (max-width: 640px) {
+		h1 {
+			font-size: 1rem;
+		}
+		.rom-gallery { grid-template-columns: repeat(auto-fill, minmax(6.25rem, 1fr)); gap: 1rem; }
+		.rom-tile, .rom-cover { width: 6.25rem; }
+	}
+</style>

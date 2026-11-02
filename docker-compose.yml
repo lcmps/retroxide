@@ -1,0 +1,25 @@
+services:
+  retroxide:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: retroxide-backend:local
+    container_name: retroxide-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      RETROXIDE_ENV: prod
+      RETROXIDE_HOST: 0.0.0.0
+      RETROXIDE_PORT: 3000
+      RETROXIDE_DB_DRIVER: sqlite
+      RETROXIDE_SQLITE_PATH: /app/data/retroxide.sqlite3
+      RETROXIDE_STORAGE_ROOT: /app/storage
+      RETROXIDE_JWT_SECRET: ${RETROXIDE_JWT_SECRET:?Set RETROXIDE_JWT_SECRET to a random value of at least 32 characters}
+    volumes:
+      - retroxide-data:/app/data
+      - retroxide-storage:/app/storage
+
+volumes:
+  retroxide-data:
+  retroxide-storage:
