@@ -11,7 +11,7 @@ import (
 type Repository interface {
 	UpsertROMFile(context.Context, romdomain.ROMFile) (romdomain.ROMFile, error)
 	SaveROM(context.Context, romdomain.ROM) error
-	ListROMsWithFiles(context.Context, int, *string, *string) ([]romdomain.ROMWithFile, error)
+	ListROMsWithFiles(context.Context, int, *string, *string, *string) ([]romdomain.ROMWithFile, error)
 	FindROMByID(context.Context, string) (*romdomain.ROM, error)
 	FindROMFileByID(context.Context, string) (*romdomain.ROMFile, error)
 	FindROMFileBySHA256(context.Context, string) (*romdomain.ROMFile, error)
@@ -65,7 +65,7 @@ type Scraper interface {
 }
 
 type API interface {
-	List(context.Context, int, *string, *string, *bool) (ROMListResponseDTO, error)
+	List(context.Context, identity.Requester, int, *string, *string, *bool) (ROMListResponseDTO, error)
 	Get(context.Context, identity.Requester, string) (ROMDetailDTO, error)
 	Update(context.Context, identity.Requester, string, UpdateROMRequest) (ROMDetailDTO, error)
 	Delete(context.Context, identity.Requester, string) error

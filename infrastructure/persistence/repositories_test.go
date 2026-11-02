@@ -98,12 +98,46 @@ func TestRepositoriesFilterPlatformByCaseInsensitiveExactMatch(t *testing.T) {
 		}
 	}
 	platform := "sNeS"
-	rows, err := repositories.ListROMsWithFiles(ctx, 10, nil, &platform)
+	rows, err := repositories.ListROMsWithFiles(ctx, 10, nil, &platform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 || rows[0].ROM.ID != "rom-1" {
 		t.Fatalf("platform-filtered ROMs = %+v, want only rom-1", rows)
+	}
+}
+
+func TestRepositoriesFilterROMListByUploader(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	for _, row := range []struct{ id, uploader string }{
+		{id: "rom-1", uploader: "user-1"},
+		{id: "rom-2", uploader: "user-2"},
+	} {
+		file := validROMFile("rf-"+row.id, row.id)
+		if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+		if err := repositories.SaveROM(ctx, romdomain.ROM{
+			ID: row.id, ROMFileID: file.ID, UploaderID: row.uploader,
+			Identity: romdomain.ROMIdentity{Title: row.id, Platform: "snes", IdentifiedBy: "test", Confidence: 100},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	uploader := "user-2"
+	rows, err := repositories.ListROMsWithFiles(ctx, 10, nil, nil, &uploader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ROM.ID != "rom-2" {
+		t.Fatalf("uploader-filtered ROMs = %+v, want only rom-2", rows)
+	}
+	all, err := repositories.ListROMsWithFiles(ctx, 10, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("unfiltered ROMs = %d, want 2", len(all))
 	}
 }
 

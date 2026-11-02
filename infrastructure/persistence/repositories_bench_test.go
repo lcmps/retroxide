@@ -16,7 +16,7 @@ func BenchmarkListROMsWithFiles(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				rows, err := repositories.ListROMsWithFiles(context.Background(), 50, nil, nil)
+				rows, err := repositories.ListROMsWithFiles(context.Background(), 50, nil, nil, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -29,7 +29,7 @@ func BenchmarkListROMsWithFiles(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				rows, err := repositories.ListROMsWithFiles(context.Background(), 50, nil, &platform)
+				rows, err := repositories.ListROMsWithFiles(context.Background(), 50, nil, &platform, nil)
 				if err != nil {
 					b.Fatal(err)
 				}

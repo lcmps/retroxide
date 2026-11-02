@@ -180,7 +180,7 @@ func registerRoutes(router *gin.Engine, dependencies Dependencies, options Optio
 			}
 			identified = &parsed
 		}
-		page, err := dependencies.ROMs.List(context.Request.Context(), limit, cursor, platform, identified)
+		page, err := dependencies.ROMs.List(context.Request.Context(), requesterFromContext(context), limit, cursor, platform, identified)
 		if err != nil {
 			writeError(context, err)
 			return
