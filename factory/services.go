@@ -2,6 +2,8 @@ package factory
 
 import (
 	"log/slog"
+	"net/http"
+	"time"
 
 	"github.com/lcmps/retroxide/application/auth"
 	"github.com/lcmps/retroxide/application/libraries"
@@ -11,8 +13,15 @@ import (
 	hashadapter "github.com/lcmps/retroxide/infrastructure/hash"
 	"github.com/lcmps/retroxide/infrastructure/observability"
 	"github.com/lcmps/retroxide/infrastructure/persistence"
+	"github.com/lcmps/retroxide/infrastructure/scraper"
 	"github.com/lcmps/retroxide/infrastructure/storage"
 )
+
+const scraperTimeout = 30 * time.Second
+
+func NewScraper() *scraper.Client {
+	return scraper.NewClient(&http.Client{Timeout: scraperTimeout}, scraper.DefaultEndpoints())
+}
 
 type Services struct {
 	Uploads    *uploads.UploadService
@@ -34,7 +43,7 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 				AllowedExtensions: settings.AllowedUploadExtensions,
 			},
 		),
-		ROMs:       rom.NewService(repositories, storage, audit, nil),
+		ROMs:       rom.NewService(repositories, storage, audit, NewScraper()),
 		Libraries:  libraries.NewService(repositories, repositories),
 		Sessions:   auth.NewSessionService(repositories, hasher, tokens, repositories),
 		Clients:    auth.NewClientService(repositories),

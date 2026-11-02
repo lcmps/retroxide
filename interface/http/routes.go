@@ -267,6 +267,33 @@ func registerRoutes(router *gin.Engine, dependencies Dependencies, options Optio
 		}
 		context.Data(http.StatusOK, contentType, content)
 	})
+	api.POST("/rom/:rom_id/scrape", func(context *gin.Context) {
+		if !requireDependencies(context, dependencies.ROMs) {
+			return
+		}
+		rom, err := dependencies.ROMs.Scrape(context.Request.Context(), requesterFromContext(context), context.Param("rom_id"))
+		if err != nil {
+			writeError(context, err)
+			return
+		}
+		context.JSON(http.StatusOK, rom)
+	})
+	api.GET("/rom/:rom_id/media/:kind", func(context *gin.Context) {
+		if !requireDependencies(context, dependencies.ROMs) {
+			return
+		}
+		content, err := dependencies.ROMs.ReadMedia(context.Request.Context(), requesterFromContext(context), context.Param("rom_id"), context.Param("kind"))
+		if err != nil {
+			writeError(context, err)
+			return
+		}
+		contentType := imageContentType(content)
+		if contentType == "" {
+			writeError(context, fault.NotFound())
+			return
+		}
+		context.Data(http.StatusOK, contentType, content)
+	})
 	api.GET("/rom/:rom_id/download", func(context *gin.Context) {
 		if !requireDependencies(context, dependencies.ROMs) {
 			return
