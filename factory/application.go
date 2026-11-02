@@ -22,12 +22,14 @@ import (
 )
 
 type Application struct {
-	Config     config.Config
-	Database   *gorm.DB
-	Router     http.Handler
-	Logger     *slog.Logger
-	JobQueue   jobs.Queue
-	Identifier jobs.Identifier
+	Config   config.Config
+	Database *gorm.DB
+	Router   http.Handler
+	Logger   *slog.Logger
+	JobQueue jobs.Queue
+	// JobNotifier wakes workers when JobQueue receives a job.
+	JobNotifier *jobs.Notifier
+	Identifier  jobs.Identifier
 }
 
 func NewApplication(ctx context.Context, settings config.Config, logger *slog.Logger) (*Application, error) {
@@ -54,14 +56,16 @@ func assembleApplication(ctx context.Context, settings config.Config, logger *sl
 	if err := seedAdmin(ctx, repositories, hasher, settings.AdminEmail, settings.AdminPassword); err != nil {
 		return fail(err)
 	}
-	services := NewServices(settings, repositories, storage, hasher, tokens, logger)
+	notifier := jobs.NewNotifier()
+	queue := jobs.NewNotifyingQueue(repositories, notifier)
+	services := NewServices(settings, repositories, queue, storage, hasher, tokens, logger)
 	router, err := NewRouter(settings, services, logger)
 	if err != nil {
 		return fail(err)
 	}
 	return &Application{
 		Config: settings, Database: database, Router: router, Logger: logger,
-		JobQueue: repositories, Identifier: services.Identifier,
+		JobQueue: queue, JobNotifier: notifier, Identifier: services.Identifier,
 	}, nil
 }
 

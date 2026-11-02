@@ -130,7 +130,7 @@ func TestRunDrainsClaimedJobOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, 1, queue, workerTestIdentifier{started: started, release: release})
+		done <- Run(ctx, 1, queue, workerTestIdentifier{started: started, release: release}, nil)
 	}()
 
 	select {
@@ -177,7 +177,7 @@ func TestRunProcessesJobsConcurrentlyWithinWorkerLimit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, 2, queue, identifier)
+		done <- Run(ctx, 2, queue, identifier, nil)
 	}()
 	for range 2 {
 		select {
@@ -203,5 +203,88 @@ func TestRunProcessesJobsConcurrentlyWithinWorkerLimit(t *testing.T) {
 	}
 	if queue.claims.Load() != 2 || queue.completed.Load() != 2 {
 		t.Fatalf("claims=%d completions=%d, want 2 each", queue.claims.Load(), queue.completed.Load())
+	}
+}
+
+// wakeTestQueue starts empty and hands out jobs as they are enqueued.
+type wakeTestQueue struct {
+	workerTestQueue
+	mu      sync.Mutex
+	pending []jobsdomain.Job
+	claims  atomic.Int32
+}
+
+func (queue *wakeTestQueue) Enqueue(_ context.Context, payload jobsdomain.Payload) error {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	queue.pending = append(queue.pending, jobsdomain.Job{ID: payload.UploadID, Payload: payload})
+	return nil
+}
+
+func (queue *wakeTestQueue) Claim(context.Context, time.Time, time.Duration) (*jobsdomain.Job, error) {
+	queue.claims.Add(1)
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.pending) == 0 {
+		return nil, nil
+	}
+	job := queue.pending[0]
+	queue.pending = queue.pending[1:]
+	return &job, nil
+}
+
+type recordingIdentifier struct{ identified chan string }
+
+func (identifier recordingIdentifier) Identify(_ context.Context, uploadID, _ string) error {
+	identifier.identified <- uploadID
+	return nil
+}
+
+func TestRunWakesIdleWorkerOnEnqueueAndBacksOffWhileIdle(t *testing.T) {
+	notifier := NewNotifier()
+	inner := &wakeTestQueue{}
+	queue := NewNotifyingQueue(inner, notifier)
+	identifier := recordingIdentifier{identified: make(chan string, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = Run(ctx, 1, queue, identifier, notifier) }()
+
+	// Idle waits grow 200ms, 400ms, 800ms...: after 700ms the worker is mid-way through an 800ms
+	// wait, having claimed only a few times rather than every 200ms forever.
+	time.Sleep(700 * time.Millisecond)
+	if claims := inner.claims.Load(); claims > 4 {
+		t.Fatalf("idle worker claimed %d times in 700ms, want backoff", claims)
+	}
+	enqueuedAt := time.Now()
+	if err := queue.Enqueue(ctx, jobsdomain.Payload{Kind: "identify_rom", UploadID: "upl-1", ROMFileID: "rf-1"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case uploadID := <-identifier.identified:
+		if uploadID != "upl-1" {
+			t.Fatalf("identified %q", uploadID)
+		}
+		if waited := time.Since(enqueuedAt); waited > 300*time.Millisecond {
+			t.Fatalf("job picked up after %v, want an immediate wake-up", waited)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("enqueued job was not processed")
+	}
+}
+
+func TestNotifierCoalescesAndToleratesNil(t *testing.T) {
+	var absent *Notifier
+	absent.Notify() // must not panic
+	if absent.wake() != nil {
+		t.Fatal("nil notifier must never wake")
+	}
+	notifier := NewNotifier()
+	notifier.Notify()
+	notifier.Notify() // coalesces instead of blocking
+	<-notifier.wake()
+	select {
+	case <-notifier.wake():
+		t.Fatal("coalesced notifications delivered twice")
+	default:
 	}
 }
