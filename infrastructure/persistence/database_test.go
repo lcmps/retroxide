@@ -2,8 +2,14 @@ package persistence
 
 import (
 	"context"
-	"github.com/go-sql-driver/mysql"
+	"database/sql"
+	"fmt"
+	"sync"
 	"testing"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/lcmps/retroxide/application/fault"
+	"gorm.io/gorm"
 )
 
 func TestPoolSettings(t *testing.T) {
@@ -14,7 +20,7 @@ func TestPoolSettings(t *testing.T) {
 		wantIdle int
 		wantErr  bool
 	}{
-		{name: "sqlite serializes writes like rust connection mutex", driver: "sqlite", wantOpen: 1, wantIdle: 1},
+		{name: "sqlite pools concurrent WAL readers", driver: "sqlite", wantOpen: 4, wantIdle: 4},
 		{name: "mysql pool is bounded", driver: "mysql", wantOpen: 10, wantIdle: 5},
 		{name: "unknown driver rejected", driver: "postgres", wantErr: true},
 	}
@@ -87,5 +93,71 @@ func TestMySQLURLConvertsToDriverDSN(t *testing.T) {
 	}
 	if parsed.User != "retro" || parsed.Passwd != "secret" || parsed.Addr != "db.example.test:3307" || parsed.DBName != "library" || !parsed.ParseTime {
 		t.Fatalf("parsed DSN = %+v", parsed)
+	}
+}
+
+func TestSQLiteConfiguresEveryPooledConnectionAndQueuesConcurrentWrites(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "sqlite", t.TempDir()+"/pool.sqlite3", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	// Hold several connections at once so the pool must open distinct ones.
+	connections := make([]*sql.Conn, sqliteMaxOpenConns)
+	for i := range connections {
+		if connections[i], err = sqlDB.Conn(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, connection := range connections {
+		var foreignKeys, synchronous int
+		if err := connection.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+			t.Fatal(err)
+		}
+		if err := connection.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); err != nil {
+			t.Fatal(err)
+		}
+		if foreignKeys != 1 || synchronous != 1 {
+			t.Fatalf("connection %d: foreign_keys=%d synchronous=%d, want 1 and 1 (NORMAL)", i, foreignKeys, synchronous)
+		}
+		_ = connection.Close()
+	}
+
+	// Concurrent read-then-write transactions would hit "database is locked" when upgrading
+	// deferred locks; IMMEDIATE transactions queue on busy_timeout instead.
+	repositories := NewRepositories(db)
+	var group sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := range 16 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			errs <- repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				var count int64
+				if err := tx.Model(&LibraryModel{}).Count(&count).Error; err != nil {
+					return err
+				}
+				return tx.Exec("INSERT INTO library (id, user_id, name) VALUES (?, ?, ?)", fmt.Sprintf("lib-%d", i), "user", "name").Error
+			})
+		}()
+	}
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent transaction failed: %v", err)
+		}
+	}
+}
+
+func TestSQLiteDSNRejectsQueryCharacterInPath(t *testing.T) {
+	if _, err := sqliteDSN("/data/odd?.sqlite3"); !fault.IsCode(err, fault.CodeValidation) {
+		t.Fatalf("sqliteDSN error = %v, want validation error", err)
 	}
 }
