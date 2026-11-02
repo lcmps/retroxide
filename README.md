@@ -60,6 +60,8 @@ The backend requires `RETROXIDE_JWT_SECRET` with at least 32 characters, which t
 export RETROXIDE_JWT_SECRET="$(openssl rand -base64 48)"
 ```
 
+Login and token-refresh requests are throttled per client IP. By default the backend ignores `X-Forwarded-For`/`X-Real-IP` and uses the TCP peer address. Behind a reverse proxy, set `RETROXIDE_TRUSTED_PROXIES` to the proxy's addresses (comma-separated IPs or CIDR ranges, for example `127.0.0.1,10.0.0.0/8`) so throttling applies to real clients instead of the proxy.
+
 Run the backend from the repository root:
 
 ```sh

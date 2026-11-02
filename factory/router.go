@@ -31,6 +31,7 @@ func NewRouter(settings config.Config, services *Services, tokens auth.TokenServ
 	}, httpadapter.Options{
 		MaxUploadBytes: settings.MaxUploadBytes,
 		CORSOrigins:    settings.CORSAllowedOrigins,
+		TrustedProxies: settings.TrustedProxies,
 		Frontend:       web.New(),
 	}), nil
 }

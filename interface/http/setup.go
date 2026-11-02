@@ -16,6 +16,7 @@ const setupPath = "/api/v1/setup"
 // NewSetupRouter serves only health, locales, and the setup wizard API until configuration is complete.
 func NewSetupRouter(service setup.Service, locales map[string][]byte, logger *slog.Logger, frontend http.Handler) *gin.Engine {
 	router := gin.New()
+	_ = router.SetTrustedProxies(nil)
 	router.Use(gin.CustomRecovery(func(context *gin.Context, recovered any) {
 		slog.ErrorContext(context.Request.Context(), "http handler panic", "panic", recovered)
 		writeError(context, fault.Internal(errors.New("http handler panic")))
