@@ -7,6 +7,7 @@ import (
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/id"
+	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/domain/identity"
 	librariesdomain "github.com/lcmps/retroxide/domain/libraries"
 )
@@ -21,15 +22,12 @@ func NewService(libraries Repository, roms ROMReader) *Service {
 }
 
 func (service *Service) List(ctx context.Context, requester identity.Requester) ([]LibraryDTO, error) {
-	libraries, err := service.libraries.ListLibrary(ctx)
+	libraries, err := service.libraries.ListLibrary(ctx, ownerFilter(requester))
 	if err != nil {
 		return nil, err
 	}
 	result := make([]LibraryDTO, 0, len(libraries))
 	for _, library := range libraries {
-		if !requester.CanAccess(library.UserID) {
-			continue
-		}
 		result = append(result, LibraryDTO{LibraryID: library.ID, Name: library.Name})
 	}
 	return result, nil
@@ -62,14 +60,20 @@ func (service *Service) Get(ctx context.Context, requester identity.Requester, l
 	if library == nil || !requester.CanAccess(library.UserID) {
 		return LibraryDetailDTO{}, fault.NotFound()
 	}
-	romIDs, err := service.libraries.ListLibraryROMIDs(ctx, library.ID)
+	roms, err := service.libraries.ListLibraryROMs(ctx, library.ID)
 	if err != nil {
 		return LibraryDetailDTO{}, err
 	}
-	if romIDs == nil {
-		romIDs = []string{}
+	detail := LibraryDetailDTO{LibraryID: library.ID, Name: library.Name, ROMIDs: []string{}, Items: []rom.ROMSummaryDTO{}}
+	for _, row := range roms {
+		// Items added before access checks existed may reference ROMs the requester cannot see.
+		if !requester.CanAccess(row.ROM.UploaderID) {
+			continue
+		}
+		detail.ROMIDs = append(detail.ROMIDs, row.ROM.ID)
+		detail.Items = append(detail.Items, rom.Summarize(row))
 	}
-	return LibraryDetailDTO{LibraryID: library.ID, Name: library.Name, ROMIDs: romIDs}, nil
+	return detail, nil
 }
 
 func (service *Service) AddItem(ctx context.Context, requester identity.Requester, libraryID, romID string) error {
@@ -80,11 +84,11 @@ func (service *Service) AddItem(ctx context.Context, requester identity.Requeste
 	if library == nil || !requester.CanAccess(library.UserID) {
 		return fault.NotFound()
 	}
-	exists, err := service.roms.ROMExists(ctx, romID)
+	found, err := service.roms.FindROMByID(ctx, romID)
 	if err != nil {
 		return err
 	}
-	if !exists {
+	if found == nil || !requester.CanAccess(found.UploaderID) {
 		return fault.NotFound()
 	}
 	return service.libraries.AddLibraryItem(ctx, libraryID, romID)
@@ -118,4 +122,12 @@ func ValidateName(name string) error {
 		return fault.Validation(fmt.Sprintf("library name exceeds %d characters", MaxNameLength))
 	}
 	return nil
+}
+
+// ownerFilter limits listings to the requester's own libraries unless they have broad access.
+func ownerFilter(requester identity.Requester) *string {
+	if requester.HasBroadAccess() {
+		return nil
+	}
+	return &requester.UserID
 }

@@ -158,9 +158,9 @@ func TestRepositoriesLibraryMembershipIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	romIDs, err := repositories.ListLibraryROMIDs(ctx, "lib-1")
-	if err != nil || len(romIDs) != 1 || romIDs[0] != "rom-1" {
-		t.Fatalf("library ROM IDs = %v, %v, want [rom-1]", romIDs, err)
+	roms, err := repositories.ListLibraryROMs(ctx, "lib-1")
+	if err != nil || len(roms) != 1 || roms[0].ROM.ID != "rom-1" || roms[0].SHA256 != file.Hash.SHA256 {
+		t.Fatalf("library ROMs = %+v, %v, want rom-1 with its hash", roms, err)
 	}
 	removed, err := repositories.RemoveLibraryItem(ctx, "lib-1", "rom-1")
 	if err != nil || !removed {
@@ -170,9 +170,9 @@ func TestRepositoriesLibraryMembershipIsIdempotent(t *testing.T) {
 	if err != nil || removed {
 		t.Fatalf("second removal = %t, %v, want false", removed, err)
 	}
-	romIDs, err = repositories.ListLibraryROMIDs(ctx, "lib-1")
-	if err != nil || len(romIDs) != 0 {
-		t.Fatalf("ROM IDs after removal = %v, %v, want empty", romIDs, err)
+	roms, err = repositories.ListLibraryROMs(ctx, "lib-1")
+	if err != nil || len(roms) != 0 {
+		t.Fatalf("ROMs after removal = %+v, %v, want empty", roms, err)
 	}
 }
 
@@ -244,5 +244,26 @@ func TestRepositoriesIncrementTokenVersionAtomicallyAndPersistIt(t *testing.T) {
 	}
 	if err := repositories.IncrementTokenVersion(ctx, "missing"); !fault.IsCode(err, fault.CodeNotFound) {
 		t.Fatalf("increment for unknown user = %v, want not found", err)
+	}
+}
+
+func TestRepositoriesListLibraryFiltersByOwnerInSQL(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	for _, library := range []librariesdomain.Library{
+		{ID: "lib-1", UserID: "user-1", Name: "One"},
+		{ID: "lib-2", UserID: "user-2", Name: "Two"},
+	} {
+		if err := repositories.SaveLibrary(ctx, library); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner := "user-2"
+	owned, err := repositories.ListLibrary(ctx, &owner)
+	if err != nil || len(owned) != 1 || owned[0].ID != "lib-2" {
+		t.Fatalf("owner-filtered libraries = %+v, %v, want only lib-2", owned, err)
+	}
+	all, err := repositories.ListLibrary(ctx, nil)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("unfiltered libraries = %+v, %v, want both", all, err)
 	}
 }

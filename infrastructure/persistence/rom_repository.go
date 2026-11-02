@@ -8,6 +8,7 @@ import (
 
 	"github.com/lcmps/retroxide/application/fault"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
+	"gorm.io/gorm"
 )
 
 // UpsertROMFile inserts romFile, reporting an already-exists conflict when identical content is stored.
@@ -50,7 +51,6 @@ func (repositories *Repositories) SaveROM(ctx context.Context, rom romdomain.ROM
 func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit int, afterCursor, platform, uploaderID *string) ([]romdomain.ROMWithFile, error) {
 	query := repositories.DB.WithContext(ctx).
 		Table("rom AS r").
-		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, f.sha256").
 		Joins("JOIN rom_file AS f ON f.id = r.rom_file_id")
 	if uploaderID != nil {
 		query = query.Where("r.uploader_id = ?", *uploaderID)
@@ -61,12 +61,20 @@ func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit i
 	if platform != nil && *platform != "" {
 		query = query.Where("LOWER(r.platform) = ?", strings.ToLower(*platform))
 	}
+	return scanROMsWithFiles(query.Order("r.id ASC").Limit(limit+1), "listing roms")
+}
+
+// scanROMsWithFiles selects ROM summary columns from a query joining rom AS r and rom_file AS f.
+func scanROMsWithFiles(query *gorm.DB, operation string) ([]romdomain.ROMWithFile, error) {
 	var rows []struct {
 		ROMModel
 		SHA256 string `gorm:"column:sha256"`
 	}
-	if err := query.Order("r.id ASC").Limit(limit + 1).Scan(&rows).Error; err != nil {
-		return nil, databaseError("listing roms", err)
+	err := query.
+		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, f.sha256").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, databaseError(operation, err)
 	}
 	result := make([]romdomain.ROMWithFile, 0, len(rows))
 	for _, row := range rows {
@@ -78,14 +86,6 @@ func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit i
 func (repositories *Repositories) FindROMByID(ctx context.Context, romID string) (*romdomain.ROM, error) {
 	model, err := takeOne[ROMModel](repositories.DB.WithContext(ctx).Where("id = ?", romID), "finding rom")
 	return mapOptional(model, err, infallible(romEntity))
-}
-
-func (repositories *Repositories) ROMExists(ctx context.Context, romID string) (bool, error) {
-	var count int64
-	if err := repositories.DB.WithContext(ctx).Model(&ROMModel{}).Where("id = ?", romID).Count(&count).Error; err != nil {
-		return false, databaseError("checking rom existence", err)
-	}
-	return count != 0, nil
 }
 
 func (repositories *Repositories) FindROMFileByID(ctx context.Context, romFileID string) (*romdomain.ROMFile, error) {

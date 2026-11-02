@@ -4,6 +4,7 @@ import (
 	"context"
 
 	librariesdomain "github.com/lcmps/retroxide/domain/libraries"
+	romdomain "github.com/lcmps/retroxide/domain/rom"
 	"gorm.io/gorm/clause"
 )
 
@@ -18,9 +19,13 @@ func (repositories *Repositories) SaveLibrary(ctx context.Context, library libra
 	return nil
 }
 
-func (repositories *Repositories) ListLibrary(ctx context.Context) ([]librariesdomain.Library, error) {
+func (repositories *Repositories) ListLibrary(ctx context.Context, ownerID *string) ([]librariesdomain.Library, error) {
+	query := repositories.DB.WithContext(ctx)
+	if ownerID != nil {
+		query = query.Where("user_id = ?", *ownerID)
+	}
 	var models []LibraryModel
-	if err := repositories.DB.WithContext(ctx).Order("id ASC").Find(&models).Error; err != nil {
+	if err := query.Order("id ASC").Find(&models).Error; err != nil {
 		return nil, databaseError("listing libraries", err)
 	}
 	libraries := make([]librariesdomain.Library, 0, len(models))
@@ -35,13 +40,14 @@ func (repositories *Repositories) FindLibraryByID(ctx context.Context, libraryID
 	return mapOptional(model, err, infallible(libraryEntity))
 }
 
-func (repositories *Repositories) ListLibraryROMIDs(ctx context.Context, libraryID string) ([]string, error) {
-	var romIDs []string
-	if err := repositories.DB.WithContext(ctx).Model(&LibraryItemModel{}).
-		Where("library_id = ?", libraryID).Order("rom_id ASC").Pluck("rom_id", &romIDs).Error; err != nil {
-		return nil, databaseError("listing library ROMs", err)
-	}
-	return romIDs, nil
+func (repositories *Repositories) ListLibraryROMs(ctx context.Context, libraryID string) ([]romdomain.ROMWithFile, error) {
+	query := repositories.DB.WithContext(ctx).
+		Table("library_item AS i").
+		Joins("JOIN rom AS r ON r.id = i.rom_id").
+		Joins("JOIN rom_file AS f ON f.id = r.rom_file_id").
+		Where("i.library_id = ?", libraryID).
+		Order("r.id ASC")
+	return scanROMsWithFiles(query, "listing library ROMs")
 }
 
 // AddLibraryItem adds romID to the library; adding an existing item is a no-op.
