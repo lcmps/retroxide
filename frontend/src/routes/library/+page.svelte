@@ -2,7 +2,8 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { Tooltip } from 'bits-ui';
-	import { fetchRomCover, i18n, listRoms } from '#lib';
+	import RomCover from '#lib/components/RomCover.svelte';
+	import { i18n, listRoms } from '#lib';
 	import type { RomSummary } from '#lib';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { getErrorMessage } from '#lib/helpers/error.js';
@@ -11,7 +12,6 @@
 	let roms = $state<RomSummary[]>([]);
 	let loading = $state(false);
 	let loadErrorMessage = $state('');
-	let coverPreviews = $state<Record<string, string>>({});
 
 	const t = useTranslate(i18n);
 
@@ -55,19 +55,11 @@
 
 		try {
 			roms = await loadAllRoms();
-			await loadCoverPreviews(roms);
 		} catch (error) {
 			loadErrorMessage = getErrorMessage(error, 'library.roms.error', 'Failed to load ROMs', t);
 		} finally {
 			loading = false;
 		}
-	}
-
-	async function loadCoverPreviews(items: RomSummary[]): Promise<void> {
-		for (const url of Object.values(coverPreviews)) URL.revokeObjectURL(url);
-		const previews = await Promise.allSettled(items.filter((rom) => rom.cover_art_url).map(async (rom) => [rom.rom_id, URL.createObjectURL(await fetchRomCover(rom.rom_id))] as const));
-		const successful = previews.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
-		coverPreviews = Object.fromEntries(successful);
 	}
 
 	async function loadAllRoms(): Promise<RomSummary[]> {
@@ -107,7 +99,7 @@
 			{#each filteredRoms as rom (rom.rom_id)}
 				<li>
 					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={rom.title}>
-						<div class="rom-cover" aria-hidden="true">{#if coverPreviews[rom.rom_id]}<img src={coverPreviews[rom.rom_id]} alt="" />{/if}</div>
+						<div class="rom-cover" aria-hidden="true"><RomCover romId={rom.rom_id} coverArtUrl={rom.cover_art_url} /></div>
 						<Tooltip.Root>
 							<Tooltip.Trigger>
 								{#snippet child({ props })}
@@ -172,7 +164,6 @@
 		overflow: hidden;
 	}
 
-	.rom-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
 
 	.rom-tile:hover .rom-cover,
 	.rom-tile:focus-visible .rom-cover {

@@ -2,6 +2,7 @@ package rom
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/lcmps/retroxide/application/fault"
@@ -62,7 +63,7 @@ func TestScrapeFillsFilenameInferredROM(t *testing.T) {
 	if detail.Title != "Super Mario World" || *detail.Publisher != "Nintendo" || *detail.ReleaseYear != "1991" || *detail.Region != "USA" || *detail.Description != "Dinosaur Land." {
 		t.Fatalf("detail = %+v", detail)
 	}
-	if detail.CoverArtURL == nil || *detail.TitleScreenURL != "/api/v1/rom/rom-1/media/title_screen" || *detail.ScreenshotURL != "/api/v1/rom/rom-1/media/screenshot" {
+	if detail.CoverArtURL == nil || !strings.HasPrefix(*detail.TitleScreenURL, "/api/v1/rom/rom-1/media/title_screen?v=") || !strings.HasPrefix(*detail.ScreenshotURL, "/api/v1/rom/rom-1/media/screenshot?v=") {
 		t.Fatalf("media urls = %v %v %v", detail.CoverArtURL, detail.TitleScreenURL, detail.ScreenshotURL)
 	}
 	saved := repository.roms["rom-1"].Identity

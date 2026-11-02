@@ -1,6 +1,8 @@
 package http
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"strconv"
@@ -152,6 +154,10 @@ func readCoverUpload(c *gin.Context) ([]byte, error) {
 }
 
 // serveImage writes stored image bytes with their sniffed type; unrecognized content is treated as missing.
+//
+// Responses carry a content ETag. Requests whose URL names the image's content version (see
+// rom.ImageVersionParam) are cacheable indefinitely, since a changed image gets a new URL;
+// unversioned requests must revalidate, which costs only a 304 when unchanged.
 func serveImage(c *gin.Context, content []byte, err error) {
 	if err != nil {
 		writeError(c, err)
@@ -160,6 +166,19 @@ func serveImage(c *gin.Context, content []byte, err error) {
 	contentType := imageContentType(content)
 	if contentType == "" {
 		writeError(c, fault.NotFound())
+		return
+	}
+	digest := sha256.Sum256(content)
+	contentHash := hex.EncodeToString(digest[:])
+	etag := `"` + contentHash + `"`
+	c.Header("ETag", etag)
+	if rom.ImageVersionMatches(c.Query(rom.ImageVersionParam), contentHash) {
+		c.Header("Cache-Control", "private, max-age=31536000, immutable")
+	} else {
+		c.Header("Cache-Control", "private, no-cache")
+	}
+	if c.GetHeader("If-None-Match") == etag {
+		c.Status(http.StatusNotModified)
 		return
 	}
 	c.Data(http.StatusOK, contentType, content)

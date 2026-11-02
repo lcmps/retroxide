@@ -3,6 +3,8 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"math"
@@ -377,5 +379,34 @@ func TestRouterStreamsMultipartUploads(t *testing.T) {
 	oversized := strings.Repeat("x", 16+multipartOverhead)
 	if response, _ := send(16, "file", oversized); !strings.Contains(response.Body.String(), `"code":"upload_too_large"`) {
 		t.Fatalf("oversized upload = %d %s, want upload_too_large", response.Code, response.Body.String())
+	}
+}
+
+func TestServeImageCachesVersionedURLsAndRevalidatesOthers(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\n" + strings.Repeat("p", 16))
+	digest := sha256.Sum256(png)
+	contentHash := hex.EncodeToString(digest[:])
+	serve := func(target, ifNoneMatch string) *httptest.ResponseRecorder {
+		gin.SetMode(gin.TestMode)
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, target, nil)
+		if ifNoneMatch != "" {
+			c.Request.Header.Set("If-None-Match", ifNoneMatch)
+		}
+		serveImage(c, png, nil)
+		c.Writer.WriteHeaderNow()
+		return recorder
+	}
+
+	versioned := serve("/cover?v="+contentHash[:16], "")
+	if versioned.Code != http.StatusOK || versioned.Header().Get("Cache-Control") != "private, max-age=31536000, immutable" {
+		t.Fatalf("versioned = %d %q", versioned.Code, versioned.Header().Get("Cache-Control"))
+	}
+	if stale := serve("/cover?v=0000000000000000", ""); stale.Header().Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("mismatched version Cache-Control = %q, want revalidation", stale.Header().Get("Cache-Control"))
+	}
+	if unchanged := serve("/cover", `"`+contentHash+`"`); unchanged.Code != http.StatusNotModified || unchanged.Body.Len() != 0 {
+		t.Fatalf("revalidation = %d with %d body bytes, want empty 304", unchanged.Code, unchanged.Body.Len())
 	}
 }

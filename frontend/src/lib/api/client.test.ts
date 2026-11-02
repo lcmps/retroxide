@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$app/env', () => ({ browser: true }));
 
-import { downloadRom, getRom, hasStoredSession, logoutSession, persistStoredSession, uploadRom } from './client';
+import { downloadRom, fetchRomCover, getRom, hasStoredSession, logoutSession, persistStoredSession, uploadRom } from './client';
 
 function jsonResponse(payload: unknown, status = 200): Response {
 	return new Response(JSON.stringify(payload), {
@@ -78,6 +78,16 @@ describe('authenticated API requests', () => {
 		expect(refreshCalls).toBe(1);
 		expect(downloaded.filename).toBe('game.rom');
 		expect(await downloaded.blob.text()).toBe('rom bytes');
+	});
+
+	it('keeps the cover content version so the HTTP cache can serve it', async () => {
+		persistStoredSession({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 });
+		const fetchMock = vi.fn<typeof fetch>(async () => new Response('png'));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await fetchRomCover('rom-1', '/api/v1/rom/rom-1/cover?v=0123456789abcdef');
+
+		expect(fetchMock).toHaveBeenCalledWith('/api/v1/rom/rom-1/cover?v=0123456789abcdef', expect.anything());
 	});
 
 	it('revokes the server session and always clears local credentials', async () => {
