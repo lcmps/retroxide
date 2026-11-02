@@ -89,6 +89,7 @@ type UserModel struct {
 	Email        string `gorm:"column:email;not null;uniqueIndex;size:255"`
 	PasswordHash string `gorm:"column:password_hash;not null;size:255"`
 	Role         string `gorm:"column:role;not null;size:32"`
+	TokenVersion uint64 `gorm:"column:token_version;not null;default:0"`
 }
 
 func (UserModel) TableName() string { return "user" }

@@ -40,15 +40,17 @@ type jwtHeader struct {
 }
 
 type jwtClaims struct {
-	Subject  string  `json:"sub"`
-	Role     string  `json:"role"`
-	Kind     string  `json:"kind"`
-	Expires  uint64  `json:"exp"`
-	IssuedAt uint64  `json:"iat"`
-	JTI      *string `json:"jti,omitempty"`
+	Subject  string `json:"sub"`
+	Role     string `json:"role"`
+	Kind     string `json:"kind"`
+	Expires  uint64 `json:"exp"`
+	IssuedAt uint64 `json:"iat"`
+	// Version is the user's token version at issue time; tokens minted before versioning decode as 0.
+	Version uint64  `json:"ver"`
+	JTI     *string `json:"jti,omitempty"`
 }
 
-func (service *JWTService) Issue(userID, role string) (authfeature.TokenPair, error) {
+func (service *JWTService) Issue(userID, role string, tokenVersion uint64) (authfeature.TokenPair, error) {
 	now := service.now().Unix()
 	if now < 0 {
 		return authfeature.TokenPair{}, errors.New("system time predates unix epoch")
@@ -63,14 +65,14 @@ func (service *JWTService) Issue(userID, role string) (authfeature.TokenPair, er
 	}
 	refreshJTI := hex.EncodeToString(jtiBytes)
 	accessToken, err := service.sign(jwtClaims{
-		Subject: userID, Role: role, Kind: "access",
+		Subject: userID, Role: role, Kind: "access", Version: tokenVersion,
 		Expires: nowSeconds + service.accessExpirySecs, IssuedAt: nowSeconds,
 	})
 	if err != nil {
 		return authfeature.TokenPair{}, fmt.Errorf("signing access token: %w", err)
 	}
 	refreshToken, err := service.sign(jwtClaims{
-		Subject: userID, Role: role, Kind: "refresh",
+		Subject: userID, Role: role, Kind: "refresh", Version: tokenVersion,
 		Expires: nowSeconds + service.refreshExpirySecs, IssuedAt: nowSeconds, JTI: &refreshJTI,
 	})
 	if err != nil {
@@ -127,7 +129,7 @@ func (service *JWTService) verify(token, expectedKind string) (authfeature.Acces
 	if now < 0 || (uint64(now) > claims.Expires && uint64(now)-claims.Expires > uint64(jwtExpiryLeeway/time.Second)) {
 		return authfeature.AccessClaims{}, fault.Unauthorized()
 	}
-	return authfeature.AccessClaims{UserID: claims.Subject, Role: claims.Role, JTI: claims.JTI}, nil
+	return authfeature.AccessClaims{UserID: claims.Subject, Role: claims.Role, TokenVersion: claims.Version, JTI: claims.JTI}, nil
 }
 
 func decodeJWTPart(encoded string, target any) error {

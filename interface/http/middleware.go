@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/lcmps/retroxide/application/auth"
+	"github.com/lcmps/retroxide/application/fault"
 )
 
 const (
@@ -126,7 +127,7 @@ var publicRoutes = map[string]map[string]struct{}{
 
 // authMiddleware requires a valid bearer token on every non-public API path and stores the
 // resolved requester for handlers.
-func authMiddleware(tokens auth.TokenService, clients auth.ClientRepository) gin.HandlerFunc {
+func authMiddleware(authenticator Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		method, path := c.Request.Method, c.Request.URL.Path
 		if _, ok := publicRoutes[method][path]; ok || isPublicPath(method, path) {
@@ -134,13 +135,18 @@ func authMiddleware(tokens auth.TokenService, clients auth.ClientRepository) gin
 			return
 		}
 		token, ok := auth.ExtractBearerToken(c.GetHeader("Authorization"))
-		if !ok || tokens == nil || clients == nil {
+		if !ok || authenticator == nil {
 			abortUnauthorized(c)
 			return
 		}
-		requester, err := auth.ResolvePrincipal(c.Request.Context(), token, tokens, clients)
-		if err != nil {
+		requester, err := authenticator.Authenticate(c.Request.Context(), token)
+		switch {
+		case fault.IsCode(err, fault.CodeUnauthorized):
 			abortUnauthorized(c)
+			return
+		case err != nil:
+			// Infrastructure failures (e.g. the database being down) are not the client's fault.
+			writeError(c, err)
 			return
 		}
 		c.Set(principalKey, requester)

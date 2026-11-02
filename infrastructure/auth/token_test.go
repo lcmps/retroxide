@@ -11,7 +11,7 @@ func TestJWTServiceIssuesCompatibleAccessAndRefreshTokens(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	service.now = func() time.Time { return now }
 
-	pair, err := service.Issue("user-1", "admin")
+	pair, err := service.Issue("user-1", "admin", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,11 +38,11 @@ func TestJWTServiceIssuesCompatibleAccessAndRefreshTokens(t *testing.T) {
 		t.Fatalf("refresh claims = %#v pair=%+v", refreshClaims, pair)
 	}
 	verifiedAccess, err := service.VerifyAccess(pair.AccessToken)
-	if err != nil || verifiedAccess.UserID != "user-1" || verifiedAccess.JTI != nil {
+	if err != nil || verifiedAccess.UserID != "user-1" || verifiedAccess.TokenVersion != 7 || verifiedAccess.JTI != nil {
 		t.Fatalf("VerifyAccess() = %+v, %v", verifiedAccess, err)
 	}
 	verifiedRefresh, err := service.VerifyRefresh(pair.RefreshToken)
-	if err != nil || verifiedRefresh.JTI == nil || *verifiedRefresh.JTI != pair.RefreshJTI {
+	if err != nil || verifiedRefresh.TokenVersion != 7 || verifiedRefresh.JTI == nil || *verifiedRefresh.JTI != pair.RefreshJTI {
 		t.Fatalf("VerifyRefresh() = %+v, %v", verifiedRefresh, err)
 	}
 }
@@ -51,7 +51,7 @@ func TestJWTServiceRejectsWrongKindTamperingAndExpiredBeyondLeeway(t *testing.T)
 	service := NewJWTService("01234567890123456789012345678901", 10, 20)
 	now := time.Unix(1_700_000_000, 0).UTC()
 	service.now = func() time.Time { return now }
-	pair, err := service.Issue("user-1", "user")
+	pair, err := service.Issue("user-1", "user", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,32 +13,20 @@ import (
 	"github.com/lcmps/retroxide/application/auth"
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
-	authdomain "github.com/lcmps/retroxide/domain/auth"
 	"github.com/lcmps/retroxide/domain/identity"
 )
 
-type routerTestTokens struct{}
-
-func (routerTestTokens) Issue(string, string) (auth.TokenPair, error) {
-	return auth.TokenPair{}, errors.New("unexpected issue")
-}
-func (routerTestTokens) VerifyAccess(string) (auth.AccessClaims, error) {
-	return auth.AccessClaims{}, fault.Unauthorized()
-}
-func (routerTestTokens) VerifyRefresh(string) (auth.AccessClaims, error) {
-	return auth.AccessClaims{}, fault.Unauthorized()
+// routerTestAuthenticator resolves every token to requester, or fails with err.
+type routerTestAuthenticator struct {
+	requester identity.Requester
+	err       error
 }
 
-type routerTestClients struct{}
+func (authenticator routerTestAuthenticator) Authenticate(context.Context, string) (identity.Requester, error) {
+	return authenticator.requester, authenticator.err
+}
 
-func (routerTestClients) FindByTokenHash(context.Context, string) (*authdomain.Client, error) {
-	return nil, nil
-}
-func (routerTestClients) FindByUserID(context.Context, string) ([]authdomain.Client, error) {
-	return nil, nil
-}
-func (routerTestClients) SaveClient(context.Context, authdomain.Client) error { return nil }
-func (routerTestClients) DeleteClient(context.Context, string) error          { return nil }
+var rejectingAuthenticator = routerTestAuthenticator{err: fault.Unauthorized()}
 
 type routerTestSessions struct{}
 
@@ -72,7 +60,7 @@ func TestRouterHealthAndRequestID(t *testing.T) {
 
 func TestRouterProtectsROMRoutesWithStandardUnauthorizedResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := NewRouter(Dependencies{Tokens: routerTestTokens{}, ClientRepo: routerTestClients{}}, Options{})
+	router := NewRouter(Dependencies{Authenticator: rejectingAuthenticator}, Options{})
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/rom", nil)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -92,7 +80,7 @@ func TestRouterProtectsROMRoutesWithStandardUnauthorizedResponse(t *testing.T) {
 
 func TestRouterAllowsPublicSessionPathPastAuthMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := NewRouter(Dependencies{Tokens: routerTestTokens{}, ClientRepo: routerTestClients{}}, Options{})
+	router := NewRouter(Dependencies{Authenticator: rejectingAuthenticator}, Options{})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/session", nil)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -311,5 +299,32 @@ func TestRequestBodyLimitSaturates(t *testing.T) {
 	}
 	if got := requestBodyLimit(math.MaxInt64); got != math.MaxInt64 {
 		t.Fatalf("saturated body limit = %d, want MaxInt64", got)
+	}
+}
+
+func TestRouterAuthenticatesBearerTokenForProtectedRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(Dependencies{
+		Sessions:      routerTestSessions{},
+		Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: "user-1", Role: identity.RoleUser}},
+	}, Options{})
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/session", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("logout with valid token = %d %s, want 204", response.Code, response.Body.String())
+	}
+}
+
+func TestRouterReportsAuthenticatorFailuresAsServerErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(Dependencies{Authenticator: routerTestAuthenticator{err: fault.Internal(errors.New("database offline"))}}, Options{})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/rom", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("authenticator failure = %d %s, want 500 rather than a misleading 401", response.Code, response.Body.String())
 	}
 }

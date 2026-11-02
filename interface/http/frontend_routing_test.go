@@ -29,7 +29,7 @@ func request(router http.Handler, method, target string) *httptest.ResponseRecor
 
 func TestRouterServesFrontendOutsideAPIWithoutAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := NewRouter(Dependencies{Tokens: routerTestTokens{}, ClientRepo: routerTestClients{}}, Options{Frontend: frontendStub})
+	router := NewRouter(Dependencies{Authenticator: rejectingAuthenticator}, Options{Frontend: frontendStub})
 
 	for _, target := range []string{"/", "/library", "/rom/rom_1", "/_app/immutable/app.js"} {
 		if response := request(router, http.MethodGet, target); response.Code != http.StatusOK || response.Body.String() != "frontend" {

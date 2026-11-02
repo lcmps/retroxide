@@ -56,11 +56,7 @@ func (service *SessionService) Login(ctx context.Context, input LoginRequest) (S
 	if !valid {
 		return SessionResponse{}, fault.Unauthorized()
 	}
-	role, err := roleString(user.Role)
-	if err != nil {
-		return SessionResponse{}, err
-	}
-	return service.issueSession(ctx, user.ID, role)
+	return service.issueSession(ctx, *user)
 }
 
 func (service *SessionService) Refresh(ctx context.Context, refreshToken string) (SessionResponse, error) {
@@ -86,7 +82,8 @@ func (service *SessionService) Refresh(ctx context.Context, refreshToken string)
 		return SessionResponse{}, fault.Unauthorized()
 	}
 	if record.Revoked {
-		if err := service.refreshes.RevokeAllForUser(ctx, record.UserID); err != nil {
+		// A consumed refresh token was replayed, so the session may be stolen: end every session.
+		if err := service.endAllSessions(ctx, record.UserID); err != nil {
 			return SessionResponse{}, err
 		}
 		return SessionResponse{}, fault.Unauthorized()
@@ -95,18 +92,24 @@ func (service *SessionService) Refresh(ctx context.Context, refreshToken string)
 	if err != nil {
 		return SessionResponse{}, err
 	}
-	if user == nil {
+	if user == nil || user.TokenVersion != claims.TokenVersion {
 		return SessionResponse{}, fault.Unauthorized()
 	}
-	role, err := roleString(user.Role)
-	if err != nil {
-		return SessionResponse{}, err
-	}
-	return service.rotateSessionAt(ctx, user.ID, role, *claims.JTI, now)
+	return service.rotateSession(ctx, *user, *claims.JTI, now)
 }
 
+// Logout ends every session of the requester: outstanding access tokens stop working immediately
+// and refresh tokens can no longer be exchanged.
 func (service *SessionService) Logout(ctx context.Context, requester identity.Requester) error {
-	return service.refreshes.RevokeAllForUser(ctx, requester.UserID)
+	return service.endAllSessions(ctx, requester.UserID)
+}
+
+func (service *SessionService) endAllSessions(ctx context.Context, userID string) error {
+	// Bump the version first so access tokens die even if revoking refresh tokens fails.
+	if err := service.users.IncrementTokenVersion(ctx, userID); err != nil {
+		return err
+	}
+	return service.refreshes.RevokeAllForUser(ctx, userID)
 }
 
 func (service *SessionService) dummyPasswordHash() (string, error) {
@@ -116,35 +119,31 @@ func (service *SessionService) dummyPasswordHash() (string, error) {
 	return service.dummyHash, service.dummyHashErr
 }
 
-func (service *SessionService) issueSession(ctx context.Context, userID, role string) (SessionResponse, error) {
+func (service *SessionService) issueSession(ctx context.Context, user authdomain.User) (SessionResponse, error) {
 	now, err := unixTimeNow()
 	if err != nil {
 		return SessionResponse{}, fault.Internal(err)
 	}
-	return service.issueSessionAt(ctx, userID, role, now)
-}
-
-func (service *SessionService) issueSessionAt(ctx context.Context, userID, role string, now uint64) (SessionResponse, error) {
-	tokens, err := service.tokens.Issue(userID, role)
+	tokens, err := service.issueTokens(user)
 	if err != nil {
 		return SessionResponse{}, err
 	}
-	replacement, err := refreshTokenRecord(userID, tokens, now)
+	record, err := refreshTokenRecord(user.ID, tokens, now)
 	if err != nil {
 		return SessionResponse{}, err
 	}
-	if err := service.refreshes.Store(ctx, replacement); err != nil {
+	if err := service.refreshes.Store(ctx, record); err != nil {
 		return SessionResponse{}, err
 	}
 	return sessionResponse(tokens), nil
 }
 
-func (service *SessionService) rotateSessionAt(ctx context.Context, userID, role, oldJTI string, now uint64) (SessionResponse, error) {
-	tokens, err := service.tokens.Issue(userID, role)
+func (service *SessionService) rotateSession(ctx context.Context, user authdomain.User, oldJTI string, now uint64) (SessionResponse, error) {
+	tokens, err := service.issueTokens(user)
 	if err != nil {
 		return SessionResponse{}, err
 	}
-	replacement, err := refreshTokenRecord(userID, tokens, now)
+	replacement, err := refreshTokenRecord(user.ID, tokens, now)
 	if err != nil {
 		return SessionResponse{}, err
 	}
@@ -156,6 +155,14 @@ func (service *SessionService) rotateSessionAt(ctx context.Context, userID, role
 		return SessionResponse{}, fault.Unauthorized()
 	}
 	return sessionResponse(tokens), nil
+}
+
+func (service *SessionService) issueTokens(user authdomain.User) (TokenPair, error) {
+	role, err := roleString(user.Role)
+	if err != nil {
+		return TokenPair{}, err
+	}
+	return service.tokens.Issue(user.ID, role, user.TokenVersion)
 }
 
 func refreshTokenRecord(userID string, tokens TokenPair, now uint64) (authdomain.RefreshToken, error) {

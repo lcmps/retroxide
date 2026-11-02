@@ -55,7 +55,7 @@ func assembleApplication(ctx context.Context, settings config.Config, logger *sl
 		return fail(err)
 	}
 	services := NewServices(settings, repositories, storage, hasher, tokens, logger)
-	router, err := NewRouter(settings, services, tokens, repositories, logger)
+	router, err := NewRouter(settings, services, logger)
 	if err != nil {
 		return fail(err)
 	}
