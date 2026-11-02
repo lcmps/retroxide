@@ -74,10 +74,11 @@ export type UpdateRomRequest = {
   version: string | null;
 };
 
-export type DownloadedRom = {
-  blob: Blob;
+/** A short-lived URL the browser can open to stream a ROM download without a bearer token. */
+export type DownloadLink = {
+  url: string;
   filename: string;
-  contentType: string;
+  expiresIn: number;
 };
 
 export type DatabaseDriver = 'sqlite' | 'mysql';

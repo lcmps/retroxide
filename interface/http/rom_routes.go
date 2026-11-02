@@ -5,12 +5,16 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
+	"github.com/lcmps/retroxide/domain/identity"
 )
 
 const (
@@ -18,12 +22,17 @@ const (
 	defaultROMPageSize = 50
 )
 
+// downloadLinkPath serves downloads authorized by a signed link token rather than a bearer token.
+const downloadLinkPath = "/api/v1/download"
+
 type romHandler struct {
-	roms rom.API
+	roms  rom.API
+	links DownloadLinks
 }
 
-func registerROMRoutes(api *gin.RouterGroup, roms rom.API) {
-	handler := romHandler{roms: roms}
+func registerROMRoutes(api *gin.RouterGroup, roms rom.API, links DownloadLinks) {
+	handler := romHandler{roms: roms, links: links}
+	api.GET(strings.TrimPrefix(downloadLinkPath, api.BasePath()), requireService(roms != nil && links != nil), handler.downloadWithLink)
 
 	group := api.Group("/rom", requireService(roms != nil))
 	group.GET("", handler.list)
@@ -35,6 +44,7 @@ func registerROMRoutes(api *gin.RouterGroup, roms rom.API) {
 	group.POST("/:rom_id/scrape", handler.scrape)
 	group.GET("/:rom_id/media/:kind", handler.media)
 	group.GET("/:rom_id/download", handler.download)
+	group.POST("/:rom_id/download-link", requireService(links != nil), handler.createDownloadLink)
 }
 
 // romListQuery holds the optional filters of GET /rom.
@@ -122,7 +132,45 @@ func (handler romHandler) media(c *gin.Context) {
 }
 
 func (handler romHandler) download(c *gin.Context) {
-	output, err := handler.roms.Download(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"))
+	handler.streamDownload(c, requesterFromContext(c), c.Param("rom_id"))
+}
+
+// downloadLinkResponse is a URL the browser can open directly to stream a ROM download.
+type downloadLinkResponse struct {
+	URL       string `json:"url"`
+	ExpiresIn int64  `json:"expires_in"`
+}
+
+func (handler romHandler) createDownloadLink(c *gin.Context) {
+	requester, romID := requesterFromContext(c), c.Param("rom_id")
+	// Only sign links for ROMs the requester can access; inaccessible ROMs stay not found.
+	if _, err := handler.roms.Get(c.Request.Context(), requester, romID); err != nil {
+		writeError(c, err)
+		return
+	}
+	token, expiresAt, err := handler.links.Sign(requester, romID)
+	if err != nil {
+		writeError(c, fault.Internal(err))
+		return
+	}
+	c.JSON(http.StatusCreated, downloadLinkResponse{
+		URL:       downloadLinkPath + "?" + url.Values{"token": {token}}.Encode(),
+		ExpiresIn: int64(time.Until(expiresAt).Round(time.Second).Seconds()),
+	})
+}
+
+func (handler romHandler) downloadWithLink(c *gin.Context) {
+	requester, romID, err := handler.links.Verify(c.Query("token"))
+	if err != nil {
+		writeSpecificError(c, http.StatusForbidden, "invalid_download_link", "download link is invalid or expired")
+		return
+	}
+	// Access is checked again at download time, against the requester the link was issued to.
+	handler.streamDownload(c, requester, romID)
+}
+
+func (handler romHandler) streamDownload(c *gin.Context, requester identity.Requester, romID string) {
+	output, err := handler.roms.Download(c.Request.Context(), requester, romID)
 	if err != nil {
 		writeError(c, err)
 		return

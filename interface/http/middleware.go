@@ -119,6 +119,8 @@ func corsHeadersAllowed(header string) bool {
 var publicRoutes = map[string]map[string]struct{}{
 	http.MethodGet: {
 		"/health": {}, "/api/openapi.json": {}, setupPath: {},
+		// Authorized by the signed token in the query string instead of a bearer token.
+		downloadLinkPath: {},
 	},
 	http.MethodPost: {
 		"/api/v1/session": {}, "/api/v1/session/refresh": {},

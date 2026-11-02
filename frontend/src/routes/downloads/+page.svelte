@@ -6,7 +6,7 @@
 	import { downloadRom, i18n, listRoms } from '#lib';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { getErrorMessage } from '#lib/helpers/error.js';
-	import type { DownloadedRom, RomSummary } from '#lib';
+	import type { RomSummary } from '#lib';
 
 	type QueueItemStatus = 'ready' | 'downloading' | 'completed' | 'failed';
 
@@ -112,17 +112,6 @@
 		errorMessage = '';
 	}
 
-	function triggerBrowserDownload(result: DownloadedRom): void {
-		const url = URL.createObjectURL(result.blob);
-		const anchor = document.createElement('a');
-		anchor.href = url;
-		anchor.download = result.filename;
-		anchor.rel = 'noopener';
-		document.body.append(anchor);
-		anchor.click();
-		anchor.remove();
-		requestAnimationFrame(() => URL.revokeObjectURL(url));
-	}
 
 	async function loadAllRoms(): Promise<RomSummary[]> {
 		const items: RomSummary[] = [];
@@ -158,8 +147,8 @@
 		statusMessage = '';
 
 		try {
+			// The browser streams the file to disk through a signed link and shows its own progress.
 			const result = await downloadRom(romId);
-			triggerBrowserDownload(result);
 			updateQueueItem(romId, {
 				status: 'completed',
 				filename: result.filename,

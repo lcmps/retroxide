@@ -7,7 +7,7 @@ func registerRoutes(api *gin.RouterGroup, dependencies Dependencies, options Opt
 	registerSessionRoutes(api, dependencies.Sessions)
 	registerLocaleRoutes(api, dependencies.Locales)
 	registerUploadRoutes(api, dependencies.Uploads, options.MaxUploadBytes)
-	registerROMRoutes(api, dependencies.ROMs)
+	registerROMRoutes(api, dependencies.ROMs, dependencies.DownloadLinks)
 	registerLibraryRoutes(api, dependencies.Libraries)
 	registerClientRoutes(api, dependencies.Clients)
 }

@@ -58,13 +58,8 @@
     downloading = true;
     message = '';
     try {
-      const result = await downloadRom(rom.rom_id);
-      const url = URL.createObjectURL(result.blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = result.filename;
-      anchor.click();
-        requestAnimationFrame(() => URL.revokeObjectURL(url));
+      // The browser streams the file to disk through a signed link.
+      await downloadRom(rom.rom_id);
     } catch (error) {
       message = getErrorMessage(error, 'common.errors.download', 'Failed to download ROM', t);
     } finally {
