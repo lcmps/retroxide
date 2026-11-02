@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	sqldriver "github.com/go-sql-driver/mysql"
 	"github.com/lcmps/retroxide/application/fault"
 	gormmysql "gorm.io/driver/mysql"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
