@@ -74,3 +74,35 @@ export type DownloadedRom = {
   filename: string;
   contentType: string;
 };
+
+export type DatabaseDriver = 'sqlite' | 'mysql';
+
+export type MySQLConnection = {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+};
+
+export type SetupLockedField = 'db_driver' | 'sqlite_path' | 'mysql' | 'storage_root';
+
+export type SetupStatus = {
+  required: boolean;
+  defaults?: {
+    db_driver: DatabaseDriver;
+    sqlite_path: string;
+    mysql: MySQLConnection;
+    storage_root: string;
+  };
+  locked?: SetupLockedField[];
+};
+
+export type SetupRequest = {
+  db_driver: DatabaseDriver;
+  sqlite_path: string;
+  mysql: MySQLConnection;
+  storage_root: string;
+  admin_email: string;
+  admin_password: string;
+};
