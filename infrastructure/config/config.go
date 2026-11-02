@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,8 @@ import (
 type Lookup func(key string) (string, bool)
 
 const insecureProductionJWTSecret = "change-me-in-production-use-a-long-random-string"
+
+var ErrSetupRequired = errors.New("configuration setup required")
 
 type Config struct {
 	RuntimeEnv              string
@@ -35,12 +38,9 @@ func Load(lookup Lookup) (Config, error) {
 	if runtimeEnv != "dev" && runtimeEnv != "development" && runtimeEnv != "prod" && runtimeEnv != "production" {
 		return Config{}, invalid("RETROXIDE_ENV", "expected dev/development or prod/production")
 	}
-	port, err := unsigned(lookup, "RETROXIDE_PORT", 3000, 16)
+	host, port, err := ListenAddress(lookup)
 	if err != nil {
 		return Config{}, err
-	}
-	if port == 0 {
-		return Config{}, invalid("RETROXIDE_PORT", "must be between 1 and 65535")
 	}
 	dbDriver := get(lookup, "RETROXIDE_DB_DRIVER", "sqlite")
 	if dbDriver != "sqlite" && dbDriver != "mysql" {
@@ -75,8 +75,8 @@ func Load(lookup Lookup) (Config, error) {
 		return Config{}, invalid("RETROXIDE_WORKER_COUNT", "must be between 1 and 64")
 	}
 	secret, ok := lookup("RETROXIDE_JWT_SECRET")
-	if !ok {
-		return Config{}, invalid("RETROXIDE_JWT_SECRET", "is required")
+	if !ok || secret == "" {
+		return Config{}, fmt.Errorf("%w: RETROXIDE_JWT_SECRET is not set", ErrSetupRequired)
 	}
 	if len(secret) < 32 {
 		return Config{}, invalid("RETROXIDE_JWT_SECRET", "must be at least 32 characters long")
@@ -102,7 +102,7 @@ func Load(lookup Lookup) (Config, error) {
 		return Config{}, invalid("RETROXIDE_ADMIN_EMAIL/RETROXIDE_ADMIN_PASSWORD", "must be non-empty")
 	}
 	return Config{
-		RuntimeEnv: runtimeEnv, Host: get(lookup, "RETROXIDE_HOST", "0.0.0.0"), Port: uint16(port),
+		RuntimeEnv: runtimeEnv, Host: host, Port: port,
 		DBDriver:       dbDriver,
 		SQLitePath:     get(lookup, "RETROXIDE_SQLITE_PATH", "./retroxide.sqlite3"),
 		MySQLURL:       get(lookup, "RETROXIDE_MYSQL_URL", "mysql://root:root@127.0.0.1:3306/retroxide"),
@@ -113,6 +113,17 @@ func Load(lookup Lookup) (Config, error) {
 		CORSAllowedOrigins: origins, WorkerCount: int(workerCount),
 		AdminEmail: adminEmail, AdminPassword: adminPassword,
 	}, nil
+}
+
+func ListenAddress(lookup Lookup) (string, uint16, error) {
+	port, err := unsigned(lookup, "RETROXIDE_PORT", 3000, 16)
+	if err != nil {
+		return "", 0, err
+	}
+	if port == 0 {
+		return "", 0, invalid("RETROXIDE_PORT", "must be between 1 and 65535")
+	}
+	return get(lookup, "RETROXIDE_HOST", "0.0.0.0"), uint16(port), nil
 }
 
 func get(lookup Lookup, key, fallback string) string {
