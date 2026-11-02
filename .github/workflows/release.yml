@@ -36,10 +36,15 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Audit frontend dependencies
+        run: npm audit --audit-level=high
+        working-directory: frontend
+
       - name: Check frontend
         run: |
           npm run check
           npm test
+          npm run build
         working-directory: frontend
 
       - name: Vet
