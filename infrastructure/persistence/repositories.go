@@ -56,7 +56,7 @@ func (repositories *Repositories) UpsertROMFile(ctx context.Context, romFile rom
 }
 
 func classifyROMFileConflict(existingID string, existingHash, incomingHash romdomain.ROMHash) error {
-	if existingHash != incomingHash {
+	if !existingHash.MatchesContent(incomingHash) {
 		return fault.Internal(errors.New("sha256 collision with differing rom hash bundle"))
 	}
 	return fault.ROMAlreadyExists(existingID, incomingHash.SHA256)

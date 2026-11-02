@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 var ErrInvalidROMHash = errors.New("domain: invalid rom hash")
@@ -13,6 +14,14 @@ type ROMHash struct {
 	SHA1   string
 	MD5    string
 	CRC32  string
+}
+
+func (hash ROMHash) MatchesContent(incoming ROMHash) bool {
+	return strings.EqualFold(hash.SHA256, incoming.SHA256) &&
+		strings.EqualFold(hash.SHA1, incoming.SHA1) &&
+		strings.EqualFold(hash.MD5, incoming.MD5) &&
+		// Migration 6 used zero as the CRC placeholder for existing ROMs.
+		(hash.CRC32 == "00000000" || strings.EqualFold(hash.CRC32, incoming.CRC32))
 }
 
 func NewROMHash(sha256, sha1, md5, crc32 string) (ROMHash, error) {
