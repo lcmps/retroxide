@@ -25,6 +25,19 @@
 
   const t = useTranslate(i18n);
 
+  /** Metadata shown in the details box; empty values are omitted. */
+  const fields = $derived(
+    rom
+      ? [
+          { key: 'rom.fields.platform', label: 'Platform', value: rom.platform },
+          { key: 'rom.fields.region', label: 'Region', value: rom.region },
+          { key: 'rom.fields.version', label: 'Version', value: rom.version },
+          { key: 'rom.fields.publisher', label: 'Publisher', value: rom.publisher },
+          { key: 'rom.fields.release_year', label: 'Release year', value: rom.release_year }
+        ].filter((field): field is { key: string; label: string; value: string } => Boolean(field.value?.trim()))
+      : []
+  );
+
   async function loadRom() {
     loading = true;
     message = '';
@@ -122,15 +135,23 @@
       <div class="rom-cover" aria-hidden="true">
         {#if coverPreviewUrl}<img src={coverPreviewUrl} alt="" />{/if}
       </div>
-      <div class="rom-details stack">
+      <div class="rom-details">
         <h1 id="rom-title">{rom.title}</h1>
-        <p>{rom.platform}</p>
-        {#if rom.publisher}<p>{rom.publisher}</p>{/if}
-        {#if rom.release_year}<p>{rom.release_year}</p>{/if}
+        <dl class="rom-fields">
+          {#each fields as field (field.key)}
+            <div class="rom-field">
+              <dt>{t(field.key, field.label)}</dt>
+              <dd>{field.value}</dd>
+            </div>
+          {/each}
+        </dl>
+        {#if rom.description}<p class="rom-description">{rom.description}</p>{/if}
+      </div>
+      <div class="rom-actions">
         <ActionButton type="button" onclick={downloadCurrentRom} disabled={downloading || deleting}>
           {downloading ? t('common.status.downloading', 'Downloading...') : t('rom.actions.download', 'Download')}
         </ActionButton>
-        <ActionButton type="button" variant="secondary" onclick={scrapeCurrentRom} disabled={scraping || deleting}>
+        <ActionButton type="button" onclick={scrapeCurrentRom} disabled={scraping || deleting}>
           {scraping ? t('rom.actions.scraping', 'Scraping...') : t('rom.actions.scrape', 'Scrape')}
         </ActionButton>
         <Dialog.Root bind:open={deleteOpen}>
@@ -174,26 +195,46 @@
 
   .rom-card {
     display: grid;
-    justify-items: center;
-    gap: 0.5rem;
-    max-width: 22rem;
-    margin-inline: auto;
-    text-align: center;
+    grid-template-columns: minmax(10rem, 16rem) minmax(0, 1fr);
+    align-items: start;
+    gap: 1.5rem;
+    max-width: 56rem;
   }
 
   .rom-cover {
-    width: min(100%, 16rem);
+    width: 100%;
     aspect-ratio: 2 / 3;
     background: #202020;
-		border-radius: 0.35rem;
-		overflow: hidden;
+    border-radius: 0.35rem;
+    overflow: hidden;
   }
-	.rom-cover img { display: block; width: 100%; height: 100%; object-fit: cover; image-rendering: auto; }
+  .rom-cover img { display: block; width: 100%; height: 100%; object-fit: cover; image-rendering: auto; }
 
-  .rom-details { --layout-gap: 0.5rem; justify-items: center; text-align: center; }
-  .rom-details h1, .rom-details p { margin: 0; }
-  .rom-details h1 { font-size: 0.9rem; line-height: 1.5; }
-  .rom-details p { color: var(--pixel-muted); font-size: 0.65rem; }
+  .rom-details {
+    display: grid;
+    gap: 1rem;
+    min-width: 0;
+    padding: 1.25rem;
+    border: 2px solid var(--pixel-border);
+    border-radius: 0.35rem;
+    background: var(--pixel-panel);
+  }
+  .rom-details h1 { margin: 0; font-size: 0.9rem; line-height: 1.5; overflow-wrap: anywhere; }
+
+  .rom-fields { display: grid; gap: 0.6rem; margin: 0; }
+  .rom-field {
+    display: grid;
+    grid-template-columns: minmax(6rem, max-content) minmax(0, 1fr);
+    gap: 1rem;
+    font-size: 0.65rem;
+    line-height: 1.6;
+  }
+  .rom-field dt { color: var(--pixel-muted); }
+  .rom-field dd { margin: 0; overflow-wrap: anywhere; }
+
+  .rom-description { margin: 0; color: var(--pixel-muted); font-size: 0.6rem; line-height: 1.8; }
+
+  .rom-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.75rem; }
 
   .message {
     margin: 0;
@@ -201,8 +242,10 @@
   }
 
   @media (max-width: 40rem) {
-    .rom-card { gap: 0.5rem; }
+    .rom-card { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
     .rom-cover { width: min(100%, 14rem); }
+    .rom-details { padding: 1rem; }
     .rom-details h1 { font-size: 0.85rem; }
+    .rom-field { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
   }
 </style>

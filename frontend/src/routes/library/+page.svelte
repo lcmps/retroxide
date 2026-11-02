@@ -191,7 +191,7 @@
 	.message {
 		margin: 0;
 		font-size: 0.55rem;
-		color: var(--pixel-danger);
+		color: #e18a78;
 	}
 
 	@media (max-width: 640px) {
