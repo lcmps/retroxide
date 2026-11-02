@@ -18,8 +18,10 @@ import (
 
 const (
 	sqliteBusyTimeoutMS = 5000
-	mysqlMaxOpenConns   = 10
-	mysqlMaxIdleConns   = 5
+	// sqliteMaxOpenConns lets WAL readers run concurrently; writers still serialize on SQLite's lock.
+	sqliteMaxOpenConns = 4
+	mysqlMaxOpenConns  = 10
+	mysqlMaxIdleConns  = 5
 )
 
 func Initialize(ctx context.Context, db *gorm.DB, driver string) error {
@@ -41,18 +43,10 @@ func Initialize(ctx context.Context, db *gorm.DB, driver string) error {
 	sqlDB.SetMaxIdleConns(maxIdle)
 
 	if driver == "sqlite" {
-		// SQLite pragmas are connection-scoped; keep the single connection alive.
+		// Pragmas come from the DSN (see sqliteDSN), so every pooled connection is configured
+		// identically and connections need not be pinned.
 		sqlDB.SetConnMaxLifetime(0)
 		sqlDB.SetConnMaxIdleTime(0)
-		for _, pragma := range []string{
-			"PRAGMA journal_mode=WAL",
-			fmt.Sprintf("PRAGMA busy_timeout=%d", sqliteBusyTimeoutMS),
-			"PRAGMA foreign_keys=ON",
-		} {
-			if err := db.WithContext(ctx).Exec(pragma).Error; err != nil {
-				return fault.Internal(fmt.Errorf("configuring sqlite: %w", err))
-			}
-		}
 	} else {
 		sqlDB.SetConnMaxLifetime(5 * time.Minute)
 		sqlDB.SetConnMaxIdleTime(time.Minute)
@@ -73,7 +67,11 @@ func OpenDatabase(ctx context.Context, driver, sqlitePath, mysqlURL string) (*go
 		if sqlitePath == "" {
 			return nil, fault.Validation("sqlite path is required")
 		}
-		dialector = sqlite.Open(sqlitePath)
+		dsn, err := sqliteDSN(sqlitePath)
+		if err != nil {
+			return nil, err
+		}
+		dialector = sqlite.Open(dsn)
 	case "mysql":
 		dsn, err := mysqlDSN(mysqlURL)
 		if err != nil {
@@ -87,6 +85,10 @@ func OpenDatabase(ctx context.Context, driver, sqlitePath, mysqlURL string) (*go
 		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
 		// Multi-statement writes already use explicit transactions; wrapping every single
 		// statement in its own transaction only adds round trips.
+		//
+		// PrepareStmt stays off deliberately: GORM's statement cache holds one mutex while it
+		// prepares on the pool, so a transaction waiting for that mutex while holding the last
+		// free connection deadlocks the process.
 		SkipDefaultTransaction: true,
 	})
 	if err != nil {
@@ -99,6 +101,30 @@ func OpenDatabase(ctx context.Context, driver, sqlitePath, mysqlURL string) (*go
 		return nil, err
 	}
 	return db, nil
+}
+
+// sqliteDSN applies the connection pragmas to every connection the pool opens:
+//   - WAL lets readers proceed while a write is in progress, with synchronous=NORMAL, its
+//     recommended durability level;
+//   - busy_timeout waits for locks instead of failing immediately;
+//   - foreign keys are enforced;
+//   - transactions begin IMMEDIATE, taking the write lock up front so concurrent transactions
+//     queue on busy_timeout rather than failing with "database is locked" when upgrading.
+func sqliteDSN(path string) (string, error) {
+	if strings.Contains(path, "?") {
+		return "", fault.Validation("sqlite path must not contain '?'")
+	}
+	query := url.Values{}
+	for _, pragma := range []string{
+		"journal_mode(WAL)",
+		"synchronous(NORMAL)",
+		fmt.Sprintf("busy_timeout(%d)", sqliteBusyTimeoutMS),
+		"foreign_keys(1)",
+	} {
+		query.Add("_pragma", pragma)
+	}
+	query.Set("_txlock", "immediate")
+	return path + "?" + query.Encode(), nil
 }
 
 func PingMySQL(ctx context.Context, mysqlURL string) error {
@@ -143,7 +169,7 @@ func mysqlDSN(rawURL string) (string, error) {
 func poolSettings(driver string) (maxOpen, maxIdle int, err error) {
 	switch driver {
 	case "sqlite":
-		return 1, 1, nil
+		return sqliteMaxOpenConns, sqliteMaxOpenConns, nil
 	case "mysql":
 		return mysqlMaxOpenConns, mysqlMaxIdleConns, nil
 	default:
