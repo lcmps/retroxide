@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
+	"io/fs"
 	"strings"
 
 	"github.com/lcmps/retroxide/application/fault"
@@ -63,33 +63,15 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 }
 
 func (service *Service) Delete(ctx context.Context, requester identity.Requester, romID string) error {
-	rom, err := service.findAccessibleROM(ctx, requester, romID)
-	if err != nil {
+	if _, err := service.findAccessibleROM(ctx, requester, romID); err != nil {
 		return err
 	}
-	romFile, err := service.repository.FindROMFileByID(ctx, rom.ROMFileID)
-	if err != nil {
-		return err
-	}
-	if romFile == nil {
-		return fault.Internal(fmt.Errorf("rom_file %s not found", rom.ROMFileID))
-	}
-	if err := service.repository.DeleteROM(ctx, romID); err != nil {
-		return err
-	}
-	remaining, err := service.repository.CountROMsByROMFileID(ctx, rom.ROMFileID)
-	if err != nil {
-		return err
-	}
-	if remaining == 0 {
-		if err := service.repository.DeleteROMFile(ctx, rom.ROMFileID); err != nil {
-			return err
+	return service.repository.HardDeleteROM(ctx, romID, func(path string) error {
+		if err := service.storage.Delete(ctx, path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fault.Internal(fmt.Errorf("deleting ROM content: %w", err))
 		}
-		if err := service.storage.Delete(ctx, romFile.StoragePath); err != nil {
-			slog.ErrorContext(ctx, "failed to delete unreferenced rom bytes", "storage_path", romFile.StoragePath, "error", err)
-		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func (service *Service) Download(ctx context.Context, requester identity.Requester, romID string) (DownloadOutput, error) {

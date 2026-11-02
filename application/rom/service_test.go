@@ -83,6 +83,14 @@ func (repository *romTestRepository) DeleteROMFile(_ context.Context, romFileID 
 	return nil
 }
 
+func (repository *romTestRepository) HardDeleteROM(ctx context.Context, romID string, deletePath func(string) error) error {
+	rom := repository.roms[romID]
+	if err := deletePath(repository.romFiles[rom.ROMFileID].StoragePath); err != nil {
+		return err
+	}
+	return repository.DeleteROM(ctx, romID)
+}
+
 type romTestStorage struct {
 	files map[string][]byte
 }
