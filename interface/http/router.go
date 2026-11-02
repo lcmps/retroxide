@@ -48,6 +48,7 @@ func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 	router.GET("/health", func(context *gin.Context) {
 		context.String(http.StatusOK, "ok")
 	})
+	registerSetupStatusRoute(router)
 	registerRoutes(router, dependencies, options)
 	return router
 }
@@ -141,7 +142,7 @@ func corsHeadersAllowed(header string) bool {
 func authMiddleware(tokens auth.TokenService, clients auth.ClientRepository) gin.HandlerFunc {
 	publicExact := map[string]map[string]struct{}{
 		http.MethodGet: {
-			"/health": {}, "/api/openapi.json": {},
+			"/health": {}, "/api/openapi.json": {}, setupPath: {},
 		},
 		http.MethodPost: {
 			"/api/v1/session": {}, "/api/v1/session/refresh": {},

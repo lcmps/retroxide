@@ -211,7 +211,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		registered[route.Method+" "+route.Path] = true
 	}
 	want := []string{
-		"GET /health",
+		"GET /health", "GET /api/v1/setup",
 		"POST /api/v1/session", "DELETE /api/v1/session", "POST /api/v1/session/refresh",
 		"GET /api/v1/i18n/:locale",
 		"POST /api/v1/upload", "GET /api/v1/upload/:upload_id",
