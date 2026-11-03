@@ -191,6 +191,49 @@ func (service *UploadService) finishSession(ctx context.Context, requester ident
 	return sessionDTO(session, &accepted), nil
 }
 
+// CheckSessionDuplicate compares the SHA-256 the client computed of the whole file with the
+// library, so a ROM the library already has stops uploading early instead of after its last
+// byte. A duplicate ends the session and reports rom_already_exists; otherwise the upload goes on
+// (the server still hashes every byte itself, so a wrong hash cannot change what is stored).
+func (service *UploadService) CheckSessionDuplicate(ctx context.Context, requester identity.Requester, sessionID, sha256 string) error {
+	sessions, err := service.sessionSupport()
+	if err != nil {
+		return err
+	}
+	if !isSHA256(sha256) {
+		return fault.Validation("sha256 must be 64 lowercase hex digits")
+	}
+	release, err := sessions.claim(sessionID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if _, err := sessions.find(ctx, requester, sessionID); err != nil {
+		return err
+	}
+	existing, err := service.romRepository.FindROMFileBySHA256(ctx, sha256)
+	if err != nil || existing == nil {
+		return err
+	}
+	if service.audit != nil {
+		service.audit.DuplicateUpload(ctx, existing.ID, sha256)
+	}
+	sessions.end(ctx, sessionID)
+	return fault.ROMAlreadyExists(existing.ID, sha256)
+}
+
+func isSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // CancelSession abandons an upload sent in parts and frees its space.
 func (service *UploadService) CancelSession(ctx context.Context, requester identity.Requester, sessionID string) error {
 	sessions, err := service.sessionSupport()

@@ -212,7 +212,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"POST /api/v1/session", "DELETE /api/v1/session", "POST /api/v1/session/refresh",
 		"GET /api/v1/i18n/:locale",
 		"POST /api/v1/upload", "GET /api/v1/upload/:upload_id",
-		"POST /api/v1/upload/session", "GET /api/v1/upload/session/:session_id", "PATCH /api/v1/upload/session/:session_id", "DELETE /api/v1/upload/session/:session_id",
+		"POST /api/v1/upload/session", "GET /api/v1/upload/session/:session_id", "PATCH /api/v1/upload/session/:session_id", "DELETE /api/v1/upload/session/:session_id", "POST /api/v1/upload/session/:session_id/check",
 		"GET /api/v1/platforms", "GET /api/v1/platforms/catalog",
 		"GET /api/v1/rom", "GET /api/v1/rom/:rom_id", "PATCH /api/v1/rom/:rom_id", "DELETE /api/v1/rom/:rom_id",
 		"GET /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/cover/thumb", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
@@ -356,6 +356,10 @@ func (uploads routerTestUploads) AppendToSession(_ context.Context, _ identity.R
 }
 
 func (routerTestUploads) CancelSession(context.Context, identity.Requester, string) error { return nil }
+
+func (routerTestUploads) CheckSessionDuplicate(context.Context, identity.Requester, string, string) error {
+	return nil
+}
 
 func (routerTestUploads) Status(context.Context, identity.Requester, string) (uploadfeature.UploadStatusDTO, error) {
 	return uploadfeature.UploadStatusDTO{}, nil

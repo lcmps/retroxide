@@ -36,10 +36,20 @@ func NewRouter(settings config.Config, services *Services, logger *slog.Logger) 
 		DownloadLinks: auth.NewDownloadLinkSigner(settings.JWTSecret, downloadLinkLifetime),
 		Locales:       locales,
 		Logger:        logger,
+		Metrics:       metricsHandler(settings, services),
+		CountResponse: services.Metrics.CountResponse,
 	}, httpadapter.Options{
 		MaxUploadBytes: settings.MaxUploadBytes,
 		CORSOrigins:    settings.CORSAllowedOrigins,
 		TrustedProxies: settings.TrustedProxies,
 		Frontend:       web.New(),
 	}), nil
+}
+
+// metricsHandler serves monitoring metrics when a metrics token is configured.
+func metricsHandler(settings config.Config, services *Services) http.Handler {
+	if settings.MetricsToken == "" {
+		return nil
+	}
+	return services.Metrics.Handler(settings.MetricsToken)
 }

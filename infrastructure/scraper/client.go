@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
@@ -109,10 +110,25 @@ type Client struct {
 	http      *http.Client
 	endpoints Endpoints
 
+	// diskCache, when set, keeps downloaded databases between restarts.
+	diskCache *datDiskCache
+	// idleAfter is how long a parsed database stays in memory unused.
+	idleAfter time.Duration
+
 	mu       sync.Mutex
-	datCache map[string]*datIndex
+	datCache map[string]*cachedIndex
 	datLoads map[string]*datLoad
 }
+
+// cachedIndex is a parsed database in memory, dropped once idle.
+type cachedIndex struct {
+	index *datIndex
+	idle  *time.Timer
+}
+
+// defaultIdleAfter keeps a database in memory through a burst of scrapes (a batch of uploads)
+// without holding every system's database forever: nine systems take about 30 MB.
+const defaultIdleAfter = 15 * time.Minute
 
 // datLoad is an in-flight database download that concurrent lookups for the same system share.
 type datLoad struct {
@@ -124,7 +140,18 @@ type datLoad struct {
 var _ rom.Scraper = (*Client)(nil)
 
 func NewClient(httpClient *http.Client, endpoints Endpoints) *Client {
-	return &Client{http: httpClient, endpoints: endpoints, datCache: make(map[string]*datIndex), datLoads: make(map[string]*datLoad)}
+	return &Client{
+		http: httpClient, endpoints: endpoints, idleAfter: defaultIdleAfter,
+		datCache: make(map[string]*cachedIndex), datLoads: make(map[string]*datLoad),
+	}
+}
+
+// CacheDatabasesIn keeps downloaded libretro databases in dir, so a restart reads them from
+// disk instead of downloading them again. Copies younger than maxAge are used as they are; older
+// ones are revalidated with the server, and used anyway when it cannot be reached.
+func (client *Client) CacheDatabasesIn(dir string, maxAge time.Duration) *Client {
+	client.diskCache = &datDiskCache{dir: dir, maxAge: maxAge}
+	return client
 }
 
 // Scrape looks the ROM up by hash and gathers its metadata and images. Requests that do not
@@ -339,9 +366,10 @@ func (client *Client) lookupLibretro(ctx context.Context, system libretroSystem,
 func (client *Client) datIndex(ctx context.Context, database string, optional bool) (*datIndex, error) {
 	key := database
 	client.mu.Lock()
-	if index, ok := client.datCache[key]; ok {
+	if cached, ok := client.datCache[key]; ok {
+		cached.idle.Reset(client.idleAfter)
 		client.mu.Unlock()
-		return index, nil
+		return cached.index, nil
 	}
 	load, inFlight := client.datLoads[key]
 	if !inFlight {
@@ -351,10 +379,12 @@ func (client *Client) datIndex(ctx context.Context, database string, optional bo
 	client.mu.Unlock()
 
 	if !inFlight {
-		load.index, load.err = client.downloadDAT(ctx, database, optional)
+		load.index, load.err = client.loadDAT(ctx, database, optional)
 		client.mu.Lock()
 		if load.err == nil {
-			client.datCache[key] = load.index
+			cached := &cachedIndex{index: load.index}
+			cached.idle = time.AfterFunc(client.idleAfter, func() { client.forget(key, cached) })
+			client.datCache[key] = cached
 		}
 		delete(client.datLoads, key)
 		client.mu.Unlock()
@@ -369,10 +399,64 @@ func (client *Client) datIndex(ctx context.Context, database string, optional bo
 	}
 }
 
+// forget drops a parsed database from memory, unless it was replaced since.
+func (client *Client) forget(key string, cached *cachedIndex) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.datCache[key] == cached {
+		delete(client.datCache, key)
+	}
+}
+
+// loadDAT reads a database from the disk cache when it is fresh, and otherwise downloads it,
+// asking the server only whether a stale cached copy changed.
+func (client *Client) loadDAT(ctx context.Context, database string, optional bool) (*datIndex, error) {
+	cache := client.diskCache
+	if cache == nil {
+		return client.downloadDAT(ctx, database, optional)
+	}
+	cached := cache.lookup(database)
+	if cached.fresh {
+		if index, err := cached.read(); err == nil {
+			return index, nil
+		}
+	}
+	body, etag, err := client.getConditional(ctx, client.endpoints.LibretroDatabase+"/"+escapePath(database)+".dat", cached.etag, maxDATBytes)
+	switch {
+	case errors.Is(err, errNotModified):
+		cache.touch(database)
+		if index, readErr := cached.read(); readErr == nil {
+			return index, nil
+		}
+		// The copy vanished meanwhile; download it outright.
+		return client.downloadDAT(ctx, database, optional)
+	case optional && errors.Is(err, errUpstreamNoHit):
+		cache.storeMissing(database)
+		return emptyDATIndex(), nil
+	case err != nil:
+		if cached.exists {
+			if index, readErr := cached.read(); readErr == nil {
+				return index, nil // stale, but better than nothing while offline
+			}
+		}
+		return nil, fmt.Errorf("downloading libretro database %q: %w", database, err)
+	}
+	index, err := parseDAT(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	cache.store(database, body, etag)
+	return index, nil
+}
+
+func emptyDATIndex() *datIndex {
+	return &datIndex{bySHA1: map[string]datEntry{}, byCRC: map[string]datEntry{}}
+}
+
 func (client *Client) downloadDAT(ctx context.Context, database string, optional bool) (*datIndex, error) {
 	body, err := client.get(ctx, client.endpoints.LibretroDatabase+"/"+escapePath(database)+".dat", maxDATBytes)
 	if optional && errors.Is(err, errUpstreamNoHit) {
-		return &datIndex{bySHA1: map[string]datEntry{}, byCRC: map[string]datEntry{}}, nil
+		return emptyDATIndex(), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("downloading libretro database %q: %w", database, err)
@@ -454,6 +538,43 @@ func (client *Client) fetchImage(ctx context.Context, target string) ([]byte, er
 	default:
 		return nil, errUpstreamNoHit
 	}
+}
+
+// errNotModified reports that a conditional request found the cached copy current.
+var errNotModified = errors.New("not modified")
+
+// getConditional fetches target unless it still has etag, returning its body and new ETag.
+func (client *Client) getConditional(ctx context.Context, target, etag string, limit int64) ([]byte, string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	request.Header.Set("User-Agent", userAgent)
+	if etag != "" {
+		request.Header.Set("If-None-Match", etag)
+	}
+	response, err := client.http.Do(request)
+	if err != nil {
+		return nil, "", err
+	}
+	defer response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusNotModified:
+		return nil, "", errNotModified
+	case http.StatusNotFound:
+		return nil, "", errUpstreamNoHit
+	case http.StatusOK:
+	default:
+		return nil, "", fmt.Errorf("GET %s: unexpected status %d", target, response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if int64(len(body)) > limit {
+		return nil, "", fmt.Errorf("GET %s: response exceeds %d bytes", target, limit)
+	}
+	return body, response.Header.Get("ETag"), nil
 }
 
 func (client *Client) get(ctx context.Context, target string, limit int64) ([]byte, error) {

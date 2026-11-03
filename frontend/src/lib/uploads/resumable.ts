@@ -1,6 +1,7 @@
-import { createUploadSession, getUploadSession, sendUploadPart, uploadRom } from '#lib/api/client.js';
+import { checkUploadSessionDuplicate, createUploadSession, getUploadSession, sendUploadPart, uploadRom } from '#lib/api/client.js';
 import { ApiClientError } from '#lib/api/errors.js';
 import type { UploadAcceptedResponse } from '#lib/api/types.js';
+import { hashFile } from './hash.js';
 
 /** Files from this size are sent in parts that survive a dropped connection. */
 export const RESUMABLE_FROM_BYTES = 16 * 1024 * 1024;
@@ -13,7 +14,13 @@ const MAX_ATTEMPTS = 24;
 
 const STORAGE_PREFIX = 'retroxide.upload-session:';
 
-type Session = { session_id: string; size: number; received: number; max_chunk_size: number; upload?: UploadAcceptedResponse };
+type Session = {
+	session_id: string;
+	size: number;
+	received: number;
+	max_chunk_size: number;
+	upload?: UploadAcceptedResponse;
+};
 
 /** The server calls a resumable upload needs, injectable for tests. */
 export type ResumableApi = {
@@ -22,6 +29,8 @@ export type ResumableApi = {
 	sendPart(sessionId: string, offset: number, part: Blob, onProgress: (loadedBytes: number) => void): Promise<Session>;
 	/** Uploads a small file in one request. */
 	uploadWhole(file: File, onProgress: (loadedBytes: number, totalBytes: number) => void): Promise<UploadAcceptedResponse>;
+	/** Ends the session with rom_already_exists if the library already has the file. */
+	checkDuplicate(sessionId: string, sha256: string): Promise<void>;
 };
 
 export type ResumableEnvironment = {
@@ -29,6 +38,8 @@ export type ResumableEnvironment = {
 	sleep?: (milliseconds: number) => Promise<void>;
 	/** Resolves once the browser is online again. */
 	waitUntilOnline?: () => Promise<void>;
+	/** Computes a file's SHA-256 as lowercase hex. */
+	hash?: (file: File, signal: AbortSignal) => Promise<string>;
 };
 
 export type ResumableCallbacks = {
@@ -77,7 +88,7 @@ export async function uploadResumable(
 	file: File,
 	api: ResumableApi,
 	{ onProgress, onReconnecting }: ResumableCallbacks,
-	{ storage = defaultStorage(), sleep = defaultSleep, waitUntilOnline = defaultWaitUntilOnline }: ResumableEnvironment = {}
+	{ storage = defaultStorage(), sleep = defaultSleep, waitUntilOnline = defaultWaitUntilOnline, hash = hashFile }: ResumableEnvironment = {}
 ): Promise<UploadAcceptedResponse> {
 	if (file.size < RESUMABLE_FROM_BYTES) {
 		return api.uploadWhole(file, onProgress);
@@ -96,52 +107,84 @@ export async function uploadResumable(
 	remember(session.session_id);
 	onProgress(session.received, file.size);
 
-	let failures = 0;
-	while (!session.upload) {
-		const partSize = Math.min(PART_BYTES, session.max_chunk_size || PART_BYTES);
-		const offset = session.received;
-		const part = file.slice(offset, Math.min(offset + partSize, file.size));
+	// The file is hashed while it uploads; hashing is far faster than any home connection, so a
+	// ROM the library already has is caught within the first parts instead of after the last.
+	const hashing = new AbortController();
+	let sha256: string | null = null;
+	let checked = false;
+	hash(file, hashing.signal).then(
+		(digest) => (sha256 = digest),
+		() => (checked = true)
+	);
+	const checkForDuplicate = async () => {
+		if (checked || !sha256 || session.upload) return;
+		checked = true;
 		try {
-			session = await api.sendPart(session.session_id, offset, part, (loaded) => onProgress(offset + loaded, file.size));
-			failures = 0;
-			onReconnecting?.(false);
-			onProgress(session.received, file.size);
+			await api.checkDuplicate(session.session_id, sha256);
 		} catch (error) {
-			if (isStatus(error, 404)) {
-				// The session expired or was removed: start over.
-				session = await api.createSession(file);
-				remember(session.session_id);
-				continue;
-			}
-			if (isStatus(error, 409) && error instanceof ApiClientError && error.code === 'conflict') {
-				// Another request moved the session on (or a part was received twice). Other
-				// conflicts, such as the ROM already being in the library, are final.
-				session = await api.getSession(session.session_id);
-				continue;
-			}
-			if (!isTransient(error) || ++failures >= MAX_ATTEMPTS) {
-				onReconnecting?.(false);
-				if (!isTransient(error)) remember(null);
+			if (error instanceof ApiClientError && error.code === 'rom_already_exists') {
+				remember(null);
 				throw error;
 			}
-			onReconnecting?.(true);
-			await sleep(RETRY_DELAYS_MS[Math.min(failures - 1, RETRY_DELAYS_MS.length - 1)]);
-			await waitUntilOnline();
-			// The part may have arrived before the connection dropped; ask where to continue.
+			// Any other failure just skips the early check; the server still catches duplicates.
+		}
+	};
+
+	try {
+		return await sendParts();
+	} finally {
+		hashing.abort();
+	}
+
+	async function sendParts(): Promise<UploadAcceptedResponse> {
+		let failures = 0;
+		while (!session.upload) {
+			await checkForDuplicate();
+			const partSize = Math.min(PART_BYTES, session.max_chunk_size || PART_BYTES);
+			const offset = session.received;
+			const part = file.slice(offset, Math.min(offset + partSize, file.size));
 			try {
-				session = await api.getSession(session.session_id);
-			} catch (statusError) {
-				if (isStatus(statusError, 404)) {
+				session = await api.sendPart(session.session_id, offset, part, (loaded) => onProgress(offset + loaded, file.size));
+				failures = 0;
+				onReconnecting?.(false);
+				onProgress(session.received, file.size);
+			} catch (error) {
+				if (isStatus(error, 404)) {
+					// The session expired or was removed: start over.
 					session = await api.createSession(file);
 					remember(session.session_id);
+					continue;
+				}
+				if (isStatus(error, 409) && error instanceof ApiClientError && error.code === 'conflict') {
+					// Another request moved the session on (or a part was received twice). Other
+					// conflicts, such as the ROM already being in the library, are final.
+					session = await api.getSession(session.session_id);
+					continue;
+				}
+				if (!isTransient(error) || ++failures >= MAX_ATTEMPTS) {
+					onReconnecting?.(false);
+					if (!isTransient(error)) remember(null);
+					throw error;
+				}
+				onReconnecting?.(true);
+				await sleep(RETRY_DELAYS_MS[Math.min(failures - 1, RETRY_DELAYS_MS.length - 1)]);
+				await waitUntilOnline();
+				// The part may have arrived before the connection dropped; ask where to continue.
+				try {
+					session = await api.getSession(session.session_id);
+				} catch (statusError) {
+					if (isStatus(statusError, 404)) {
+						session = await api.createSession(file);
+						remember(session.session_id);
+					}
 				}
 			}
 		}
+		remember(null);
+		onReconnecting?.(false);
+		onProgress(file.size, file.size);
+		return session.upload;
 	}
-	remember(null);
-	onReconnecting?.(false);
-	onProgress(file.size, file.size);
-	return session.upload;
 }
 
 async function resumeOrCreate(file: File, api: ResumableApi, sessionId: string | null): Promise<Session> {
@@ -161,5 +204,6 @@ export const serverApi: ResumableApi = {
 	createSession: createUploadSession,
 	getSession: getUploadSession,
 	sendPart: sendUploadPart,
-	uploadWhole: uploadRom
+	uploadWhole: uploadRom,
+	checkDuplicate: checkUploadSessionDuplicate
 };

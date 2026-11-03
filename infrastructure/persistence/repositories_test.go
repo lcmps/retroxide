@@ -872,3 +872,24 @@ func exerciseUploadSessions(t *testing.T, ctx context.Context, repositories *Rep
 		t.Fatalf("deleted session = %+v, %v", found, err)
 	}
 }
+
+func TestRepositoriesCountForMetrics(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	file := validROMFile("rf-metrics", "metrics")
+	if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.SaveROM(ctx, romdomain.ROM{ID: "rom-metrics", ROMFileID: file.ID, UploaderID: "u", Identity: romdomain.ROMIdentity{Title: "t", Platform: "snes", IdentifiedBy: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.SaveUploadSession(ctx, uploadsdomain.Session{ID: "ups_metrics", UploaderID: "u", Filename: "f.sfc", Size: 1 << 30, HashState: []byte{1}, UpdatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := repositories.CountForMetrics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.ROMs != 1 || counts.ROMFiles != 1 || counts.ROMBytes != int64(file.Size) || counts.UploadSessions != 1 || counts.UploadSessionBytes != 1<<30 {
+		t.Fatalf("counts = %+v", counts)
+	}
+}

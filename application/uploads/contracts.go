@@ -49,6 +49,8 @@ type Service interface {
 	SessionStatus(context.Context, identity.Requester, string) (SessionDTO, error)
 	AppendToSession(ctx context.Context, requester identity.Requester, sessionID string, offset int64, content io.Reader) (SessionDTO, error)
 	CancelSession(context.Context, identity.Requester, string) error
+	// CheckSessionDuplicate ends the session if the library already has the file with sha256.
+	CheckSessionDuplicate(ctx context.Context, requester identity.Requester, sessionID, sha256 string) error
 }
 
 var _ jobs.Identifier = (*IdentifyService)(nil)

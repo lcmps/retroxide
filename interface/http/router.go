@@ -45,6 +45,11 @@ type Dependencies struct {
 	DownloadLinks DownloadLinks
 	Locales       map[string][]byte
 	Logger        *slog.Logger
+	// Metrics serves monitoring metrics at /metrics; nil leaves the path unserved. It checks its
+	// own credentials.
+	Metrics http.Handler
+	// CountResponse, when set, is told every response's status.
+	CountResponse func(status int)
 }
 
 type Options struct {
@@ -67,6 +72,7 @@ func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 			slog.ErrorContext(c.Request.Context(), "http handler panic", "panic", recovered)
 			writeError(c, fault.Internal(errors.New("http handler panic")))
 		}),
+		responseCountingMiddleware(dependencies.CountResponse),
 		securityHeadersMiddleware(),
 		requestIDMiddleware(dependencies.Logger),
 		compressionMiddleware(),
@@ -77,6 +83,9 @@ func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 	router.GET("/health", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
+	if dependencies.Metrics != nil {
+		router.GET("/metrics", gin.WrapH(dependencies.Metrics))
+	}
 	registerSetupStatusRoute(router)
 	registerRoutes(router.Group("/api/v1"), dependencies, options)
 	router.NoRoute(frontendFallback(options.Frontend, func(c *gin.Context) {

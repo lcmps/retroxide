@@ -39,6 +39,18 @@ func registerUploadRoutes(api *gin.RouterGroup, service uploads.Service, maxByte
 	group.GET("/session/:session_id", handler.sessionStatus)
 	group.PATCH("/session/:session_id", handler.appendToSession)
 	group.DELETE("/session/:session_id", handler.cancelSession)
+	group.POST("/session/:session_id/check", handler.checkSessionDuplicate)
+}
+
+// checkSessionDuplicate takes the file's SHA-256, computed by the client while it uploads.
+func (handler uploadHandler) checkSessionDuplicate(c *gin.Context) {
+	var input struct {
+		SHA256 string `json:"sha256"`
+	}
+	if !bindJSON(c, &input) {
+		return
+	}
+	respondNoContent(c, handler.uploads.CheckSessionDuplicate(c.Request.Context(), requesterFromContext(c), c.Param("session_id"), input.SHA256))
 }
 
 func (handler uploadHandler) createSession(c *gin.Context) {

@@ -590,6 +590,16 @@ export function getUploadSession(sessionId: string): Promise<UploadSession> {
   return requestJson<UploadSession>(`/upload/session/${encodeURIComponent(sessionId)}`, { withAuth: true });
 }
 
+/** Reports the file's SHA-256; a ROM the library already has ends the session with a 409. */
+export function checkUploadSessionDuplicate(sessionId: string, sha256: string): Promise<void> {
+  return requestNoContent(`/upload/session/${encodeURIComponent(sessionId)}/check`, {
+    method: 'POST',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sha256 })
+  });
+}
+
 export function cancelUploadSession(sessionId: string): Promise<void> {
   return requestNoContent(`/upload/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE', withAuth: true });
 }
