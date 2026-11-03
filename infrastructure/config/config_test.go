@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,11 +21,14 @@ func TestLoadUsesRustDefaultsAndSingleWorker(t *testing.T) {
 	if config.Host != "0.0.0.0" || config.Port != 3000 || config.DBDriver != "sqlite" || config.MaxUploadBytes != 64*1024*1024 {
 		t.Fatalf("unexpected defaults: %+v", config)
 	}
-	if config.WorkerCount != 1 || config.JWTAccessExpirySecs != 3600 || config.JWTRefreshExpirySecs != 604800 {
+	if config.WorkerCount != 1 || config.ScrapeWorkerCount != 2 || config.JWTAccessExpirySecs != 3600 || config.JWTRefreshExpirySecs != 604800 {
 		t.Fatalf("unexpected concurrency/auth defaults: %+v", config)
 	}
 	if len(config.AllowedUploadExtensions) == 0 || len(config.AllowedUploadMIMETypes) == 0 {
 		t.Fatalf("upload allowlists are empty: %+v", config)
+	}
+	if !slices.Contains(config.AllowedUploadExtensions, "sms") || !slices.Contains(config.AllowedUploadExtensions, "vpk") || !slices.Contains(config.AllowedUploadExtensions, "rom") {
+		t.Fatalf("default extensions should cover the platform catalog: %v", config.AllowedUploadExtensions)
 	}
 	if len(config.TrustedProxies) != 0 {
 		t.Fatalf("trusted proxies default = %v, want none", config.TrustedProxies)
@@ -142,6 +146,7 @@ func TestLoadRejectsInvalidExplicitValues(t *testing.T) {
 		{name: "zero port", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_PORT": "0"}},
 		{name: "unknown driver", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_DB_DRIVER": "postgres"}},
 		{name: "worker count exceeds bound", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_WORKER_COUNT": "65"}},
+		{name: "zero scrape workers", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_SCRAPE_WORKER_COUNT": "0"}},
 		{name: "malformed trusted proxy", values: map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), "RETROXIDE_TRUSTED_PROXIES": "10.0.0.0/8,proxy.local"}},
 	}
 	for _, test := range tests {
@@ -154,5 +159,47 @@ func TestLoadRejectsInvalidExplicitValues(t *testing.T) {
 				t.Fatal("Load() succeeded, want validation error")
 			}
 		})
+	}
+}
+
+func TestMaxUploadSizeIsReadInMegabytes(t *testing.T) {
+	secret := strings.Repeat("s", 32)
+	tests := []struct {
+		name   string
+		values map[string]string
+		want   int64
+	}{
+		{name: "default", values: map[string]string{}, want: 64 << 20},
+		{name: "megabytes with suffix", values: map[string]string{"RETROXIDE_MAX_UPLOAD_SIZE": "1024MB"}, want: 1 << 30},
+		{name: "bare number is megabytes", values: map[string]string{"RETROXIDE_MAX_UPLOAD_SIZE": "512"}, want: 512 << 20},
+		{name: "lowercase and spaced", values: map[string]string{"RETROXIDE_MAX_UPLOAD_SIZE": " 4096 mb "}, want: 4 << 30},
+		{name: "gigabytes", values: map[string]string{"RETROXIDE_MAX_UPLOAD_SIZE": "4GB"}, want: 4 << 30},
+		{name: "legacy bytes still honoured", values: map[string]string{"RETROXIDE_MAX_UPLOAD_BYTES": "1048576"}, want: 1 << 20},
+		{name: "new setting wins over legacy", values: map[string]string{"RETROXIDE_MAX_UPLOAD_SIZE": "2MB", "RETROXIDE_MAX_UPLOAD_BYTES": "1048576"}, want: 2 << 20},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.values["RETROXIDE_JWT_SECRET"] = secret
+			config, err := Load(func(key string) (string, bool) { value, ok := test.values[key]; return value, ok })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if config.MaxUploadBytes != test.want {
+				t.Fatalf("MaxUploadBytes = %d, want %d", config.MaxUploadBytes, test.want)
+			}
+		})
+	}
+	for _, raw := range []string{"0MB", "-5MB", "1.5GB", "lots", "MB", "1TB", "9999999999999999GB"} {
+		_, err := Load(func(key string) (string, bool) {
+			values := map[string]string{"RETROXIDE_JWT_SECRET": secret, "RETROXIDE_MAX_UPLOAD_SIZE": raw}
+			value, ok := values[key]
+			return value, ok
+		})
+		if err == nil || !strings.Contains(err.Error(), "RETROXIDE_MAX_UPLOAD_SIZE") {
+			t.Errorf("RETROXIDE_MAX_UPLOAD_SIZE=%q error = %v, want a validation error naming the setting", raw, err)
+		}
+	}
+	if got := FormatMegabytes(1 << 30); got != "1024MB" {
+		t.Errorf("FormatMegabytes(1 GiB) = %q", got)
 	}
 }

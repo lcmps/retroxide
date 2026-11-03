@@ -43,19 +43,36 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 	if err := ValidateUpdate(input.Title, input.Platform, input.Region, input.Version); err != nil {
 		return ROMDetailDTO{}, err
 	}
+	if err := ValidateDetails(input.Publisher, input.ReleaseYear, input.Description); err != nil {
+		return ROMDetailDTO{}, err
+	}
 	rom, err := service.findAccessibleROM(ctx, requester, romID)
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
 	title := strings.TrimSpace(input.Title)
-	if title != rom.Identity.Title {
+	platform := normalizePlatform(input.Platform)
+	// A hand-corrected title or platform is final: scrapes only fill in inferred values.
+	if title != rom.Identity.Title || !strings.EqualFold(platform, rom.Identity.Platform) {
 		rom.Identity.IdentifiedBy = romdomain.IdentifiedByManual
 		rom.Identity.Confidence = 100
 	}
 	rom.Identity.Title = title
-	rom.Identity.Platform = strings.ToLower(strings.TrimSpace(input.Platform))
+	rom.Identity.Platform = platform
 	rom.Identity.Region = optionalUnlessWhitespace(input.Region)
 	rom.Identity.Version = optionalUnlessWhitespace(input.Version)
+	for _, field := range []struct {
+		input  *string
+		target **string
+	}{
+		{input.Publisher, &rom.Identity.Publisher},
+		{input.ReleaseYear, &rom.Identity.ReleaseYear},
+		{input.Description, &rom.Identity.Description},
+	} {
+		if field.input != nil {
+			*field.target = optionalUnlessWhitespace(field.input)
+		}
+	}
 	if err := service.repository.SaveROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
@@ -151,7 +168,8 @@ func (service *Service) ReadCover(ctx context.Context, requester identity.Reques
 	return service.storage.Read(ctx, *rom.Identity.CoverArtPath)
 }
 
-// Scrape fills only missing metadata and images; titles are replaced only while still inferred from the filename.
+// Scrape fills only missing metadata and images. The title and platform are replaced only while
+// still inferred from the filename (an unknown platform is always filled in).
 func (service *Service) Scrape(ctx context.Context, requester identity.Requester, romID string) (ROMDetailDTO, error) {
 	if service.scraper == nil {
 		return ROMDetailDTO{}, fault.Internal(errors.New("scraper is not configured"))
@@ -160,6 +178,31 @@ func (service *Service) Scrape(ctx context.Context, requester identity.Requester
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
+	return service.scrape(ctx, rom)
+}
+
+// ScrapeUpload scrapes the ROM an upload created, on behalf of the background job queued once the
+// upload is identified. Finding no match, or the ROM having been deleted since, is not an error;
+// an unavailable metadata service is, so the job is retried.
+func (service *Service) ScrapeUpload(ctx context.Context, uploadID string) error {
+	if service.scraper == nil {
+		return nil
+	}
+	romID, err := service.repository.FindROMIDByUploadID(ctx, uploadID)
+	if err != nil || romID == nil {
+		return err
+	}
+	rom, err := service.repository.FindROMByID(ctx, *romID)
+	if err != nil || rom == nil {
+		return err
+	}
+	if _, err := service.scrape(ctx, rom); err != nil && !fault.IsCode(err, fault.CodeNotFound) {
+		return err
+	}
+	return nil
+}
+
+func (service *Service) scrape(ctx context.Context, rom *romdomain.ROM) (ROMDetailDTO, error) {
 	romFile, err := service.repository.FindROMFileByID(ctx, rom.ROMFileID)
 	if err != nil {
 		return ROMDetailDTO{}, err
@@ -178,7 +221,12 @@ func (service *Service) Scrape(ctx context.Context, requester identity.Requester
 	}
 
 	identity := &rom.Identity
-	if title := strings.TrimSpace(result.Title); title != "" && identity.IdentifiedBy == romdomain.IdentifiedByFilename {
+	inferred := identity.IdentifiedBy == romdomain.IdentifiedByFilename
+	if platform := strings.TrimSpace(result.Platform); platform != "" && len(platform) <= MaxPlatformLength &&
+		(inferred || romdomain.IsUnknownPlatform(identity.Platform)) {
+		identity.Platform = platform
+	}
+	if title := strings.TrimSpace(result.Title); title != "" && inferred {
 		identity.Title = title
 		identity.IdentifiedBy = result.Source
 		identity.Confidence = scrapedConfidence
@@ -263,6 +311,7 @@ func detailOf(rom romdomain.ROM, romFile romdomain.ROMFile) ROMDetailDTO {
 		ROMID:          rom.ID,
 		Title:          rom.Identity.Title,
 		Platform:       rom.Identity.Platform,
+		PlatformName:   romdomain.PlatformName(rom.Identity.Platform),
 		Region:         rom.Identity.Region,
 		Version:        rom.Identity.Version,
 		Publisher:      rom.Identity.Publisher,
@@ -280,9 +329,25 @@ func detailOf(rom romdomain.ROM, romFile romdomain.ROMFile) ROMDetailDTO {
 	}
 }
 
+// optionalUnlessWhitespace stores a trimmed copy of value, or nil when it is blank.
 func optionalUnlessWhitespace(value *string) *string {
-	if value == nil || strings.TrimSpace(*value) == "" {
+	if value == nil {
 		return nil
 	}
-	return value
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+// normalizePlatform stores catalog platforms by their lowercase key and keeps other names as
+// entered, so a platform named by a metadata source keeps its capitalization.
+func normalizePlatform(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	key := romdomain.PlatformKeyForName(trimmed)
+	if _, known := romdomain.PlatformByKey(key); known {
+		return key
+	}
+	return trimmed
 }

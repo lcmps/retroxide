@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,7 +38,7 @@ func NewSessionService(
 }
 
 func (service *SessionService) Login(ctx context.Context, input LoginRequest) (SessionResponse, error) {
-	user, err := service.users.FindByEmail(ctx, input.Email)
+	user, err := service.findByLogin(ctx, input.Identifier())
 	if err != nil {
 		return SessionResponse{}, err
 	}
@@ -98,10 +99,24 @@ func (service *SessionService) Refresh(ctx context.Context, refreshToken string)
 	return service.rotateSession(ctx, *user, *claims.JTI, now)
 }
 
+// findByLogin resolves an email (anything with '@', which usernames cannot contain) or a username.
+func (service *SessionService) findByLogin(ctx context.Context, login string) (*authdomain.User, error) {
+	if strings.Contains(login, "@") {
+		return service.users.FindByEmail(ctx, login)
+	}
+	return service.users.FindByUsername(ctx, NormalizeUsername(login))
+}
+
 // Logout ends every session of the requester: outstanding access tokens stop working immediately
 // and refresh tokens can no longer be exchanged.
 func (service *SessionService) Logout(ctx context.Context, requester identity.Requester) error {
 	return service.endAllSessions(ctx, requester.UserID)
+}
+
+// EndSessions signs userID out everywhere, for example after an administrator resets their
+// password.
+func (service *SessionService) EndSessions(ctx context.Context, userID string) error {
+	return service.endAllSessions(ctx, userID)
 }
 
 func (service *SessionService) endAllSessions(ctx context.Context, userID string) error {

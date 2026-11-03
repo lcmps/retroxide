@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
@@ -63,10 +65,52 @@ func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit i
 		query = query.Where("r.platform_key = ?", strings.ToLower(*filter.Platform))
 	}
 	if filter.Search != nil && strings.TrimSpace(*filter.Search) != "" {
-		pattern := "%" + escapeLike(strings.ToLower(strings.TrimSpace(*filter.Search))) + "%"
-		query = query.Where("(LOWER(r.title) LIKE ? ESCAPE '!' OR r.platform_key LIKE ? ESCAPE '!' OR LOWER(r.id) LIKE ? ESCAPE '!')", pattern, pattern, pattern)
+		query = searchROMs(query, strings.TrimSpace(*filter.Search))
 	}
 	return scanROMsWithFiles(query.Order("r.id ASC").Limit(limit+1), "listing roms")
+}
+
+const (
+	// sqliteTrigramLength is the shortest term the trigram index can match.
+	sqliteTrigramLength = 3
+	// mysqlMinTokenLength is InnoDB's default innodb_ft_min_token_size, the shortest indexed word.
+	mysqlMinTokenLength = 3
+)
+
+// searchROMs matches term case-insensitively against the title or platform, using a full-text
+// index so a search does not read every ROM; terms too short for the index fall back to a scan.
+// SQLite's trigram index matches any substring. MySQL's word index matches words by prefix, then
+// a LIKE confirms the whole term appears as typed, so "mario k" finds "Super Mario Kart" but a
+// fragment from inside a word ("ario") does not. Both dialects' LIKE is already case-insensitive
+// (ASCII in SQLite, the column collation in MySQL), so no LOWER() is needed.
+func searchROMs(query *gorm.DB, term string) *gorm.DB {
+	pattern := "%" + escapeLike(term) + "%"
+	substring := "(r.title LIKE ? ESCAPE '!' OR r.platform LIKE ? ESCAPE '!')"
+	if isMySQL(query) {
+		if words := mysqlFullTextWords(term); words != "" {
+			return query.Where("MATCH(r.title, r.platform) AGAINST (? IN BOOLEAN MODE) AND "+substring, words, pattern, pattern)
+		}
+		return query.Where(substring, pattern, pattern)
+	}
+	if utf8.RuneCountInString(term) < sqliteTrigramLength {
+		return query.Where(substring, pattern, pattern)
+	}
+	// A quoted FTS5 phrase is matched as a substring by the trigram tokenizer.
+	phrase := `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
+	return query.Where("r.id IN (SELECT k.rom_id FROM rom_search AS s JOIN rom_search_key AS k ON k.id = s.rowid WHERE rom_search MATCH ?)", phrase)
+}
+
+// mysqlFullTextWords builds a boolean-mode query requiring every word of term long enough to be
+// indexed, as a prefix ("+mario* +kart*"), or "" when no word is. Words are split the way InnoDB
+// tokenizes, on anything but letters and digits, which also drops boolean operators and quotes.
+func mysqlFullTextWords(term string) string {
+	var required []string
+	for _, word := range strings.FieldsFunc(term, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		if utf8.RuneCountInString(word) >= mysqlMinTokenLength {
+			required = append(required, "+"+word+"*")
+		}
+	}
+	return strings.Join(required, " ")
 }
 
 // likeEscaper escapes LIKE wildcards with '!', which behaves the same in SQLite and MySQL
@@ -172,4 +216,26 @@ func romFileEntity(model ROMFileModel) (romdomain.ROMFile, error) {
 		return romdomain.ROMFile{}, fault.Internal(fmt.Errorf("invalid persisted rom hash: %w", err))
 	}
 	return romdomain.ROMFile{ID: model.ID, Hash: hash, Size: model.Size, StoragePath: model.StoragePath}, nil
+}
+
+// ListPlatforms groups by the indexed, case-folded platform_key so values differing only in case
+// count as one platform.
+func (repositories *Repositories) ListPlatforms(ctx context.Context, uploaderID *string) ([]rom.PlatformCount, error) {
+	var rows []struct {
+		Platform string
+		Count    uint64
+	}
+	query := repositories.DB.WithContext(ctx).Model(&ROMModel{}).
+		Select("MIN(platform) AS platform, COUNT(*) AS count").Group("platform_key")
+	if uploaderID != nil {
+		query = query.Where("uploader_id = ?", *uploaderID)
+	}
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, databaseError("listing platforms", err)
+	}
+	counts := make([]rom.PlatformCount, 0, len(rows))
+	for _, row := range rows {
+		counts = append(counts, rom.PlatformCount{Platform: row.Platform, Count: row.Count})
+	}
+	return counts, nil
 }

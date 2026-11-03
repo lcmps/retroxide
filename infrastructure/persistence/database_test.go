@@ -21,7 +21,7 @@ func TestPoolSettings(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "sqlite pools concurrent WAL readers", driver: "sqlite", wantOpen: 4, wantIdle: 4},
-		{name: "mysql pool is bounded", driver: "mysql", wantOpen: 10, wantIdle: 5},
+		{name: "mysql pool is bounded", driver: "mysql", wantOpen: 10, wantIdle: 10},
 		{name: "unknown driver rejected", driver: "postgres", wantErr: true},
 	}
 	for _, test := range tests {
@@ -94,6 +94,19 @@ func TestMySQLURLConvertsToDriverDSN(t *testing.T) {
 	if parsed.User != "retro" || parsed.Passwd != "secret" || parsed.Addr != "db.example.test:3307" || parsed.DBName != "library" || !parsed.ParseTime {
 		t.Fatalf("parsed DSN = %+v", parsed)
 	}
+	if !parsed.InterpolateParams {
+		t.Fatal("queries should be interpolated client-side to save round trips")
+	}
+	optOut, err := mysqlDSN("mysql://retro:secret@db.example.test:3307/library?interpolateParams=false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed, err := mysql.ParseDSN(optOut); err != nil || parsed.InterpolateParams {
+		t.Fatalf("interpolateParams=false should opt out: %+v, %v", parsed, err)
+	}
+	if _, err := mysqlDSN("mysql://retro@db.example.test/library?interpolateParams=maybe"); err == nil {
+		t.Fatal("an invalid interpolateParams value should be rejected")
+	}
 }
 
 func TestSQLiteConfiguresEveryPooledConnectionAndQueuesConcurrentWrites(t *testing.T) {
@@ -125,6 +138,16 @@ func TestSQLiteConfiguresEveryPooledConnectionAndQueuesConcurrentWrites(t *testi
 		}
 		if foreignKeys != 1 || synchronous != 1 {
 			t.Fatalf("connection %d: foreign_keys=%d synchronous=%d, want 1 and 1 (NORMAL)", i, foreignKeys, synchronous)
+		}
+		var tempStore, cacheSize int
+		if err := connection.QueryRowContext(ctx, "PRAGMA temp_store").Scan(&tempStore); err != nil {
+			t.Fatal(err)
+		}
+		if err := connection.QueryRowContext(ctx, "PRAGMA cache_size").Scan(&cacheSize); err != nil {
+			t.Fatal(err)
+		}
+		if tempStore != 2 || cacheSize != -sqliteCacheKiB {
+			t.Fatalf("connection %d: temp_store=%d cache_size=%d, want 2 (MEMORY) and -%d", i, tempStore, cacheSize, sqliteCacheKiB)
 		}
 		_ = connection.Close()
 	}

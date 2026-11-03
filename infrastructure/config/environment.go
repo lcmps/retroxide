@@ -67,12 +67,21 @@ func ReadFile(path string) (map[string]string, error) {
 
 // WriteFile merges values into the dotenv file at path, replacing it atomically with owner-only permissions.
 func WriteFile(path string, values map[string]string) error {
+	return UpdateFile(path, values, nil)
+}
+
+// UpdateFile sets values and deletes the remove keys in the dotenv file at path, replacing it
+// atomically with owner-only permissions.
+func UpdateFile(path string, values map[string]string, remove []string) error {
 	merged, err := ReadFile(path)
 	if err != nil {
 		return err
 	}
 	for key, value := range values {
 		merged[key] = value
+	}
+	for _, key := range remove {
+		delete(merged, key)
 	}
 	keys := make([]string, 0, len(merged))
 	for key := range merged {

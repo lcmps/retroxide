@@ -53,7 +53,7 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 		case strings.HasPrefix(path, "/hasheous/") && upstream.hasheousDown:
 			writer.WriteHeader(http.StatusServiceUnavailable)
 		case path == "/hasheous/api/v1/Lookup/ByHash/sha1/6b47bb75d16514b6a476aa0c73a683a2a4c18765":
-			_, _ = writer.Write([]byte(`{"name":"Super Mario World","publisher":{"name":"Nintendo"},"signature":{"game":{"year":"1991"}},
+			_, _ = writer.Write([]byte(`{"name":"Super Mario World","platform":{"name":"Nintendo Super Nintendo Entertainment System"},"publisher":{"name":"Nintendo"},"signature":{"game":{"year":"1991"}},
 				"attributes":[{"attributeName":"AIDescription","value":"Dinosaur Land."},{"attributeName":"Logo","value":"3F4AAFC1FCC6DF51F8E9E81CA08AE2583AA6688F"},{"attributeName":"VIMMManualId","value":"4770"}]}`))
 		case path == "/hasheous/api/v1/images/3F4AAFC1FCC6DF51F8E9E81CA08AE2583AA6688F":
 			_, _ = writer.Write([]byte(jpeg))
@@ -204,5 +204,22 @@ func TestDatIndexSharesOneDownloadAcrossConcurrentLookups(t *testing.T) {
 	}
 	if got := requests.Load(); got != 2 {
 		t.Fatalf("upstream requests = %d, want one per system", got)
+	}
+}
+
+func TestScrapeUsesTheHashMatchsPlatformWhenTheExtensionDidNotTell(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	result, err := upstream.client().Scrape(context.Background(), rom.ScrapeQuery{
+		Platform: "unknown", SHA1: "6b47bb75d16514b6a476aa0c73a683a2a4c18765", CRC32: "b19ed489",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Platform != "snes" {
+		t.Fatalf("Platform = %q, want the catalog key for the Hasheous platform name", result.Platform)
+	}
+	// The libretro lookup ran for the reported platform, supplying region and artwork.
+	if result.Region != "USA" || len(result.TitleScreen) == 0 || upstream.datRequests.Load() != 1 {
+		t.Fatalf("region=%q title screen=%d bytes dat requests=%d", result.Region, len(result.TitleScreen), upstream.datRequests.Load())
 	}
 }

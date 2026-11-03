@@ -3,7 +3,10 @@ package persistence
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/lcmps/retroxide/application/auth"
 	"github.com/lcmps/retroxide/application/fault"
@@ -99,4 +102,16 @@ func parseUnixTimestamp(timestamp string) (uint64, error) {
 		return 0, fmt.Errorf("timestamp predates unix epoch")
 	}
 	return uint64(seconds), nil
+}
+
+// isUniqueViolation reports whether err is a unique-constraint violation on either dialect.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var mysqlErr *mysqldriver.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == 1062 // ER_DUP_ENTRY
+	}
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }

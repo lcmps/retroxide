@@ -15,6 +15,7 @@ import (
 	"github.com/lcmps/retroxide/application/jobs"
 	authdomain "github.com/lcmps/retroxide/domain/auth"
 	"github.com/lcmps/retroxide/domain/identity"
+	jobsdomain "github.com/lcmps/retroxide/domain/jobs"
 	"github.com/lcmps/retroxide/infrastructure/auth"
 	"github.com/lcmps/retroxide/infrastructure/config"
 	"github.com/lcmps/retroxide/infrastructure/persistence"
@@ -27,9 +28,9 @@ type Application struct {
 	Router   http.Handler
 	Logger   *slog.Logger
 	JobQueue jobs.Queue
-	// JobNotifier wakes workers when JobQueue receives a job.
-	JobNotifier *jobs.Notifier
-	Identifier  jobs.Identifier
+	// JobPools are the background workers that process JobQueue.
+	JobPools   []jobs.Pool
+	Identifier jobs.Identifier
 }
 
 func NewApplication(ctx context.Context, settings config.Config, logger *slog.Logger) (*Application, error) {
@@ -56,16 +57,17 @@ func assembleApplication(ctx context.Context, settings config.Config, logger *sl
 	if err := seedAdmin(ctx, repositories, hasher, settings.AdminEmail, settings.AdminPassword); err != nil {
 		return fail(err)
 	}
-	notifier := jobs.NewNotifier()
-	queue := jobs.NewNotifyingQueue(repositories, notifier)
+	identifyNotifier, scrapeNotifier := jobs.NewNotifier(), jobs.NewNotifier()
+	queue := jobs.NewNotifyingQueue(repositories, identifyNotifier, scrapeNotifier)
 	services := NewServices(settings, repositories, queue, storage, hasher, tokens, logger)
+	pools := newJobPools(settings, queue, services, identifyNotifier, scrapeNotifier)
 	router, err := NewRouter(settings, services, logger)
 	if err != nil {
 		return fail(err)
 	}
 	return &Application{
 		Config: settings, Database: database, Router: router, Logger: logger,
-		JobQueue: queue, JobNotifier: notifier, Identifier: services.Identifier,
+		JobQueue: queue, JobPools: pools, Identifier: services.Identifier,
 	}, nil
 }
 
@@ -93,4 +95,19 @@ func seedAdmin(ctx context.Context, users authfeature.UserRepository, hasher aut
 	return users.SaveUser(ctx, authdomain.User{
 		ID: userID, Email: email, PasswordHash: passwordHash, Role: identity.RoleAdmin,
 	})
+}
+
+// newJobPools splits the workers so scraping, which waits on remote services, never delays
+// identifying new uploads: one pool takes every job except scrapes, the other only scrapes.
+// A zero scrape worker count (settings not loaded through config.Load) still runs one.
+func newJobPools(settings config.Config, queue jobs.Enqueuer, services *Services, identifyNotifier, scrapeNotifier *jobs.Notifier) []jobs.Pool {
+	handlers := jobs.ROMPipeline(services.Identifier, queue, services.ROMs)
+	scrapes := jobsdomain.KindFilter{Kinds: []string{jobsdomain.KindScrapeROM}}
+	return []jobs.Pool{
+		{
+			Name: "identify", Workers: settings.WorkerCount, Handlers: handlers, Notifier: identifyNotifier,
+			Kinds: jobsdomain.KindFilter{Kinds: scrapes.Kinds, Exclude: true},
+		},
+		{Name: "scrape", Workers: max(settings.ScrapeWorkerCount, 1), Handlers: handlers, Notifier: scrapeNotifier, Kinds: scrapes},
+	}
 }

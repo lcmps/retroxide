@@ -28,8 +28,8 @@ func (handler sessionHandler) login(c *gin.Context) {
 	if !bindJSON(c, &input) {
 		return
 	}
-	if err := auth.ValidateEmail(input.Email); err != nil {
-		writeError(c, err)
+	if login := input.Identifier(); login == "" || len(login) > auth.MaxEmailLength {
+		writeError(c, fault.Validation("an email or username is required"))
 		return
 	}
 	response, err := handler.sessions.Login(c.Request.Context(), input)

@@ -36,7 +36,22 @@ func (repository *testROMRepository) UpsertROMFile(_ context.Context, romFile ro
 
 type testUploadRepository struct {
 	saved []uploadsdomain.Upload
+	jobs  []jobsdomain.Payload
 	err   error
+	// jobErr fails SaveUploadWithJob as a whole, as a rolled-back transaction would.
+	jobErr error
+}
+
+func (repository *testUploadRepository) SaveUploadWithJob(_ context.Context, upload uploadsdomain.Upload, job jobsdomain.Payload) error {
+	if repository.err != nil {
+		return repository.err
+	}
+	if repository.jobErr != nil {
+		return repository.jobErr
+	}
+	repository.saved = append(repository.saved, upload)
+	repository.jobs = append(repository.jobs, job)
+	return nil
 }
 
 func (repository *testUploadRepository) SaveUpload(_ context.Context, upload uploadsdomain.Upload) error {
@@ -101,18 +116,12 @@ func (storage *testStorage) Delete(ctx context.Context, storagePath string) erro
 	return nil
 }
 
+// testQueue counts worker wake-ups.
 type testQueue struct {
-	payloads []jobsdomain.Payload
-	err      error
+	notified int
 }
 
-func (queue *testQueue) Enqueue(_ context.Context, payload jobsdomain.Payload) error {
-	if queue.err != nil {
-		return queue.err
-	}
-	queue.payloads = append(queue.payloads, payload)
-	return nil
-}
+func (queue *testQueue) Notify() { queue.notified++ }
 
 type testAudit struct {
 	accepted  int
@@ -146,14 +155,14 @@ func TestUploadServiceCreateAcceptsAndEnqueues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "processing" || len(queue.payloads) != 1 || len(uploadRepository.saved) != 1 {
-		t.Fatalf("upload result = %+v, queued=%d uploads=%d", result, len(queue.payloads), len(uploadRepository.saved))
+	if result.Status != "processing" || len(uploadRepository.jobs) != 1 || len(uploadRepository.saved) != 1 || queue.notified != 1 {
+		t.Fatalf("upload result = %+v, queued=%d uploads=%d wake-ups=%d", result, len(uploadRepository.jobs), len(uploadRepository.saved), queue.notified)
 	}
 	if uploadRepository.saved[0].UploaderID != "user-1" || uploadRepository.saved[0].Status != uploadsdomain.UploadStatusProcessing {
 		t.Fatalf("persisted upload = %+v", uploadRepository.saved[0])
 	}
-	if queue.payloads[0].Kind != "identify_rom" || queue.payloads[0].Attempt != 0 {
-		t.Fatalf("queued payload = %+v", queue.payloads[0])
+	if job := uploadRepository.jobs[0]; job.Kind != jobsdomain.KindIdentifyROM || job.Attempt != 0 || job.UploadID != uploadRepository.saved[0].ID {
+		t.Fatalf("queued payload = %+v", job)
 	}
 	if storage.writes != 1 || audit.accepted != 1 {
 		t.Fatalf("storage writes=%d audit accepted=%d", storage.writes, audit.accepted)
@@ -182,16 +191,17 @@ func TestUploadServiceCreateRejectsDuplicateBeforeStorageWrite(t *testing.T) {
 	if !fault.IsCode(err, fault.CodeROMAlreadyExists) {
 		t.Fatalf("Create() error = %v, want duplicate conflict", err)
 	}
-	if storage.writes != 0 || storage.pending() != 0 || len(queue.payloads) != 0 || audit.duplicate != 1 {
-		t.Fatalf("storage writes=%d queued=%d duplicate audits=%d", storage.writes, len(queue.payloads), audit.duplicate)
+	if storage.writes != 0 || storage.pending() != 0 || queue.notified != 0 || audit.duplicate != 1 {
+		t.Fatalf("storage writes=%d wake-ups=%d duplicate audits=%d", storage.writes, queue.notified, audit.duplicate)
 	}
 }
 
-func TestUploadServiceCreateCompensatesWhenEnqueueFails(t *testing.T) {
+func TestUploadServiceCreateLeavesNothingBehindWhenTheJobCannotBeSaved(t *testing.T) {
 	queueError := errors.New("queue unavailable")
-	uploadRepository := &testUploadRepository{}
+	uploadRepository := &testUploadRepository{jobErr: queueError}
 	storage := &testStorage{}
-	service := NewUploadService(&testROMRepository{}, uploadRepository, storage, romhash.New(), &testQueue{err: queueError}, nil, UploadPolicy{
+	queue := &testQueue{}
+	service := NewUploadService(&testROMRepository{}, uploadRepository, storage, romhash.New(), queue, nil, UploadPolicy{
 		MaxUploadBytes:    1024,
 		AllowedExtensions: []string{"sfc"},
 	})
@@ -203,8 +213,10 @@ func TestUploadServiceCreateCompensatesWhenEnqueueFails(t *testing.T) {
 	if !errors.Is(err, queueError) {
 		t.Fatalf("Create() error = %v, want queue error", err)
 	}
-	if len(uploadRepository.saved) != 2 || uploadRepository.saved[1].Status != uploadsdomain.UploadStatusFailed {
-		t.Fatalf("saved upload states = %+v, want processing then failed", uploadRepository.saved)
+	// The upload and its job are saved together or not at all, so no upload is left waiting on a
+	// job that will never run.
+	if len(uploadRepository.saved) != 0 || queue.notified != 0 {
+		t.Fatalf("saved uploads = %+v, wake-ups = %d; want neither", uploadRepository.saved, queue.notified)
 	}
 	if len(storage.deletes) != 1 {
 		t.Fatalf("storage deletes = %d, want 1", len(storage.deletes))

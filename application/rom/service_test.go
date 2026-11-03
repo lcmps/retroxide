@@ -3,6 +3,7 @@ package rom
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/lcmps/retroxide/application/fault"
@@ -15,6 +16,30 @@ type romTestRepository struct {
 	romFiles map[string]romdomain.ROMFile
 	// uploadedFilenames maps ROM IDs to the filename they were uploaded with.
 	uploadedFilenames map[string]string
+	// uploadROMs maps upload IDs to the ROM each created.
+	uploadROMs map[string]string
+}
+
+func (repository *romTestRepository) FindROMIDByUploadID(_ context.Context, uploadID string) (*string, error) {
+	romID, ok := repository.uploadROMs[uploadID]
+	if !ok {
+		return nil, nil
+	}
+	return &romID, nil
+}
+
+func (repository *romTestRepository) ListPlatforms(_ context.Context, uploaderID *string) ([]PlatformCount, error) {
+	counts := map[string]uint64{}
+	for _, rom := range repository.roms {
+		if uploaderID == nil || rom.UploaderID == *uploaderID {
+			counts[rom.Identity.Platform]++
+		}
+	}
+	result := make([]PlatformCount, 0, len(counts))
+	for platform, count := range counts {
+		result = append(result, PlatformCount{Platform: platform, Count: count})
+	}
+	return result, nil
 }
 
 func (repository *romTestRepository) FindUploadedFilename(_ context.Context, romID string) (*string, error) {
@@ -206,5 +231,62 @@ func TestROMServiceDownloadsUnderTheTitleWithTheUploadedExtension(t *testing.T) 
 	}
 	if _, err := service.DownloadFilename(context.Background(), identity.Requester{UserID: "other", Role: identity.RoleUser}, "rom-1"); !fault.IsCode(err, fault.CodeNotFound) {
 		t.Fatalf("DownloadFilename() for another user error = %v, want not found", err)
+	}
+}
+
+func TestROMServiceUpdateEditsDetailsAndMarksManualCorrections(t *testing.T) {
+	publisher, description := "Old Publisher", "Old description."
+	repository := &romTestRepository{
+		roms: map[string]romdomain.ROM{"rom-1": {ID: "rom-1", ROMFileID: "file-1", UploaderID: "owner", Identity: romdomain.ROMIdentity{
+			Title: "Alex Kidd", Platform: "unknown", Publisher: &publisher, Description: &description,
+			IdentifiedBy: romdomain.IdentifiedByFilename, Confidence: 45,
+		}}},
+		romFiles: map[string]romdomain.ROMFile{"file-1": {ID: "file-1"}},
+	}
+	service := NewService(repository, &romTestStorage{files: map[string][]byte{}}, romTestAudit{}, nil)
+	owner := identity.Requester{UserID: "owner", Role: identity.RoleUser}
+	text := func(value string) *string { return &value }
+
+	// Omitted details are kept; the platform name resolves to its catalog key.
+	detail, err := service.Update(context.Background(), owner, "rom-1", UpdateROMRequest{
+		Title: "Alex Kidd", Platform: "Sega Master System", ReleaseYear: text(" 1986 "),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := repository.roms["rom-1"].Identity
+	if detail.Platform != "sms" || detail.PlatformName != "Master System" || *detail.ReleaseYear != "1986" || *detail.Publisher != "Old Publisher" {
+		t.Fatalf("detail = %+v", detail)
+	}
+	if saved.IdentifiedBy != romdomain.IdentifiedByManual {
+		t.Fatalf("a hand-corrected platform must be final, got identified by %q", saved.IdentifiedBy)
+	}
+
+	// Empty details are cleared; names outside the catalog keep their capitalization.
+	detail, err = service.Update(context.Background(), owner, "rom-1", UpdateROMRequest{
+		Title: "Alex Kidd", Platform: "Sega Pico", Publisher: text(""), Description: text("  "),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Platform != "Sega Pico" || detail.Publisher != nil || detail.Description != nil || *detail.ReleaseYear != "1986" {
+		t.Fatalf("detail after clearing = %+v", detail)
+	}
+
+	long := strings.Repeat("x", MaxDescriptionLength+1)
+	if _, err := service.Update(context.Background(), owner, "rom-1", UpdateROMRequest{Title: "Alex Kidd", Platform: "sms", Description: &long}); !fault.IsCode(err, fault.CodeValidation) {
+		t.Fatalf("overlong description = %v, want validation error", err)
+	}
+}
+
+func TestPlatformCatalogListsEveryKnownPlatformByName(t *testing.T) {
+	catalog := (&Service{}).PlatformCatalog()
+	if len(catalog) != len(romdomain.Platforms()) {
+		t.Fatalf("catalog has %d platforms, want %d", len(catalog), len(romdomain.Platforms()))
+	}
+	for index := 1; index < len(catalog); index++ {
+		if strings.ToLower(catalog[index-1].Name) > strings.ToLower(catalog[index].Name) {
+			t.Fatalf("catalog not sorted by name at %q, %q", catalog[index-1].Name, catalog[index].Name)
+		}
 	}
 }

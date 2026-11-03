@@ -22,13 +22,12 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 type App struct {
-	config      config.Config
-	database    *gorm.DB
-	router      http.Handler
-	logger      *slog.Logger
-	jobQueue    jobs.Queue
-	jobNotifier *jobs.Notifier
-	identifier  jobs.Identifier
+	config   config.Config
+	database *gorm.DB
+	router   http.Handler
+	logger   *slog.Logger
+	jobQueue jobs.Queue
+	jobPools []jobs.Pool
 }
 
 func Build(ctx context.Context, settings config.Config, logger *slog.Logger) (*App, error) {
@@ -42,7 +41,7 @@ func Build(ctx context.Context, settings config.Config, logger *slog.Logger) (*A
 func newApp(application *factory.Application) *App {
 	return &App{
 		config: application.Config, database: application.Database, router: application.Router, logger: application.Logger,
-		jobQueue: application.JobQueue, identifier: application.Identifier, jobNotifier: application.JobNotifier,
+		jobQueue: application.JobQueue, jobPools: application.JobPools,
 	}
 }
 
@@ -89,7 +88,7 @@ func (app *App) supervise(ctx context.Context, server *http.Server, serverResult
 	defer cancelWorker()
 	workerResult := make(chan error, 1)
 	go func() {
-		workerResult <- jobs.Run(workerContext, app.config.WorkerCount, app.jobQueue, app.identifier, app.jobNotifier)
+		workerResult <- jobs.Run(workerContext, app.jobQueue, app.jobPools...)
 	}()
 
 	var runErr error
