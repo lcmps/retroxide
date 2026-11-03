@@ -45,10 +45,37 @@ type StoredContent struct {
 	ModifiedAt time.Time
 }
 
+// SortField names a listing order. The zero value lists ROMs by ID, the order they were added in
+// no particular sense, which is the cheapest to page through.
+type SortField string
+
+const (
+	SortDefault   SortField = ""
+	SortTitle     SortField = "title"
+	SortRelease   SortField = "release"
+	SortPublisher SortField = "publisher"
+	SortGenre     SortField = "genre"
+)
+
+// ROMSort orders a listing by Field, ties broken by ID. ROMs without a value for Field come
+// last in either direction.
+type ROMSort struct {
+	Field      SortField
+	Descending bool
+}
+
+// ROMCursor is the position after which the next page starts: the last ROM's ID and, for a
+// sorted listing, its value for the sort field (nil once the listing reached ROMs without one).
+type ROMCursor struct {
+	ID    string
+	Value *string
+}
+
 // ROMFilter selects ROMs for listing; nil fields are not applied.
 type ROMFilter struct {
-	// AfterCursor returns only ROMs whose ID sorts after it.
-	AfterCursor *string
+	// After returns only ROMs that come after it in Sort order.
+	After *ROMCursor
+	Sort  ROMSort
 	// Platform matches the platform case-insensitively.
 	Platform *string
 	// UploaderID restricts results to one owner's uploads.
@@ -64,6 +91,9 @@ type ListRequest struct {
 	Platform   *string
 	Search     *string
 	Identified *bool
+	// Sort is one of the SortField values; Order is "asc" (the default) or "desc".
+	Sort  string
+	Order string
 }
 
 type Storage interface {
@@ -98,6 +128,7 @@ type ScrapeResult struct {
 	Region      string
 	Publisher   string
 	ReleaseYear string
+	Genre       string
 	Description string
 	Cover       []byte
 	TitleScreen []byte

@@ -14,11 +14,12 @@ const (
 	MaxTitleLength       = 255
 	MaxPublisherLength   = 255
 	MaxReleaseYearLength = 16
+	MaxGenreLength       = 64
 	MaxDescriptionLength = 4000
 )
 
 // ValidateDetails checks the optional descriptive fields of an update.
-func ValidateDetails(publisher, releaseYear, description *string) error {
+func ValidateDetails(publisher, releaseYear, genre, description *string) error {
 	for _, field := range []struct {
 		name  string
 		value *string
@@ -26,6 +27,7 @@ func ValidateDetails(publisher, releaseYear, description *string) error {
 	}{
 		{"publisher", publisher, MaxPublisherLength},
 		{"release year", releaseYear, MaxReleaseYearLength},
+		{"genre", genre, MaxGenreLength},
 		{"description", description, MaxDescriptionLength},
 	} {
 		if field.value != nil && len(strings.TrimSpace(*field.value)) > field.limit {

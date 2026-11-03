@@ -36,6 +36,7 @@ type ROMModel struct {
 	CoverArtPath    *string `gorm:"column:cover_art_path;type:text"`
 	Publisher       *string `gorm:"column:publisher;size:255"`
 	ReleaseYear     *string `gorm:"column:release_year;size:16"`
+	Genre           *string `gorm:"column:genre;size:64"`
 	Description     *string `gorm:"column:description;type:text"`
 	TitleScreenPath *string `gorm:"column:title_screen_path;type:text"`
 	ScreenshotPath  *string `gorm:"column:screenshot_path;type:text"`

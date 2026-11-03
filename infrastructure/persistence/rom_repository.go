@@ -49,25 +49,82 @@ func (repositories *Repositories) SaveROM(ctx context.Context, rom romdomain.ROM
 	return nil
 }
 
-// ListROMsWithFiles returns up to limit+1 ROMs ordered by ID, so callers can detect a next page.
+// ListROMsWithFiles returns up to limit+1 ROMs in filter.Sort order, so callers can detect a
+// next page.
 func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit int, filter rom.ROMFilter) ([]romdomain.ROMWithFile, error) {
-	query := repositories.DB.WithContext(ctx).
-		Table("rom AS r").
-		Joins("JOIN rom_file AS f ON f.id = r.rom_file_id")
-	if filter.UploaderID != nil {
-		query = query.Where("r.uploader_id = ?", *filter.UploaderID)
+	base := func() *gorm.DB {
+		query := repositories.DB.WithContext(ctx).
+			Table("rom AS r").
+			Joins("JOIN rom_file AS f ON f.id = r.rom_file_id")
+		if filter.UploaderID != nil {
+			query = query.Where("r.uploader_id = ?", *filter.UploaderID)
+		}
+		if filter.Platform != nil && *filter.Platform != "" {
+			// platform_key is the generated, indexed LOWER(platform) column.
+			query = query.Where("r.platform_key = ?", strings.ToLower(*filter.Platform))
+		}
+		if filter.Search != nil && strings.TrimSpace(*filter.Search) != "" {
+			query = searchROMs(query, strings.TrimSpace(*filter.Search))
+		}
+		return query
 	}
-	if filter.AfterCursor != nil {
-		query = query.Where("r.id > ?", *filter.AfterCursor)
+	column, sorted := sortColumns[filter.Sort.Field]
+	if !sorted {
+		query := base()
+		if filter.After != nil {
+			query = query.Where("r.id > ?", filter.After.ID)
+		}
+		return scanROMsWithFiles(query.Order("r.id ASC").Limit(limit+1), "listing roms")
 	}
-	if filter.Platform != nil && *filter.Platform != "" {
-		// platform_key is the generated, indexed LOWER(platform) column.
-		query = query.Where("r.platform_key = ?", strings.ToLower(*filter.Platform))
+	return listSortedROMs(base, column, filter, limit+1)
+}
+
+// sortColumns maps sort fields to their columns. The listing compares them case-insensitively:
+// MySQL through the column collation, SQLite with NOCASE, matching migration 20's indexes.
+var sortColumns = map[rom.SortField]string{
+	rom.SortTitle:     "r.title",
+	rom.SortRelease:   "r.release_year",
+	rom.SortPublisher: "r.publisher",
+	rom.SortGenre:     "r.genre",
+}
+
+// listSortedROMs reads up to count ROMs ordered by column, then ID, in the sort's direction,
+// with ROMs lacking a value last. It reads ROMs that have a value first and, if the page is not
+// full, continues with those that do not (ordered by ID), so each part walks an index in order
+// instead of sorting the whole match.
+func listSortedROMs(base func() *gorm.DB, column string, filter rom.ROMFilter, count int) ([]romdomain.ROMWithFile, error) {
+	direction, compare := "ASC", ">"
+	if filter.Sort.Descending {
+		direction, compare = "DESC", "<"
 	}
-	if filter.Search != nil && strings.TrimSpace(*filter.Search) != "" {
-		query = searchROMs(query, strings.TrimSpace(*filter.Search))
+	var rows []romdomain.ROMWithFile
+	if filter.After == nil || filter.After.Value != nil {
+		ordered := column
+		if !isMySQL(base()) {
+			ordered += " COLLATE NOCASE"
+		}
+		query := base().Where(column + " IS NOT NULL")
+		if after := filter.After; after != nil {
+			query = query.Where(
+				fmt.Sprintf("(%[1]s %[2]s ? OR (%[1]s = ? AND r.id %[2]s ?))", ordered, compare),
+				*after.Value, *after.Value, after.ID,
+			)
+		}
+		valued, err := scanROMsWithFiles(query.Order(ordered+" "+direction+", r.id "+direction).Limit(count), "listing sorted roms")
+		if err != nil || len(valued) >= count {
+			return valued, err
+		}
+		rows = valued
 	}
-	return scanROMsWithFiles(query.Order("r.id ASC").Limit(limit+1), "listing roms")
+	query := base().Where(column + " IS NULL")
+	if filter.After != nil && filter.After.Value == nil {
+		query = query.Where("r.id > ?", filter.After.ID)
+	}
+	missing, err := scanROMsWithFiles(query.Order("r.id ASC").Limit(count-len(rows)), "listing sorted roms")
+	if err != nil {
+		return nil, err
+	}
+	return append(rows, missing...), nil
 }
 
 const (
@@ -128,7 +185,7 @@ func scanROMsWithFiles(query *gorm.DB, operation string) ([]romdomain.ROMWithFil
 		SHA256 string `gorm:"column:sha256"`
 	}
 	err := query.
-		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, f.sha256").
+		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, r.publisher, r.release_year, r.genre, f.sha256").
 		Scan(&rows).Error
 	if err != nil {
 		return nil, databaseError(operation, err)
@@ -185,7 +242,7 @@ func romModel(rom romdomain.ROM) ROMModel {
 		Title: rom.Identity.Title, Platform: rom.Identity.Platform, Region: rom.Identity.Region,
 		Version: rom.Identity.Version, IdentifiedBy: rom.Identity.IdentifiedBy,
 		Confidence: rom.Identity.Confidence, CoverArtPath: rom.Identity.CoverArtPath,
-		Publisher: rom.Identity.Publisher, ReleaseYear: rom.Identity.ReleaseYear, Description: rom.Identity.Description,
+		Publisher: rom.Identity.Publisher, ReleaseYear: rom.Identity.ReleaseYear, Genre: rom.Identity.Genre, Description: rom.Identity.Description,
 		TitleScreenPath: rom.Identity.TitleScreenPath, ScreenshotPath: rom.Identity.ScreenshotPath,
 	}
 }
@@ -196,7 +253,7 @@ func romEntity(model ROMModel) romdomain.ROM {
 		Identity: romdomain.ROMIdentity{
 			Title: model.Title, Platform: model.Platform, Region: model.Region, Version: model.Version,
 			CoverArtPath: model.CoverArtPath, IdentifiedBy: model.IdentifiedBy, Confidence: model.Confidence,
-			Publisher: model.Publisher, ReleaseYear: model.ReleaseYear, Description: model.Description,
+			Publisher: model.Publisher, ReleaseYear: model.ReleaseYear, Genre: model.Genre, Description: model.Description,
 			TitleScreenPath: model.TitleScreenPath, ScreenshotPath: model.ScreenshotPath,
 		},
 	}

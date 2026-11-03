@@ -714,3 +714,109 @@ func exerciseUserManagement(t *testing.T, ctx context.Context, repositories *Rep
 		t.Fatalf("deleting a missing user = %v, want not found", err)
 	}
 }
+
+func TestRepositoriesListROMsInSortOrder(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	exerciseROMSorting(t, ctx, repositories, "user-1")
+}
+
+// exerciseROMSorting checks sorted listings on any dialect by paging two ROMs at a time:
+// text sorts ignore case, ties break by ID, and ROMs without a value come last either way.
+func exerciseROMSorting(t *testing.T, ctx context.Context, repositories *Repositories, owner string) {
+	t.Helper()
+	text := func(value string) *string { return &value }
+	rows := []struct {
+		key, title       string
+		publisher, genre *string
+		year             *string
+	}{
+		{"a", "bravo", text("Sega"), text("Action"), text("1992")},
+		{"b", "Alpha", nil, text("puzzle"), text("1990")},
+		{"c", "charlie", text("capcom"), nil, nil},
+		{"d", "Delta", text("Sega"), text("action"), text("1991")},
+		{"e", "echo", nil, nil, nil},
+	}
+	for _, row := range rows {
+		id := owner + "-sort-" + row.key
+		file := validROMFile(owner+"-sortf-"+row.key, id)
+		if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+		if err := repositories.SaveROM(ctx, romdomain.ROM{
+			ID: id, ROMFileID: file.ID, UploaderID: owner,
+			Identity: romdomain.ROMIdentity{
+				Title: row.title, Platform: "snes", IdentifiedBy: "test", Confidence: 100,
+				Publisher: row.publisher, Genre: row.genre, ReleaseYear: row.year,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, row := range rows {
+			_ = repositories.DeleteROM(ctx, owner+"-sort-"+row.key)
+			_ = repositories.DeleteROMFile(ctx, owner+"-sortf-"+row.key)
+		}
+	})
+
+	list := func(sort rom.ROMSort) string {
+		var order []string
+		filter := rom.ROMFilter{UploaderID: &owner, Sort: sort}
+		for range len(rows) + 1 {
+			page, err := repositories.ListROMsWithFiles(ctx, 2, filter)
+			if err != nil {
+				t.Fatalf("%+v: %v", sort, err)
+			}
+			more := len(page) > 2
+			if more {
+				page = page[:2]
+			}
+			for _, row := range page {
+				order = append(order, strings.TrimPrefix(row.ROM.ID, owner+"-sort-"))
+			}
+			if !more {
+				return strings.Join(order, "")
+			}
+			last := page[len(page)-1].ROM
+			filter.After = &rom.ROMCursor{ID: last.ID, Value: rom.SortValue(last, sort.Field)}
+		}
+		t.Fatalf("%+v: paging did not end", sort)
+		return ""
+	}
+	for _, test := range []struct {
+		sort rom.ROMSort
+		want string
+	}{
+		{rom.ROMSort{}, "abcde"},
+		{rom.ROMSort{Field: rom.SortTitle}, "bacde"},
+		{rom.ROMSort{Field: rom.SortTitle, Descending: true}, "edcab"},
+		{rom.ROMSort{Field: rom.SortRelease}, "bdace"},
+		{rom.ROMSort{Field: rom.SortRelease, Descending: true}, "adbce"},
+		{rom.ROMSort{Field: rom.SortPublisher}, "cadbe"},
+		{rom.ROMSort{Field: rom.SortPublisher, Descending: true}, "dacbe"},
+		{rom.ROMSort{Field: rom.SortGenre}, "adbce"},
+		{rom.ROMSort{Field: rom.SortGenre, Descending: true}, "bdace"},
+	} {
+		if got := list(test.sort); got != test.want {
+			t.Errorf("order %+v = %s, want %s", test.sort, got, test.want)
+		}
+	}
+}
+
+func TestRepositoriesSortedListingsWalkTheSortIndexes(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	const listing = "SELECT r.id FROM rom AS r JOIN rom_file AS f ON f.id = r.rom_file_id WHERE "
+	for _, test := range []struct {
+		name, where, index string
+		args               []any
+	}{
+		{"title", "r.title IS NOT NULL ORDER BY r.title COLLATE NOCASE ASC, r.id ASC LIMIT 61", "idx_rom_sort_title", nil},
+		{"owner by genre, descending", "r.uploader_id = ? AND r.genre IS NOT NULL AND (r.genre COLLATE NOCASE < ? OR (r.genre COLLATE NOCASE = ? AND r.id < ?)) ORDER BY r.genre COLLATE NOCASE DESC, r.id DESC LIMIT 61", "idx_rom_uploader_sort_genre", []any{"usr", "b", "b", "x"}},
+		{"owner by release", "r.uploader_id = ? AND r.release_year IS NOT NULL ORDER BY r.release_year COLLATE NOCASE ASC, r.id ASC LIMIT 61", "idx_rom_uploader_sort_release", []any{"usr"}},
+	} {
+		plan := queryPlan(t, repositories, ctx, listing+test.where, test.args...)
+		if !strings.Contains(plan, test.index) || strings.Contains(plan, "TEMP B-TREE") {
+			t.Errorf("%s: plan %q should use %s with no sort step", test.name, plan, test.index)
+		}
+	}
+}

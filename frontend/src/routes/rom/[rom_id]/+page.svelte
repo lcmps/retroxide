@@ -38,7 +38,8 @@
           { key: 'rom.fields.region', label: 'Region', value: rom.region },
           { key: 'rom.fields.version', label: 'Version', value: rom.version },
           { key: 'rom.fields.publisher', label: 'Publisher', value: rom.publisher },
-          { key: 'rom.fields.release_year', label: 'Release year', value: rom.release_year }
+          { key: 'rom.fields.release_year', label: 'Release year', value: rom.release_year },
+          { key: 'rom.fields.genre', label: 'Genre', value: rom.genre }
         ].filter((field): field is { key: string; label: string; value: string } => Boolean(field.value?.trim()))
       : []
   );

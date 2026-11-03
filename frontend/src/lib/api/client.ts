@@ -326,9 +326,15 @@ export async function fetchCatalog(locale: Locale): Promise<TranslationCatalog> 
 }
 
 /** Server-side ROM list filters: exact platform and case-insensitive search. */
+/** A library order: by ID (the default, when absent), or a field in either direction. */
+export type RomSortField = 'title' | 'release' | 'publisher' | 'genre';
+export type RomSortOrder = 'asc' | 'desc';
+
 export type RomListFilters = {
   platform?: string;
   q?: string;
+  sort?: RomSortField;
+  order?: RomSortOrder;
 };
 
 export function listRoms(limit = 10, cursor?: string, filters: RomListFilters = {}): Promise<RomListResponse> {
@@ -341,6 +347,10 @@ export function listRoms(limit = 10, cursor?: string, filters: RomListFilters = 
   }
   if (filters.q) {
     params.set('q', filters.q);
+  }
+  if (filters.sort) {
+    params.set('sort', filters.sort);
+    params.set('order', filters.order ?? 'asc');
   }
 
   return requestJson<unknown>(`/rom?${params.toString()}`, { withAuth: true }).then(parseRomListResponse);

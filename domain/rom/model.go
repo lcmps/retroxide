@@ -56,6 +56,7 @@ type ROMIdentity struct {
 	Version         *string
 	Publisher       *string
 	ReleaseYear     *string
+	Genre           *string
 	Description     *string
 	CoverArtPath    *string
 	TitleScreenPath *string

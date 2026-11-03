@@ -26,6 +26,7 @@ type ROMDetailDTO struct {
 	Version        *string    `json:"version"`
 	Publisher      *string    `json:"publisher"`
 	ReleaseYear    *string    `json:"release_year"`
+	Genre          *string    `json:"genre"`
 	Description    *string    `json:"description"`
 	CoverArtURL    *string    `json:"cover_art_url"`
 	TitleScreenURL *string    `json:"title_screen_url"`
@@ -48,7 +49,7 @@ type ROMHashDTO struct {
 }
 
 // UpdateROMRequest replaces a ROM's metadata. Title and platform are required; a null region or
-// version clears it. Publisher, release year, and description are left unchanged when omitted
+// version clears it. Publisher, release year, genre, and description are left unchanged when omitted
 // and cleared when empty.
 type UpdateROMRequest struct {
 	Title       string  `json:"title"`
@@ -57,6 +58,7 @@ type UpdateROMRequest struct {
 	Version     *string `json:"version"`
 	Publisher   *string `json:"publisher,omitempty"`
 	ReleaseYear *string `json:"release_year,omitempty"`
+	Genre       *string `json:"genre,omitempty"`
 	Description *string `json:"description,omitempty"`
 }
 
