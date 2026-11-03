@@ -127,14 +127,29 @@ func NewClient(httpClient *http.Client, endpoints Endpoints) *Client {
 	return &Client{http: httpClient, endpoints: endpoints, datCache: make(map[string]*datIndex), datLoads: make(map[string]*datLoad)}
 }
 
+// Scrape looks the ROM up by hash and gathers its metadata and images. Requests that do not
+// depend on each other run concurrently: the system's libretro databases download while Hasheous
+// is asked, and the cover, title screen, screenshot, and genre are fetched together.
 func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.ScrapeResult, error) {
 	result := &rom.ScrapeResult{}
 	matched := false
-	var upstreamErrors []error
+	var failures upstreamErrors
+	var background sync.WaitGroup
+	defer background.Wait()
+
+	// Start the databases of the platform guessed from the extension. Lookups below join these
+	// downloads (or read their cache); a failure here resurfaces from the lookup that needs it.
+	if system, ok := libretroSystems[query.Platform]; ok {
+		background.Go(func() { _, _ = client.datIndex(ctx, system.database, false) })
+		if query.CRC32 != "" {
+			background.Go(func() { _, _ = client.datIndex(ctx, system.genreDatabase(), true) })
+		}
+	}
 
 	match, err := client.lookupHasheous(ctx, query)
+	hasheousCover := ""
 	if err != nil {
-		upstreamErrors = append(upstreamErrors, err)
+		failures.add(err)
 	} else if match != nil {
 		matched = true
 		result.Source = SourceHasheous
@@ -150,11 +165,7 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 			result.Platform = romdomain.PlatformKeyForName(match.Platform.Name)
 		}
 		if imageID := match.attribute("Logo"); hasheousImageID.MatchString(imageID) {
-			if image, err := client.fetchImage(ctx, client.endpoints.Hasheous+"/api/v1/images/"+imageID); err == nil {
-				result.Cover = image
-			} else if !errors.Is(err, errUpstreamNoHit) {
-				upstreamErrors = append(upstreamErrors, err)
-			}
+			hasheousCover = client.endpoints.Hasheous + "/api/v1/images/" + imageID
 		}
 	}
 
@@ -163,10 +174,11 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 	if result.Platform != "" {
 		platform = result.Platform
 	}
-	if system, ok := libretroSystems[platform]; ok {
-		entry, err := client.lookupLibretro(ctx, system, query)
-		if err != nil {
-			upstreamErrors = append(upstreamErrors, err)
+	system, known := libretroSystems[platform]
+	var entry *datEntry
+	if known {
+		if entry, err = client.lookupLibretro(ctx, system, query); err != nil {
+			failures.add(err)
 		} else if entry != nil {
 			matched = true
 			if result.Source == "" {
@@ -174,44 +186,72 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 				result.Title = canonicalTitle(entry.name)
 			}
 			result.Region = entry.region
-			for _, image := range []struct {
-				kind   string
-				target *[]byte
-			}{
-				{"Named_Boxarts", &result.Cover},
-				{"Named_Titles", &result.TitleScreen},
-				{"Named_Snaps", &result.Screenshot},
-			} {
-				if len(*image.target) > 0 {
-					continue
-				}
-				content, err := client.fetchImage(ctx, client.thumbnailURL(system, image.kind, entry.name))
-				if err == nil {
-					*image.target = content
-				} else if !errors.Is(err, errUpstreamNoHit) {
-					upstreamErrors = append(upstreamErrors, err)
-				}
-			}
 		}
 	}
 
-	// Genres come from a separate database keyed by CRC. It only adds to a match, so it is not
-	// consulted otherwise, and a failure to read it does not fail the scrape.
-	if system, ok := libretroSystems[platform]; ok && matched && result.Genre == "" && query.CRC32 != "" {
-		if index, err := client.datIndex(ctx, system.genreDatabase(), true); err == nil {
-			if entry, ok := index.byCRC[strings.ToUpper(query.CRC32)]; ok {
-				result.Genre = entry.genre
+	var fetches sync.WaitGroup
+	fetch := func(target *[]byte, url string) {
+		fetches.Go(func() {
+			if content, err := client.fetchImage(ctx, url); err == nil {
+				*target = content
+			} else if !errors.Is(err, errUpstreamNoHit) {
+				failures.add(err)
 			}
+		})
+	}
+	if hasheousCover != "" {
+		fetch(&result.Cover, hasheousCover)
+	}
+	if entry != nil {
+		fetch(&result.TitleScreen, client.thumbnailURL(system, "Named_Titles", entry.name))
+		fetch(&result.Screenshot, client.thumbnailURL(system, "Named_Snaps", entry.name))
+		// Box art stands in for the Hasheous cover, so it is fetched up front only without one.
+		if hasheousCover == "" {
+			fetch(&result.Cover, client.thumbnailURL(system, "Named_Boxarts", entry.name))
 		}
+	}
+	// Genres come from a separate database keyed by CRC. They only add to a match, and a
+	// failure to read them does not fail the scrape.
+	if known && matched && query.CRC32 != "" {
+		fetches.Go(func() {
+			if index, err := client.datIndex(ctx, system.genreDatabase(), true); err == nil {
+				if genre, ok := index.byCRC[strings.ToUpper(query.CRC32)]; ok {
+					result.Genre = genre.genre
+				}
+			}
+		})
+	}
+	fetches.Wait()
+	if entry != nil && hasheousCover != "" && len(result.Cover) == 0 {
+		fetch(&result.Cover, client.thumbnailURL(system, "Named_Boxarts", entry.name))
+		fetches.Wait()
 	}
 
 	if !matched {
-		if len(upstreamErrors) > 0 {
-			return nil, fault.UpstreamUnavailable("metadata services are unavailable, try again later", errors.Join(upstreamErrors...))
+		if errs := failures.all(); len(errs) > 0 {
+			return nil, fault.UpstreamUnavailable("metadata services are unavailable, try again later", errors.Join(errs...))
 		}
 		return nil, nil
 	}
 	return result, nil
+}
+
+// upstreamErrors collects failures from concurrent requests.
+type upstreamErrors struct {
+	mu     sync.Mutex
+	errors []error
+}
+
+func (failures *upstreamErrors) add(err error) {
+	failures.mu.Lock()
+	defer failures.mu.Unlock()
+	failures.errors = append(failures.errors, err)
+}
+
+func (failures *upstreamErrors) all() []error {
+	failures.mu.Lock()
+	defer failures.mu.Unlock()
+	return failures.errors
 }
 
 type hasheousMatch struct {
