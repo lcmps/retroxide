@@ -84,6 +84,10 @@
 	});
 </script>
 
+<svelte:head>
+	<title>{t('setup.title', 'Setup')} · Retroxide</title>
+</svelte:head>
+
 <main class="setup-page">
 	<section class="setup-card" aria-labelledby="setup-title">
 		<img class="setup-logo" src="/components/main-logo.png" alt="Retroxide" />
@@ -185,7 +189,7 @@
 		border-radius: 0.4rem;
 		background: var(--pixel-panel-strong);
 		color: var(--pixel-text);
-		font-family: 'Press Start 2P', monospace;
+		font-family: var(--app-font);
 		font-size: 0.55rem;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;

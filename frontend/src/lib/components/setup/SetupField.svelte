@@ -9,14 +9,15 @@
 	};
 
 	let { label, value = $bindable(), hint, ...inputProps }: Props = $props();
+	const hintId = $props.id();
 </script>
 
 <label class="field">
 	<span>{label}</span>
-	<input class="setup-input" bind:value {...inputProps} />
+	<input class="setup-input" bind:value aria-describedby={hint ? hintId : undefined} {...inputProps} />
 </label>
 {#if hint}
-	<p class="setup-hint">{hint}</p>
+	<p class="setup-hint" id={hintId}>{hint}</p>
 {/if}
 
 <style>
@@ -55,8 +56,9 @@
 
 	/* Global so section-level hints (not tied to one field) share the look. */
 	:global(.setup-hint) {
-		margin: -0.35rem 0 0;
+		margin: -0.2rem 0 0;
 		font-size: 0.45rem;
+		line-height: 1.7;
 		color: var(--pixel-muted);
 	}
 </style>

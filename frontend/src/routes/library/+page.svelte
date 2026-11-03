@@ -7,6 +7,7 @@
 	import { i18n } from '#lib';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { getErrorMessage } from '#lib/helpers/error.js';
+	import { platforms } from '#lib/platforms/catalog.svelte.js';
 	import { RomPager } from '#lib/roms/pager.svelte.js';
 	import { onMount } from 'svelte';
 
@@ -24,7 +25,7 @@
 	const searchQuery = $derived(page.url.searchParams.get('q')?.trim().toLowerCase() ?? '');
 	const pageTitle = $derived(
 		selectedPlatform
-			? formatPlatformName(selectedPlatform)
+			? platforms.nameFor(selectedPlatform)
 			: t('library.title', 'Library')
 	);
 	const loadErrorMessage = $derived(
@@ -43,19 +44,6 @@
 		return () => clearTimeout(timer);
 	});
 
-	function formatPlatformName(platform: string): string {
-		const labels: Record<string, string> = {
-			nes: 'NES',
-			snes: 'SNES',
-			gba: 'Game Boy Advance',
-			gb: 'Game Boy',
-			gbc: 'Game Boy Color',
-			n64: 'Nintendo 64',
-			psx: 'PlayStation'
-		};
-
-		return labels[platform.toLowerCase()] ?? platform;
-	}
 
 	onMount(() => {
 		void i18n
@@ -69,17 +57,21 @@
 	});
 </script>
 
+<svelte:head>
+	<title>{pageTitle} · Retroxide</title>
+</svelte:head>
+
 <section class="page-shell stack" aria-labelledby="library-title" style="--layout-gap: 2.75rem">
 	<div class="library-heading">
 		<h1 id="library-title">{pageTitle}</h1>
 	</div>
 
 	{#if pager.items.length === 0 && (pager.loading || !ready)}
-		<p class="library-state">{t('library.roms.loading', 'Loading ROMs...')}</p>
+		<p class="library-state" role="status">{t('library.roms.loading', 'Loading ROMs...')}</p>
 	{:else if pager.items.length === 0}
-		<p class="library-state">{t('library.roms.empty', 'No ROMs matched the current filters.')}</p>
+		<p class="library-state" role="status">{t('library.roms.empty', 'No ROMs matched the current filters.')}</p>
 	{:else}
-		<ul class="rom-gallery" aria-label={t('library.roms.title', 'ROM Catalog')}>
+		<ul class="rom-gallery" aria-label={t('library.roms.title', 'ROM Catalog')} aria-busy={pager.loading}>
 			{#each pager.items as rom (rom.rom_id)}
 				<li>
 					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={rom.title}>
@@ -93,7 +85,7 @@
 							<Tooltip.Portal>
 								<Tooltip.Content class="rom-tooltip" sideOffset={6}>
 									<p class="rom-tooltip__title">{rom.title}</p>
-									<p class="rom-tooltip__platform">{formatPlatformName(rom.platform)}</p>
+									<p class="rom-tooltip__platform">{rom.platform_name}</p>
 								</Tooltip.Content>
 							</Tooltip.Portal>
 						</Tooltip.Root>
@@ -198,7 +190,12 @@
 		h1 {
 			font-size: 1rem;
 		}
-		.rom-gallery { grid-template-columns: repeat(auto-fill, minmax(6.25rem, 1fr)); gap: 1rem; }
+
+		.library-state {
+			text-align: center;
+		}
+		/* Fixed-width columns centred as a group, instead of stretched tracks hugging the left. */
+		.rom-gallery { grid-template-columns: repeat(auto-fill, 6.25rem); justify-content: center; gap: 1.25rem 1rem; }
 		.rom-tile, .rom-cover { width: 6.25rem; }
 	}
 </style>

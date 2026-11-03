@@ -3,6 +3,16 @@ import { browser } from '$app/env';
 import type {
   ApiError,
   DownloadLink,
+  Appearance,
+  CreateUserRequest,
+  DeleteUserResponse,
+  ManagedUser,
+  UpdateUserRequest,
+  Platform,
+  Profile,
+  SettingsResponse,
+  UpdateProfileRequest,
+  UpdateProfileResponse,
   LoginRequest,
   MySQLConnection,
   RomDetail,
@@ -334,6 +344,89 @@ export function listRoms(limit = 10, cursor?: string, filters: RomListFilters = 
   }
 
   return requestJson<unknown>(`/rom?${params.toString()}`, { withAuth: true }).then(parseRomListResponse);
+}
+
+export function getProfile(): Promise<Profile> {
+  return requestJson<Profile>('/me', { withAuth: true });
+}
+
+/** Updates the profile; after a password change, keeps this tab signed in with the new session. */
+export async function updateProfile(payload: UpdateProfileRequest): Promise<Profile> {
+  const response = await requestJson<UpdateProfileResponse>('/me', {
+    method: 'PATCH',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (response.session) {
+    persistStoredSession(response.session);
+  }
+  return response.profile;
+}
+
+/** The presentation settings, such as the interface font; available without signing in. */
+export function getAppearance(): Promise<Appearance> {
+  return requestJson<Appearance>('/appearance');
+}
+
+/** Lists every account (administrators only). */
+export async function listUsers(): Promise<ManagedUser[]> {
+  const response = await requestJson<{ item: ManagedUser[] }>('/users', { withAuth: true });
+  return response.item;
+}
+
+export function createUser(payload: CreateUserRequest): Promise<ManagedUser> {
+  return requestJson<ManagedUser>('/users', {
+    method: 'POST',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateUser(userId: string, payload: UpdateUserRequest): Promise<ManagedUser> {
+  return requestJson<ManagedUser>(`/users/${encodeURIComponent(userId)}`, {
+    method: 'PATCH',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+/** Deletes an account; its ROMs, libraries, and uploads move to the signed-in administrator. */
+export function deleteUser(userId: string): Promise<DeleteUserResponse> {
+  return requestJson<DeleteUserResponse>(`/users/${encodeURIComponent(userId)}`, { method: 'DELETE', withAuth: true });
+}
+
+/** Signs a user out on every device. */
+export function endUserSessions(userId: string): Promise<void> {
+  return requestNoContent(`/users/${encodeURIComponent(userId)}/sessions`, { method: 'DELETE', withAuth: true });
+}
+
+export function getSettings(): Promise<SettingsResponse> {
+  return requestJson<SettingsResponse>('/settings', { withAuth: true });
+}
+
+/** Saves settings (administrators only); an empty value restores the default. */
+export function updateSettings(values: Record<string, string>): Promise<SettingsResponse> {
+  return requestJson<SettingsResponse>('/settings', {
+    method: 'PATCH',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values })
+  });
+}
+
+/** Lists every platform Retroxide knows, for choosing one when editing a ROM. */
+export async function listPlatformCatalog(): Promise<Platform[]> {
+  const response = await requestJson<{ item: Platform[] }>('/platforms/catalog', { withAuth: true });
+  return response.item;
+}
+
+/** Lists the platforms of the ROMs the current user can see, ordered for display. */
+export async function listPlatforms(): Promise<Platform[]> {
+  const response = await requestJson<{ item: Platform[] }>('/platforms', { withAuth: true });
+  return response.item;
 }
 
 export function createSession(payload: LoginRequest): Promise<SessionResponse> {

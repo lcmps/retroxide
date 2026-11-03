@@ -4,6 +4,9 @@
   import { resolve } from '$app/paths';
   import { Dialog } from 'bits-ui';
   import ActionButton from '#lib/components/ActionButton.svelte';
+  import RomEditForm from '#lib/components/rom/RomEditForm.svelte';
+  import { platforms } from '#lib/platforms/catalog.svelte.js';
+  import { tick } from 'svelte';
   import { deleteRom, downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '#lib';
   import { ApiClientError } from '#lib/api/errors.js';
   import { getErrorMessage } from '#lib/helpers/error.js';
@@ -21,6 +24,8 @@
   let deleting = $state(false);
   let deleteOpen = $state(false);
   let coverPreviewUrl = $state<string | null>(null);
+  let editing = $state(false);
+  let editButton = $state<HTMLButtonElement>();
   let message = $state('');
 
   const t = useTranslate(i18n);
@@ -29,7 +34,7 @@
   const fields = $derived(
     rom
       ? [
-          { key: 'rom.fields.platform', label: 'Platform', value: rom.platform },
+          { key: 'rom.fields.platform', label: 'Platform', value: rom.platform_name || rom.platform },
           { key: 'rom.fields.region', label: 'Region', value: rom.region },
           { key: 'rom.fields.version', label: 'Version', value: rom.version },
           { key: 'rom.fields.publisher', label: 'Publisher', value: rom.publisher },
@@ -104,6 +109,21 @@
     }
   }
 
+  async function closeEditor(): Promise<void> {
+    editing = false;
+    // Return focus to where editing started, for keyboard and screen-reader users.
+    await tick();
+    editButton?.focus();
+  }
+
+  async function saveEdits(updated: RomDetail): Promise<void> {
+    rom = updated;
+    message = t('rom.edit.saved', 'Changes saved.');
+    // The platform may have changed, which changes the platform filter's options.
+    void platforms.refresh();
+    await closeEditor();
+  }
+
   async function deleteCurrentRom(): Promise<void> {
     if (!rom || deleting) return;
     deleting = true;
@@ -127,35 +147,24 @@
   });
 </script>
 
+<svelte:head>
+	<title>{rom?.title ?? t('rom.title', 'ROM Detail')} · Retroxide</title>
+</svelte:head>
+
 <section class="page-shell stack" aria-labelledby="rom-title">
   {#if loading}
-    <p>{t('rom.messages.loading', 'Loading...')}</p>
+    <p role="status">{t('rom.messages.loading', 'Loading...')}</p>
   {:else if rom}
     <article class="rom-card">
-      <div class="rom-cover" aria-hidden="true">
-        {#if coverPreviewUrl}<img src={coverPreviewUrl} alt="" />{/if}
-      </div>
-      <div class="rom-details">
-        <h1 id="rom-title">{rom.title}</h1>
-        <dl class="rom-fields">
-          {#each fields as field (field.key)}
-            <div class="rom-field">
-              <dt>{t(field.key, field.label)}</dt>
-              <dd>{field.value}</dd>
-            </div>
-          {/each}
-        </dl>
-        {#if rom.description}<p class="rom-description">{rom.description}</p>{/if}
-      </div>
-      <div class="rom-actions">
-        <ActionButton type="button" onclick={downloadCurrentRom} disabled={downloading || deleting}>
+      <div class="rom-actions" role="group" aria-label={t('rom.actions.label', 'ROM actions')}>
+        <ActionButton type="button" onclick={downloadCurrentRom} disabled={downloading || deleting} aria-busy={downloading} title={t('rom.actions.downloadHint', 'Save this ROM to your device')}>
           {downloading ? t('common.status.downloading', 'Downloading...') : t('rom.actions.download', 'Download')}
         </ActionButton>
-        <ActionButton type="button" onclick={scrapeCurrentRom} disabled={scraping || deleting}>
+        <ActionButton type="button" onclick={scrapeCurrentRom} disabled={scraping || deleting} aria-busy={scraping} title={t('rom.actions.scrapeHint', 'Fetch the title, details, and artwork from online game databases')}>
           {scraping ? t('rom.actions.scraping', 'Scraping...') : t('rom.actions.scrape', 'Scrape')}
         </ActionButton>
         <Dialog.Root bind:open={deleteOpen}>
-          <ActionButton type="button" variant="danger" disabled={deleting || scraping || downloading} onclick={() => { deleteOpen = true; }}>
+          <ActionButton type="button" variant="danger" disabled={deleting || scraping || downloading} aria-haspopup="dialog" title={t('rom.actions.deleteHint', 'Permanently remove this ROM and its file')} onclick={() => { deleteOpen = true; }}>
             {t('rom.actions.delete', 'Delete ROM')}
           </ActionButton>
           <Dialog.Portal>
@@ -167,7 +176,7 @@
               </Dialog.Description>
               <div class="rom-delete-actions">
                 <ActionButton type="button" variant="secondary" disabled={deleting} onclick={() => { deleteOpen = false; }}>{t('common.actions.cancel', 'Cancel')}</ActionButton>
-                <ActionButton type="button" variant="danger" disabled={deleting} onclick={deleteCurrentRom}>
+                <ActionButton type="button" variant="danger" disabled={deleting} aria-busy={deleting} onclick={deleteCurrentRom}>
                   {deleting ? t('rom.actions.deleting', 'Deleting...') : t('rom.delete.confirm', 'Delete permanently')}
                 </ActionButton>
               </div>
@@ -175,15 +184,49 @@
           </Dialog.Portal>
         </Dialog.Root>
       </div>
+      <div class="rom-cover" aria-hidden={coverPreviewUrl ? undefined : 'true'}>
+        {#if coverPreviewUrl}<img src={coverPreviewUrl} alt={t('rom.cover.alt', 'Cover art for {title}', { title: rom.title })} />{/if}
+      </div>
+      <div class="rom-details" id="rom-details">
+        <div class="rom-details__header">
+          <h1 id="rom-title">{rom.title}</h1>
+          {#if !editing}
+            <button
+              bind:this={editButton}
+              type="button"
+              class="rom-edit-button"
+              aria-expanded="false"
+              aria-controls="rom-details"
+              title={t('rom.edit.hintButton', 'Edit the title and details')}
+              onclick={() => (editing = true)}
+              disabled={deleting}
+            >
+              {t('rom.edit.button', 'Edit')}
+            </button>
+          {/if}
+        </div>
+        {#if editing}
+          <RomEditForm {rom} onsaved={(updated) => void saveEdits(updated)} oncancel={() => void closeEditor()} />
+        {:else}
+          <dl class="rom-fields">
+            {#each fields as field (field.key)}
+              <div class="rom-field">
+                <dt>{t(field.key, field.label)}</dt>
+                <dd>{field.value}</dd>
+              </div>
+            {/each}
+          </dl>
+          {#if rom.description}<p class="rom-description">{rom.description}</p>{/if}
+        {/if}
+      </div>
     </article>
   {:else}
     <h1 id="rom-title">{t('rom.title', 'ROM Detail')}</h1>
     <p>{t('rom.messages.empty', 'No ROM data loaded.')}</p>
   {/if}
 
-  {#if message}
-    <p class="message">{message}</p>
-  {/if}
+  <!-- Always present so screen readers announce each new message. -->
+  <p class="message" role="status" aria-live="polite">{message}</p>
 </section>
 
 <style>
@@ -198,7 +241,11 @@
     grid-template-columns: minmax(10rem, 16rem) minmax(0, 1fr);
     align-items: start;
     gap: 1.5rem;
+    /* Centre the cover, details, and actions as one block; text inside stays left-aligned. The
+       explicit width keeps auto margins from shrinking the block to its content. */
+    width: 100%;
     max-width: 56rem;
+    margin-inline: auto;
   }
 
   .rom-cover {
@@ -221,6 +268,36 @@
   }
   .rom-details h1 { margin: 0; font-size: 0.9rem; line-height: 1.5; overflow-wrap: anywhere; }
 
+  .rom-details__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .rom-edit-button {
+    flex: none;
+    min-height: 2rem;
+    padding: 0.45rem 0.8rem;
+    border: 2px solid var(--pixel-border-strong);
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--pixel-text);
+    font: inherit;
+    font-size: 0.5rem;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .rom-edit-button:hover:not(:disabled) {
+    background: var(--pixel-panel-strong);
+  }
+
+  .rom-edit-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
   .rom-fields { display: grid; gap: 0.6rem; margin: 0; }
   .rom-field {
     display: grid;
@@ -234,18 +311,43 @@
 
   .rom-description { margin: 0; color: var(--pixel-muted); font-size: 0.6rem; line-height: 1.8; }
 
+  /* The actions get their own row at the top, above the cover and details. */
   .rom-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.75rem; }
 
-  .message {
-    margin: 0;
+  /* Status messages line up with the centred block above them; the extra specificity beats
+     the shell's paragraph width cap. */
+  .page-shell p.message {
+    width: 100%;
+    max-width: 56rem;
+    margin: 0 auto;
     color: var(--pixel-muted);
+    font-size: 0.6rem;
+    line-height: 1.6;
+  }
+
+  /* An empty live region stays in the accessibility tree but takes no space. */
+  .message:empty {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  /* Phones held sideways: size the cover to the screen height and keep the actions beside it. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .rom-card { grid-template-columns: auto minmax(0, 1fr); gap: 1rem 1.25rem; }
+    .rom-cover { width: min(14rem, calc((100dvh - 9rem) * 2 / 3)); }
   }
 
   @media (max-width: 40rem) {
-    .rom-card { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
-    .rom-cover { width: min(100%, 14rem); }
-    .rom-details { padding: 1rem; }
-    .rom-details h1 { font-size: 0.85rem; }
+    .rom-card { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 1rem; margin-inline: auto; }
+    .rom-cover { width: min(100%, 12rem); }
+    .rom-details { width: 100%; max-width: 28rem; padding: 1rem; }
+    /* The global phone rule centres page titles; this one belongs to the box's left-aligned text. */
+    .rom-card .rom-details h1 { font-size: 0.8rem; text-align: start; }
     .rom-field { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
+    .rom-actions { width: 100%; max-width: 28rem; justify-content: center; }
+    .page-shell p.message { max-width: 28rem; text-align: center; }
   }
 </style>

@@ -8,6 +8,7 @@ import {
 	EMBEDDED_ENGLISH_CATALOG,
 	getPreferredLocale,
 	getSupportedLocales,
+	normalizeLocale,
 	type Locale,
 	type TranslationCatalog,
 	type TranslationValues
@@ -31,7 +32,11 @@ function readStoredLocale(): string | null {
 		return null;
 	}
 
-	return localStorage.getItem(LOCALE_STORAGE_KEY);
+	try {
+		return localStorage.getItem(LOCALE_STORAGE_KEY);
+	} catch {
+		return null;
+	}
 }
 
 function readBrowserLocale(): string | null {
@@ -42,12 +47,24 @@ function readBrowserLocale(): string | null {
 	return navigator.language;
 }
 
-function persistLocale(locale: Locale): void {
+/**
+ * Caches an explicitly chosen language so the next page load starts in it, before the account's
+ * preference has been fetched. A null locale forgets the choice and follows the browser again.
+ */
+function persistLocale(locale: Locale | null): void {
 	if (!browser) {
 		return;
 	}
 
-	localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+	try {
+		if (locale) {
+			localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+		} else {
+			localStorage.removeItem(LOCALE_STORAGE_KEY);
+		}
+	} catch {
+		// Storage can be unavailable (private windows); the account preference still applies.
+	}
 }
 
 const initialLocale = getPreferredLocale(undefined, undefined);
@@ -115,6 +132,7 @@ async function syncActiveCatalog(activeState: I18nState): Promise<void> {
 	if (targetLocale === 'en') {
 		activeState.locale = 'en';
 		activeState.activeCatalog = englishCatalog;
+		applyDocumentLanguage('en');
 		return;
 	}
 
@@ -135,6 +153,14 @@ async function syncActiveCatalog(activeState: I18nState): Promise<void> {
 
 	activeState.locale = targetLocale;
 	activeState.activeCatalog = nextCatalog;
+	applyDocumentLanguage(nextCatalog === englishCatalog ? 'en' : targetLocale);
+}
+
+/** Keeps <html lang> in step with the shown language, which screen readers use for pronunciation. */
+function applyDocumentLanguage(locale: Locale): void {
+	if (browser) {
+		document.documentElement.lang = locale;
+	}
 }
 
 export const i18n = {
@@ -200,7 +226,7 @@ export const i18n = {
 
 			await syncActiveCatalog(activeState);
 
-			persistLocale(activeState.desiredLocale);
+			// Only explicit choices are cached; a detected browser language is re-detected each load.
 			activeState.initialized = true;
 		})().finally(() => {
 			activeState.initializing = false;
@@ -208,6 +234,34 @@ export const i18n = {
 		});
 
 		return pendingInitialization;
+	},
+
+	/**
+	 * Applies the signed-in user's saved language, which takes precedence over the browser's.
+	 * A null or unsupported value means the user follows the browser language.
+	 */
+	async applyAccountLocale(locale: string | null | undefined): Promise<void> {
+		const activeState = getActiveState();
+		if (!activeState) {
+			return;
+		}
+
+		const chosen = normalizeLocale(locale);
+		if (chosen) {
+			await this.setLocale(chosen);
+			return;
+		}
+
+		persistLocale(null);
+		activeState.hasExplicitSelection = false;
+		const detected = getPreferredLocale(null, readBrowserLocale());
+		if (detected === activeState.desiredLocale && activeState.initialized) {
+			return;
+		}
+		activeState.desiredLocale = detected;
+		activeState.locale = detected;
+		await syncActiveCatalog(activeState);
+		activeState.initialized = activeState.englishCatalogReady;
 	},
 
 	async setLocale(locale: Locale): Promise<void> {
