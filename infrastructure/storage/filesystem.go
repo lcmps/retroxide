@@ -162,6 +162,11 @@ func storageError(operation string, err error) error {
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
+// FreeSpace returns the bytes free on the storage folder's disk, or false when unknown.
+func (filesystem *Filesystem) FreeSpace() (int64, bool) {
+	return freeSpace(filesystem.root)
+}
+
 // HasRoomFor reports whether size more bytes fit while keeping freeSpaceReserve free. It
 // answers true when free space cannot be measured.
 func (filesystem *Filesystem) HasRoomFor(size int64) bool {

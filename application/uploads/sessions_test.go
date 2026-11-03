@@ -279,3 +279,36 @@ func TestSessionCreationChecksTheUploadAndExpiresIdleSessions(t *testing.T) {
 		t.Fatalf("expired session = %v, want not found", err)
 	}
 }
+
+func TestSessionDuplicateCheckStopsUploadingKnownROMs(t *testing.T) {
+	ctx := context.Background()
+	fixture := newSessionFixture(&testStorage{})
+	known, _ := romhash.New().Hash([]byte("known rom"))
+	session, _ := fixture.service.CreateSession(ctx, player, CreateSessionInput{Filename: "game.sfc", Size: 9})
+	if _, err := fixture.service.AppendToSession(ctx, player, session.SessionID, 0, strings.NewReader("kno")); err != nil {
+		t.Fatal(err)
+	}
+	// Not in the library yet: the upload goes on.
+	if err := fixture.service.CheckSessionDuplicate(ctx, player, session.SessionID, known.SHA256); err != nil {
+		t.Fatalf("check of a new ROM = %v", err)
+	}
+	if _, err := fixture.service.SessionStatus(ctx, player, session.SessionID); err != nil {
+		t.Fatalf("session after a passed check = %v", err)
+	}
+	for _, bad := range []string{"", "ABC", strings.Repeat("g", 64), strings.ToUpper(known.SHA256)} {
+		if err := fixture.service.CheckSessionDuplicate(ctx, player, session.SessionID, bad); !fault.IsCode(err, fault.CodeValidation) {
+			t.Errorf("check with %q = %v, want validation error", bad, err)
+		}
+	}
+	if err := fixture.service.CheckSessionDuplicate(ctx, identity.Requester{UserID: "stranger"}, session.SessionID, known.SHA256); !fault.IsCode(err, fault.CodeNotFound) {
+		t.Fatalf("another user's check = %v, want not found", err)
+	}
+	// Once the library has it, the check ends the session.
+	fixture.roms.existing = &romdomain.ROMFile{ID: "rf_known", Hash: known}
+	if err := fixture.service.CheckSessionDuplicate(ctx, player, session.SessionID, known.SHA256); !fault.IsCode(err, fault.CodeROMAlreadyExists) {
+		t.Fatalf("check of a known ROM = %v, want rom already exists", err)
+	}
+	if len(fixture.sessions.sessions) != 0 || len(fixture.partials.files) != 0 {
+		t.Fatal("the duplicate's session or partial file was kept")
+	}
+}

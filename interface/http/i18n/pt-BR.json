@@ -249,6 +249,8 @@
   "settings.items.RETROXIDE_JWT_REFRESH_EXPIRY_SECS.label": "Duração da sessão",
   "settings.items.RETROXIDE_MAX_UPLOAD_SIZE.description": "Maior ROM que pode ser enviada, em megabytes, por exemplo 1024MB para 1 GB.",
   "settings.items.RETROXIDE_MAX_UPLOAD_SIZE.label": "Tamanho máximo de envio",
+  "settings.items.RETROXIDE_METRICS_TOKEN.label": "Token de métricas",
+  "settings.items.RETROXIDE_METRICS_TOKEN.description": "Disponibiliza métricas do Prometheus em /metrics para requisições com este token bearer (pelo menos 16 caracteres). Deixe vazio para desativar as métricas.",
   "settings.items.RETROXIDE_MYSQL_URL.description": "URL de conexão MySQL, quando o driver é mysql. A senha nunca é exibida.",
   "settings.items.RETROXIDE_MYSQL_URL.label": "Conexão MySQL",
   "settings.items.RETROXIDE_PORT.description": "Porta em que o servidor HTTP escuta.",

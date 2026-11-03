@@ -167,3 +167,13 @@ func isPublicPath(method, path string) bool {
 	}
 	return path == "/api/docs" || strings.HasPrefix(path, "/api/docs/")
 }
+
+// responseCountingMiddleware reports each response's status once the handler is done.
+func responseCountingMiddleware(count func(status int)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		if count != nil {
+			count(c.Writer.Status())
+		}
+	}
+}

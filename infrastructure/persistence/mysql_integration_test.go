@@ -285,6 +285,9 @@ func TestMySQLUploadSessionsAndStoragePaths(t *testing.T) {
 	defer sqlDB.Close()
 	repositories := NewRepositories(db)
 	exerciseUploadSessions(t, ctx, repositories, fmt.Sprintf("ups_%x", time.Now().UnixNano()))
+	if counts, err := repositories.CountForMetrics(ctx); err != nil || counts.ROMFiles < 0 || counts.JobsQueued == nil {
+		t.Fatalf("CountForMetrics() = %+v, %v", counts, err)
+	}
 
 	// Legacy paths are found and rewritten; keys and references are recognized.
 	suffix := fmt.Sprintf("%x", time.Now().UnixNano())

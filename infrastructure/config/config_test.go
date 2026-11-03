@@ -203,3 +203,22 @@ func TestMaxUploadSizeIsReadInMegabytes(t *testing.T) {
 		t.Errorf("FormatMegabytes(1 GiB) = %q", got)
 	}
 }
+
+func TestLoadAcceptsOnlyLongMetricsTokens(t *testing.T) {
+	load := func(token string) (Config, error) {
+		values := map[string]string{"RETROXIDE_JWT_SECRET": strings.Repeat("s", 32), MetricsTokenKey: token}
+		return Load(func(key string) (string, bool) {
+			value, ok := values[key]
+			return value, ok
+		})
+	}
+	if config, err := load(""); err != nil || config.MetricsToken != "" {
+		t.Fatalf("no token = %q, %v; want metrics off", config.MetricsToken, err)
+	}
+	if _, err := load("short"); err == nil {
+		t.Fatal("a short metrics token was accepted")
+	}
+	if config, err := load(" " + strings.Repeat("m", 16) + " "); err != nil || config.MetricsToken != strings.Repeat("m", 16) {
+		t.Fatalf("token = %q, %v", config.MetricsToken, err)
+	}
+}

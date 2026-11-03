@@ -1,9 +1,12 @@
 package factory
 
 import (
+	"context"
 	"github.com/lcmps/retroxide/infrastructure/imaging"
+	"github.com/lcmps/retroxide/infrastructure/metrics"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/lcmps/retroxide/application/auth"
@@ -22,8 +25,14 @@ import (
 
 const scraperTimeout = 30 * time.Second
 
-func NewScraper() *scraper.Client {
-	return scraper.NewClient(&http.Client{Timeout: scraperTimeout}, scraper.DefaultEndpoints())
+// datCacheMaxAge is how long downloaded libretro databases are used before being revalidated.
+const datCacheMaxAge = 7 * 24 * time.Hour
+
+// NewScraper returns the metadata scraper, keeping libretro's databases in the storage folder
+// (a hidden folder the storage layout ignores) between restarts.
+func NewScraper(settings config.Config) *scraper.Client {
+	return scraper.NewClient(&http.Client{Timeout: scraperTimeout}, scraper.DefaultEndpoints()).
+		CacheDatabasesIn(filepath.Join(settings.StorageRoot, ".cache", "libretro"), datCacheMaxAge)
 }
 
 type Services struct {
@@ -35,10 +44,16 @@ type Services struct {
 	Authenticator *auth.Authenticator
 	Users         *users.Service
 	Identifier    *persistence.Identifier
+	// Metrics counts the server's activity for monitoring.
+	Metrics *metrics.Registry
 }
 
 func NewServices(settings config.Config, repositories *persistence.Repositories, queue *jobs.NotifyingQueue, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
-	audit := observability.NewAuditLogger(logger)
+	registry := metrics.NewRegistry(func(ctx context.Context) (metrics.Counts, error) {
+		counts, err := repositories.CountForMetrics(ctx)
+		return metrics.Counts(counts), err
+	}, storage.FreeSpace)
+	audit := metrics.NewCountingAudit(observability.NewAuditLogger(logger), registry)
 	sessions := auth.NewSessionService(repositories, hasher, tokens, repositories)
 	return &Services{
 		Uploads: uploads.NewUploadService(
@@ -49,9 +64,10 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 				AllowedExtensions: settings.AllowedUploadExtensions,
 			},
 		).WithSessions(repositories, storage, hashadapter.New()),
-		ROMs:          rom.NewService(repositories, storage, audit, NewScraper()).WithThumbnails(imaging.NewThumbnailer()),
+		ROMs:          rom.NewService(repositories, storage, audit, metrics.NewCountingScraper(NewScraper(settings), registry)).WithThumbnails(imaging.NewThumbnailer()),
 		Libraries:     libraries.NewService(repositories, repositories),
 		Sessions:      sessions,
+		Metrics:       registry,
 		Users:         users.NewService(repositories, hasher, sessions),
 		Clients:       auth.NewClientService(repositories),
 		Authenticator: auth.NewAuthenticator(tokens, repositories, repositories),
