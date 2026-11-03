@@ -85,11 +85,16 @@ type LibraryItemModel struct {
 func (LibraryItemModel) TableName() string { return "library_item" }
 
 type UserModel struct {
-	ID           string `gorm:"column:id;primaryKey;size:64"`
-	Email        string `gorm:"column:email;not null;uniqueIndex;size:255"`
-	PasswordHash string `gorm:"column:password_hash;not null;size:255"`
-	Role         string `gorm:"column:role;not null;size:32"`
-	TokenVersion uint64 `gorm:"column:token_version;not null;default:0"`
+	ID           string  `gorm:"column:id;primaryKey;size:64"`
+	Email        string  `gorm:"column:email;not null;uniqueIndex;size:255"`
+	Username     *string `gorm:"column:username;size:32"`
+	PasswordHash string  `gorm:"column:password_hash;not null;size:255"`
+	Role         string  `gorm:"column:role;not null;size:32"`
+	TokenVersion uint64  `gorm:"column:token_version;not null;default:0"`
+	// Locale is the user's chosen interface language; nil follows the browser.
+	Locale *string `gorm:"column:locale;size:16"`
+	// Font is the user's chosen interface font; nil uses the application default.
+	Font *string `gorm:"column:font;size:16"`
 }
 
 func (UserModel) TableName() string { return "user" }

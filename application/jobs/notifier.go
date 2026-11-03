@@ -35,28 +35,40 @@ func (notifier *Notifier) wake() <-chan struct{} {
 	return notifier.signal
 }
 
-// NotifyingQueue wakes workers whenever a job is enqueued.
+// NotifyingQueue wakes workers whenever a job is enqueued. It signals every pool's notifier: a
+// pool that does not handle the job's kind finds nothing to claim and goes back to waiting.
 type NotifyingQueue struct {
 	Queue
-	notifier *Notifier
+	notifiers []*Notifier
 }
 
-func NewNotifyingQueue(queue Queue, notifier *Notifier) *NotifyingQueue {
-	return &NotifyingQueue{Queue: queue, notifier: notifier}
+func NewNotifyingQueue(queue Queue, notifiers ...*Notifier) *NotifyingQueue {
+	return &NotifyingQueue{Queue: queue, notifiers: notifiers}
+}
+
+// Notify wakes the workers for jobs enqueued outside this queue, such as within a transaction.
+func (queue *NotifyingQueue) Notify() {
+	queue.notify()
+}
+
+func (queue *NotifyingQueue) notify() {
+	for _, notifier := range queue.notifiers {
+		notifier.Notify()
+	}
 }
 
 func (queue *NotifyingQueue) Enqueue(ctx context.Context, payload jobsdomain.Payload) error {
 	if err := queue.Queue.Enqueue(ctx, payload); err != nil {
 		return err
 	}
-	queue.notifier.Notify()
+	queue.notify()
 	return nil
 }
 
 func (queue *NotifyingQueue) RetryDeadLetter(ctx context.Context, deadLetterID string) (bool, error) {
 	retried, err := queue.Queue.RetryDeadLetter(ctx, deadLetterID)
 	if retried {
-		queue.notifier.Notify()
+		queue.notify()
 	}
 	return retried, err
 }

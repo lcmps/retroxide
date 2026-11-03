@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { RomListResponse, RomSummary } from '#lib/api/types.js';
 import { RomPager } from './pager.svelte.js';
 
-const rom = (id: string): RomSummary => ({ rom_id: id, title: id, platform: 'snes', sha256: id, cover_art_url: null });
+const rom = (id: string): RomSummary => ({ rom_id: id, title: id, platform: 'snes', platform_name: 'SNES', sha256: id, cover_art_url: null });
 
 describe('RomPager', () => {
 	it('appends pages until the server reports no further cursor', async () => {

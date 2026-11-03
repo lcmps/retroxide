@@ -10,7 +10,18 @@
 
 	let { onupload }: Props = $props();
 
-	const ACCEPTED_EXTENSIONS = '.rom,.bin,.nes,.sfc,.smc,.gba,.gb,.gbc,.n64,.z64,.v64,.iso,.cue,.chd';
+	// Mirrors the server's default allowlist (the platform catalog's extensions); the server
+	// enforces its configured list either way.
+	const ACCEPTED_EXTENSIONS = [
+		'rom', 'bin', 'iso', 'cue', 'chd',
+		'nes', 'fds', 'sfc', 'smc', 'gb', 'gbc', 'gba', 'n64', 'z64', 'v64', 'nds', '3ds', 'cia', 'vb', 'min',
+		'gcm', 'rvz', 'wbfs', 'wua', 'nsp', 'xci',
+		'sg', 'sms', 'gg', 'md', 'gen', 'smd', '32x', 'gdi', 'cdi',
+		'cso', 'pbp', 'vpk', 'pce', 'ngp', 'ngc', 'ws', 'wsc',
+		'a26', 'a78', 'lnx', 'j64', 'col', 'int', 'vec'
+	]
+		.map((extension) => `.${extension}`)
+		.join(',');
 	const t = useTranslate(i18n);
 	let files = $state<File[]>([]);
 	let input = $state<HTMLInputElement>();
@@ -75,5 +86,14 @@
 	.muted {
 		margin: 0;
 		color: var(--pixel-muted);
+		font-size: 0.6rem;
+		line-height: 1.6;
+		overflow-wrap: anywhere;
+	}
+
+	@media (max-width: 640px) {
+		.muted {
+			text-align: center;
+		}
 	}
 </style>

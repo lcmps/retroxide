@@ -2,6 +2,8 @@ package rom
 
 import (
 	"context"
+	"slices"
+	"strings"
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/domain/identity"
@@ -67,10 +69,51 @@ func (service *ListROMService) List(ctx context.Context, requester identity.Requ
 // Summarize maps a ROM and its content hash to the summary shape used in listings.
 func Summarize(row romdomain.ROMWithFile) ROMSummaryDTO {
 	return ROMSummaryDTO{
-		ROMID:       row.ROM.ID,
-		Title:       row.ROM.Identity.Title,
-		Platform:    row.ROM.Identity.Platform,
-		SHA256:      row.SHA256,
-		CoverArtURL: imageURL(row.ROM.ID, "cover", row.ROM.Identity.CoverArtPath),
+		ROMID:        row.ROM.ID,
+		Title:        row.ROM.Identity.Title,
+		Platform:     row.ROM.Identity.Platform,
+		PlatformName: romdomain.PlatformName(row.ROM.Identity.Platform),
+		SHA256:       row.SHA256,
+		CoverArtURL:  imageURL(row.ROM.ID, "cover", row.ROM.Identity.CoverArtPath),
 	}
+}
+
+// Platforms lists the platforms of the ROMs the requester can see, ordered by display name.
+func (service *Service) Platforms(ctx context.Context, requester identity.Requester) ([]PlatformDTO, error) {
+	var uploaderID *string
+	if !requester.HasBroadAccess() {
+		uploaderID = &requester.UserID
+	}
+	counts, err := service.repository.ListPlatforms(ctx, uploaderID)
+	if err != nil {
+		return nil, err
+	}
+	platforms := make([]PlatformDTO, 0, len(counts))
+	for _, count := range counts {
+		platforms = append(platforms, PlatformDTO{Key: count.Platform, Name: romdomain.PlatformName(count.Platform), ROMCount: count.Count})
+	}
+	slices.SortFunc(platforms, func(a, b PlatformDTO) int {
+		// Unknown sorts last; the rest alphabetically.
+		if aUnknown, bUnknown := romdomain.IsUnknownPlatform(a.Key), romdomain.IsUnknownPlatform(b.Key); aUnknown != bUnknown {
+			if aUnknown {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+	return platforms, nil
+}
+
+// PlatformCatalog lists every known platform by display name, with no ROM counts.
+func (*Service) PlatformCatalog() []PlatformDTO {
+	known := romdomain.Platforms()
+	catalog := make([]PlatformDTO, 0, len(known))
+	for _, platform := range known {
+		catalog = append(catalog, PlatformDTO{Key: platform.Key, Name: platform.Name})
+	}
+	slices.SortFunc(catalog, func(a, b PlatformDTO) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+	return catalog
 }

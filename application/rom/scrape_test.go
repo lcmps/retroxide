@@ -140,3 +140,93 @@ func TestUpdateMarksChangedTitleAsManual(t *testing.T) {
 		t.Fatal("edited title not marked manual")
 	}
 }
+
+func TestScrapeAdoptsTheReportedPlatformOnlyWhileInferred(t *testing.T) {
+	tests := []struct {
+		name         string
+		identity     romdomain.ROMIdentity
+		reported     string
+		wantPlatform string
+	}{
+		{name: "unknown platform is filled", identity: romdomain.ROMIdentity{Title: "Alex Kidd", Platform: "unknown", IdentifiedBy: romdomain.IdentifiedByFilename}, reported: "sms", wantPlatform: "sms"},
+		{name: "extension guess is corrected", identity: romdomain.ROMIdentity{Title: "Lumines", Platform: "psx", IdentifiedBy: romdomain.IdentifiedByFilename}, reported: "psp", wantPlatform: "psp"},
+		{name: "manual platform is kept", identity: romdomain.ROMIdentity{Title: "Mine", Platform: "gb", IdentifiedBy: romdomain.IdentifiedByManual}, reported: "gbc", wantPlatform: "gb"},
+		{name: "unknown is filled even when manual", identity: romdomain.ROMIdentity{Title: "Mine", Platform: "unknown", IdentifiedBy: romdomain.IdentifiedByManual}, reported: "Sega Pico", wantPlatform: "Sega Pico"},
+		{name: "no report keeps the platform", identity: romdomain.ROMIdentity{Title: "Alex Kidd", Platform: "unknown", IdentifiedBy: romdomain.IdentifiedByFilename}, wantPlatform: "unknown"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository, storage := scrapeFixture(t, test.identity)
+			scraper := &fakeScraper{result: &ScrapeResult{Source: "hasheous", Title: "Scraped", Platform: test.reported}}
+			detail, err := NewService(repository, storage, romTestAudit{}, scraper).Scrape(context.Background(), owner, "rom-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if detail.Platform != test.wantPlatform || detail.PlatformName != romdomain.PlatformName(test.wantPlatform) {
+				t.Fatalf("platform = %q (%q), want %q", detail.Platform, detail.PlatformName, test.wantPlatform)
+			}
+		})
+	}
+}
+
+func TestScrapeUploadScrapesTheUploadsROMAndToleratesMissesAndDeletions(t *testing.T) {
+	repository, storage := scrapeFixture(t, romdomain.ROMIdentity{Title: "smw", Platform: "snes", IdentifiedBy: romdomain.IdentifiedByFilename})
+	repository.uploadROMs = map[string]string{"upl-1": "rom-1", "upl-deleted": "rom-gone"}
+	scraper := &fakeScraper{result: &ScrapeResult{Source: "hasheous", Title: "Super Mario World"}}
+	service := NewService(repository, storage, romTestAudit{}, scraper)
+	ctx := context.Background()
+
+	if err := service.ScrapeUpload(ctx, "upl-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := repository.roms["rom-1"].Identity.Title; got != "Super Mario World" {
+		t.Fatalf("title after ScrapeUpload = %q", got)
+	}
+	for _, uploadID := range []string{"upl-unidentified", "upl-deleted"} {
+		if err := service.ScrapeUpload(ctx, uploadID); err != nil {
+			t.Fatalf("ScrapeUpload(%q) = %v, want nil", uploadID, err)
+		}
+	}
+
+	scraper.result = nil
+	if err := service.ScrapeUpload(ctx, "upl-1"); err != nil {
+		t.Fatalf("ScrapeUpload() with no match = %v, want nil", err)
+	}
+	scraper.err = fault.UpstreamUnavailable("down", nil)
+	if err := service.ScrapeUpload(ctx, "upl-1"); !fault.IsCode(err, fault.CodeUpstreamUnavailable) {
+		t.Fatalf("ScrapeUpload() with upstream down = %v, want an error so the job retries", err)
+	}
+}
+
+func TestPlatformsListsVisiblePlatformsByNameWithUnknownLast(t *testing.T) {
+	repository := &romTestRepository{roms: map[string]romdomain.ROM{
+		"r1": {ID: "r1", UploaderID: "user-1", Identity: romdomain.ROMIdentity{Platform: "sms"}},
+		"r2": {ID: "r2", UploaderID: "user-1", Identity: romdomain.ROMIdentity{Platform: "unknown"}},
+		"r3": {ID: "r3", UploaderID: "user-1", Identity: romdomain.ROMIdentity{Platform: "gba"}},
+		"r4": {ID: "r4", UploaderID: "user-1", Identity: romdomain.ROMIdentity{Platform: "gba"}},
+		"r5": {ID: "r5", UploaderID: "other", Identity: romdomain.ROMIdentity{Platform: "vita"}},
+	}}
+	service := NewService(repository, &romTestStorage{files: map[string][]byte{}}, romTestAudit{}, nil)
+
+	platforms, err := service.Platforms(context.Background(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []PlatformDTO{
+		{Key: "gba", Name: "Game Boy Advance", ROMCount: 2},
+		{Key: "sms", Name: "Master System", ROMCount: 1},
+		{Key: "unknown", Name: "Unknown", ROMCount: 1},
+	}
+	if len(platforms) != len(want) {
+		t.Fatalf("Platforms() = %+v, want %+v", platforms, want)
+	}
+	for index := range want {
+		if platforms[index] != want[index] {
+			t.Fatalf("Platforms() = %+v, want %+v", platforms, want)
+		}
+	}
+	admin, err := service.Platforms(context.Background(), identity.Requester{UserID: "admin", Role: identity.RoleAdmin})
+	if err != nil || len(admin) != 4 {
+		t.Fatalf("admin Platforms() = %+v, %v; want all 4 platforms", admin, err)
+	}
+}

@@ -21,47 +21,106 @@ const (
 	minIdleWait  = 200 * time.Millisecond
 	maxIdleWait  = 5 * time.Second
 	errorBackoff = 500 * time.Millisecond
+	// Retries wait RetryBase << attempt: 200ms then 400ms for identification, 1m then 2m for scrapes.
+	identifyRetryBase = 100 * time.Millisecond
+	scrapeRetryBase   = 30 * time.Second
 )
 
-// Run processes queued jobs with workerCount workers until ctx is cancelled. notifier may be nil,
-// in which case workers rely on polling alone.
-func Run(ctx context.Context, workerCount int, queue Queue, identifier Identifier, notifier *Notifier) error {
-	if workerCount < 1 || workerCount > maxWorkerCount {
-		return fault.Validation("worker count must be between 1 and 64")
+// Handler processes one kind of job. A failed job is retried after RetryBase, doubled on each
+// attempt, and dead-lettered once maxAttempts attempts have failed.
+type Handler struct {
+	Handle    func(context.Context, jobsdomain.Payload) error
+	RetryBase time.Duration
+}
+
+// Handlers maps job kinds to their handlers. Jobs of a kind without a handler are dead-lettered.
+type Handlers map[string]Handler
+
+// Pool is a set of workers that claim only the job kinds Kinds selects, so slow jobs of one kind
+// cannot hold up another kind handled by a different pool.
+type Pool struct {
+	Name     string
+	Workers  int
+	Kinds    jobsdomain.KindFilter
+	Handlers Handlers
+	// Notifier wakes the pool's idle workers when a job is enqueued; nil relies on polling alone.
+	Notifier *Notifier
+}
+
+// Run processes queued jobs with every pool's workers until ctx is cancelled.
+func Run(ctx context.Context, queue Queue, pools ...Pool) error {
+	if queue == nil || len(pools) == 0 {
+		return errors.New("a worker queue and at least one pool are required")
 	}
-	if queue == nil || identifier == nil {
-		return errors.New("worker queue and identifier are required")
+	total := 0
+	for _, pool := range pools {
+		if pool.Workers < 1 || pool.Workers > maxWorkerCount {
+			return fault.Validation("worker count must be between 1 and 64")
+		}
+		total += pool.Workers
 	}
 
 	var workers sync.WaitGroup
-	workers.Add(workerCount)
-	for range workerCount {
-		go func() {
-			defer workers.Done()
-			runWorker(ctx, queue, identifier, notifier)
-		}()
+	workers.Add(total)
+	for _, pool := range pools {
+		for range pool.Workers {
+			go func() {
+				defer workers.Done()
+				runWorker(ctx, queue, pool)
+			}()
+		}
 	}
 	<-ctx.Done()
 	workers.Wait()
 	return nil
 }
 
-func runWorker(ctx context.Context, queue Queue, identifier Identifier, notifier *Notifier) {
+// ROMPipeline returns the handlers that turn uploads into ROMs. With a scraper, each identified
+// upload queues a scrape of its ROM, processed independently of further identifications.
+func ROMPipeline(identifier Identifier, queue Enqueuer, scraper UploadScraper) Handlers {
+	identify := func(ctx context.Context, payload jobsdomain.Payload) error {
+		return identifier.Identify(ctx, payload.UploadID, payload.ROMFileID)
+	}
+	handlers := Handlers{jobsdomain.KindIdentifyROM: {Handle: identify, RetryBase: identifyRetryBase}}
+	if scraper == nil {
+		return handlers
+	}
+	handlers[jobsdomain.KindIdentifyROM] = Handler{
+		Handle: func(ctx context.Context, payload jobsdomain.Payload) error {
+			if err := identify(ctx, payload); err != nil {
+				return err
+			}
+			// A retry after a failed enqueue is safe: identifying an identified upload is a no-op.
+			return queue.Enqueue(ctx, jobsdomain.Payload{Kind: jobsdomain.KindScrapeROM, UploadID: payload.UploadID, ROMFileID: payload.ROMFileID})
+		},
+		RetryBase: identifyRetryBase,
+	}
+	handlers[jobsdomain.KindScrapeROM] = Handler{
+		Handle: func(ctx context.Context, payload jobsdomain.Payload) error {
+			return scraper.ScrapeUpload(ctx, payload.UploadID)
+		},
+		// Scrapes fail when metadata services are down, which rarely resolves within seconds.
+		RetryBase: scrapeRetryBase,
+	}
+	return handlers
+}
+
+func runWorker(ctx context.Context, queue Queue, pool Pool) {
 	idleWait := minIdleWait
 	for ctx.Err() == nil {
-		job, err := claimSafely(ctx, queue)
+		job, err := claimSafely(ctx, queue, pool.Kinds)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			slog.ErrorContext(ctx, "job queue claim failed", "error", err)
+			slog.ErrorContext(ctx, "job queue claim failed", "pool", pool.Name, "error", err)
 			if !wait(ctx, errorBackoff) {
 				return
 			}
 			continue
 		}
 		if job == nil {
-			woken, ok := waitForWork(ctx, idleWait, notifier.wake())
+			woken, ok := waitForWork(ctx, idleWait, pool.Notifier.wake())
 			if !ok {
 				return
 			}
@@ -74,13 +133,14 @@ func runWorker(ctx context.Context, queue Queue, identifier Identifier, notifier
 		}
 		idleWait = minIdleWait
 		// More jobs may be queued behind this one; let an idle peer look while this worker is busy.
-		notifier.Notify()
-		processJob(context.WithoutCancel(ctx), queue, identifier, *job)
+		pool.Notifier.Notify()
+		processJob(context.WithoutCancel(ctx), queue, pool.Handlers, *job)
 	}
 }
 
-func processJob(ctx context.Context, queue Queue, identifier Identifier, job jobsdomain.Job) {
-	if job.Payload.Kind != "identify_rom" {
+func processJob(ctx context.Context, queue Queue, handlers Handlers, job jobsdomain.Job) {
+	handler, ok := handlers[job.Payload.Kind]
+	if !ok || handler.Handle == nil {
 		reason := "unknown job kind: " + job.Payload.Kind
 		if err := callSafely("dead-lettering unknown job", func() error {
 			return queue.DeadLetter(ctx, job, job.Payload.Attempt, reason)
@@ -92,11 +152,11 @@ func processJob(ctx context.Context, queue Queue, identifier Identifier, job job
 		return
 	}
 
-	if err := callSafely("identifying rom", func() error {
-		return identifier.Identify(ctx, job.Payload.UploadID, job.Payload.ROMFileID)
+	if err := callSafely("processing "+job.Payload.Kind+" job", func() error {
+		return handler.Handle(ctx, job.Payload)
 	}); err != nil {
 		nextAttempt := job.Payload.Attempt + 1
-		slog.WarnContext(ctx, "identify job failed", "upload_id", job.Payload.UploadID, "attempt", nextAttempt, "error", err)
+		slog.WarnContext(ctx, "job failed", "kind", job.Payload.Kind, "upload_id", job.Payload.UploadID, "attempt", nextAttempt, "error", err)
 		if nextAttempt >= maxAttempts {
 			if deadLetterErr := callSafely("dead-lettering exhausted job", func() error {
 				return queue.DeadLetter(ctx, job, nextAttempt, err.Error())
@@ -107,11 +167,11 @@ func processJob(ctx context.Context, queue Queue, identifier Identifier, job job
 			completeJob(ctx, queue, job.ID)
 			return
 		}
-		backoff := time.Duration(1<<nextAttempt) * 100 * time.Millisecond
-		if rescheduleErr := callSafely("rescheduling identify job", func() error {
+		backoff := handler.RetryBase << nextAttempt
+		if rescheduleErr := callSafely("rescheduling job", func() error {
 			return queue.Reschedule(ctx, job.ID, nextAttempt, time.Now().Add(backoff))
 		}); rescheduleErr != nil {
-			slog.ErrorContext(ctx, "failed to reschedule identify job", "job_id", job.ID, "error", rescheduleErr)
+			slog.ErrorContext(ctx, "failed to reschedule job", "job_id", job.ID, "error", rescheduleErr)
 		}
 		return
 	}
@@ -124,11 +184,11 @@ func completeJob(ctx context.Context, queue Queue, jobID string) {
 	}
 }
 
-func claimSafely(ctx context.Context, queue Queue) (*jobsdomain.Job, error) {
+func claimSafely(ctx context.Context, queue Queue, kinds jobsdomain.KindFilter) (*jobsdomain.Job, error) {
 	var job *jobsdomain.Job
 	err := callSafely("claiming job", func() error {
 		var claimErr error
-		job, claimErr = queue.Claim(ctx, time.Now(), claimTimeout)
+		job, claimErr = queue.Claim(ctx, time.Now(), claimTimeout, kinds)
 		return claimErr
 	})
 	return job, err

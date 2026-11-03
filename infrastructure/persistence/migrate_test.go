@@ -43,6 +43,24 @@ func TestSplitMigrationStatements(t *testing.T) {
 	}
 }
 
+func TestSplitMigrationStatementsKeepsTriggerBodiesWhole(t *testing.T) {
+	statements := splitMigrationStatements(`CREATE TABLE a (id INT);
+CREATE TRIGGER a_after_insert AFTER INSERT ON a BEGIN
+	INSERT INTO b VALUES (new.id);
+	DELETE FROM c WHERE id = new.id;
+END;
+CREATE INDEX ix_append ON a(id);`)
+	if len(statements) != 3 {
+		t.Fatalf("statements = %#v, want 3", statements)
+	}
+	if !strings.HasPrefix(statements[1], "CREATE TRIGGER") || !strings.HasSuffix(statements[1], "END") || strings.Count(statements[1], ";") != 2 {
+		t.Fatalf("trigger statement = %q", statements[1])
+	}
+	if statements[2] != "CREATE INDEX ix_append ON a(id)" {
+		t.Fatalf("statement after the trigger = %q", statements[2])
+	}
+}
+
 func TestValidateMigrationHistoryRejectsUnknownVersionOrName(t *testing.T) {
 	tests := []struct {
 		name    string

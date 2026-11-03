@@ -10,6 +10,7 @@ import (
 	"github.com/lcmps/retroxide/application/libraries"
 	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/application/uploads"
+	"github.com/lcmps/retroxide/application/users"
 	"github.com/lcmps/retroxide/infrastructure/config"
 	hashadapter "github.com/lcmps/retroxide/infrastructure/hash"
 	"github.com/lcmps/retroxide/infrastructure/observability"
@@ -31,11 +32,13 @@ type Services struct {
 	Sessions      *auth.SessionService
 	Clients       *auth.ClientService
 	Authenticator *auth.Authenticator
+	Users         *users.Service
 	Identifier    *persistence.Identifier
 }
 
-func NewServices(settings config.Config, repositories *persistence.Repositories, queue jobs.Enqueuer, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
+func NewServices(settings config.Config, repositories *persistence.Repositories, queue *jobs.NotifyingQueue, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
 	audit := observability.NewAuditLogger(logger)
+	sessions := auth.NewSessionService(repositories, hasher, tokens, repositories)
 	return &Services{
 		Uploads: uploads.NewUploadService(
 			repositories, repositories, storage, hashadapter.New(), queue, audit,
@@ -47,7 +50,8 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 		),
 		ROMs:          rom.NewService(repositories, storage, audit, NewScraper()),
 		Libraries:     libraries.NewService(repositories, repositories),
-		Sessions:      auth.NewSessionService(repositories, hasher, tokens, repositories),
+		Sessions:      sessions,
+		Users:         users.NewService(repositories, hasher, sessions),
 		Clients:       auth.NewClientService(repositories),
 		Authenticator: auth.NewAuthenticator(tokens, repositories, repositories),
 		Identifier:    persistence.NewIdentifier(repositories.DB),

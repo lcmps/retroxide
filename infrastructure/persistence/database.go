@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,8 +21,11 @@ const (
 	sqliteBusyTimeoutMS = 5000
 	// sqliteMaxOpenConns lets WAL readers run concurrently; writers still serialize on SQLite's lock.
 	sqliteMaxOpenConns = 4
-	mysqlMaxOpenConns  = 10
-	mysqlMaxIdleConns  = 5
+	// sqliteCacheKiB is each connection's page cache (the default is 2 MiB).
+	sqliteCacheKiB    = 8 * 1024
+	mysqlMaxOpenConns = 10
+	// mysqlMaxIdleConns keeps the whole pool warm instead of reconnecting under bursts.
+	mysqlMaxIdleConns = mysqlMaxOpenConns
 )
 
 func Initialize(ctx context.Context, db *gorm.DB, driver string) error {
@@ -56,6 +60,13 @@ func Initialize(ctx context.Context, db *gorm.DB, driver string) error {
 	}
 	if err := RunMigrations(ctx, db); err != nil {
 		return err
+	}
+	if driver == "sqlite" {
+		// Refresh the query planner's statistics where they are missing or stale, which also
+		// covers indexes that migrations just created. It is cheap when nothing changed.
+		if err := db.WithContext(ctx).Exec("PRAGMA optimize=0x10002").Error; err != nil {
+			return databaseError("optimizing sqlite statistics", err)
+		}
 	}
 	return nil
 }
@@ -109,7 +120,8 @@ func OpenDatabase(ctx context.Context, driver, sqlitePath, mysqlURL string) (*go
 //   - busy_timeout waits for locks instead of failing immediately;
 //   - foreign keys are enforced;
 //   - transactions begin IMMEDIATE, taking the write lock up front so concurrent transactions
-//     queue on busy_timeout rather than failing with "database is locked" when upgrading.
+//     queue on busy_timeout rather than failing with "database is locked" when upgrading;
+//   - temporary tables and sorts stay in memory, and each connection caches more pages.
 func sqliteDSN(path string) (string, error) {
 	if strings.Contains(path, "?") {
 		return "", fault.Validation("sqlite path must not contain '?'")
@@ -120,6 +132,8 @@ func sqliteDSN(path string) (string, error) {
 		"synchronous(NORMAL)",
 		fmt.Sprintf("busy_timeout(%d)", sqliteBusyTimeoutMS),
 		"foreign_keys(1)",
+		"temp_store(MEMORY)",
+		fmt.Sprintf("cache_size(-%d)", sqliteCacheKiB),
 	} {
 		query.Add("_pragma", pragma)
 	}
@@ -157,11 +171,25 @@ func mysqlDSN(rawURL string) (string, error) {
 	config.Addr = parsed.Host
 	config.DBName = strings.Trim(parsed.Path, "/")
 	config.ParseTime = true
+	// Interpolating arguments client-side sends each query in one round trip instead of three
+	// (prepare, execute, close). It is safe with utf8mb4, the charset the driver uses by default;
+	// a URL can still turn it off with interpolateParams=false.
+	config.InterpolateParams = true
 	config.Params = map[string]string{"loc": "UTC"}
 	for key, values := range parsed.Query() {
-		if len(values) != 0 {
-			config.Params[key] = values[len(values)-1]
+		if len(values) == 0 {
+			continue
 		}
+		value := values[len(values)-1]
+		if key == "interpolateParams" {
+			interpolate, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", fault.Validation("mysql URL interpolateParams must be true or false")
+			}
+			config.InterpolateParams = interpolate
+			continue
+		}
+		config.Params[key] = value
 	}
 	return config.FormatDSN(), nil
 }

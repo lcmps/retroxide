@@ -15,7 +15,7 @@ import (
 func TestIdentifierRollsBackROMWhenUploadCompletionFails(t *testing.T) {
 	repositories, ctx := openTestRepositories(t)
 	files := storage.New(t.TempDir())
-	uploader := uploads.NewUploadService(repositories, repositories, files, hash.New(), repositories, nil, uploads.UploadPolicy{MaxUploadBytes: 1024, AllowedExtensions: []string{"nes"}})
+	uploader := uploads.NewUploadService(repositories, repositories, files, hash.New(), nil, nil, uploads.UploadPolicy{MaxUploadBytes: 1024, AllowedExtensions: []string{"nes"}})
 	accepted, err := uploader.Create(ctx, identity.Requester{UserID: "owner", Role: identity.RoleUser}, uploads.UploadInput{Filename: "game.nes", Content: strings.NewReader("actual ROM content")})
 	if err != nil {
 		t.Fatal(err)

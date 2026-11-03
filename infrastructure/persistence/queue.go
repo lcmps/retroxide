@@ -15,7 +15,11 @@ import (
 )
 
 func (repositories *Repositories) Enqueue(ctx context.Context, payload jobsdomain.Payload) error {
-	if err := repositories.DB.WithContext(ctx).Exec(
+	return enqueue(repositories.DB.WithContext(ctx), payload)
+}
+
+func enqueue(db *gorm.DB, payload jobsdomain.Payload) error {
+	if err := db.Exec(
 		"INSERT INTO job_queue (kind, upload_id, rom_file_id, attempt, available_at) VALUES (?, ?, ?, ?, ?)",
 		payload.Kind, payload.UploadID, payload.ROMFileID, payload.Attempt, sqlTimestamp(time.Now()),
 	).Error; err != nil {
@@ -24,12 +28,18 @@ func (repositories *Repositories) Enqueue(ctx context.Context, payload jobsdomai
 	return nil
 }
 
-func (repositories *Repositories) Claim(ctx context.Context, now time.Time, claimTimeout time.Duration) (*jobsdomain.Job, error) {
+func (repositories *Repositories) Claim(ctx context.Context, now time.Time, claimTimeout time.Duration, filter jobsdomain.KindFilter) (*jobsdomain.Job, error) {
 	var claimed *jobsdomain.Job
 	currentTimestamp := sqlTimestamp(now)
 	expiredBefore := sqlTimestamp(now.Add(-claimTimeout))
 	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := tx.Where("available_at <= ? AND (claimed_at IS NULL OR claimed_at <= ?)", currentTimestamp, expiredBefore).Order("id ASC").Limit(1)
+		switch {
+		case len(filter.Kinds) > 0 && filter.Exclude:
+			query = query.Where("kind NOT IN ?", filter.Kinds)
+		case len(filter.Kinds) > 0:
+			query = query.Where("kind IN ?", filter.Kinds)
+		}
 		if isMySQL(tx) {
 			query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
 		}

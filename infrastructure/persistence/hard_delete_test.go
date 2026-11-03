@@ -259,7 +259,7 @@ func TestROMHardDeletePreservesCrossKindBlobReferences(t *testing.T) {
 func TestROMHardDeleteAllowsUploadAgain(t *testing.T) {
 	repositories, ctx := openTestRepositories(t)
 	files := storage.New(t.TempDir())
-	uploader := uploads.NewUploadService(repositories, repositories, files, hash.New(), repositories, nil, uploads.UploadPolicy{MaxUploadBytes: 1024, AllowedExtensions: []string{"nes"}})
+	uploader := uploads.NewUploadService(repositories, repositories, files, hash.New(), nil, nil, uploads.UploadPolicy{MaxUploadBytes: 1024, AllowedExtensions: []string{"nes"}})
 	requester := identity.Requester{UserID: "owner", Role: identity.RoleUser}
 	// Each upload streams its content once, so every attempt needs a fresh reader.
 	input := func() uploads.UploadInput {
@@ -269,7 +269,7 @@ func TestROMHardDeleteAllowsUploadAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := repositories.Claim(ctx, time.Now(), time.Minute)
+	job, err := repositories.Claim(ctx, time.Now(), time.Minute, jobsdomain.KindFilter{})
 	if err != nil || job == nil {
 		t.Fatalf("claim = %v, %v", job, err)
 	}
@@ -303,7 +303,7 @@ func TestROMHardDeleteRejectsStaleJobWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := repositories.Claim(ctx, time.Now(), time.Minute)
+	job, err := repositories.Claim(ctx, time.Now(), time.Minute, jobsdomain.KindFilter{})
 	if err != nil || job == nil {
 		t.Fatalf("claim = %v, %v", job, err)
 	}
@@ -340,7 +340,7 @@ func TestROMHardDeleteCannotBeRecreatedByClaimedJob(t *testing.T) {
 	repositories, ctx := openTestRepositories(t)
 	files := storage.New(t.TempDir())
 	rom, _ := seedDeleteROM(t, repositories, files)
-	job, err := repositories.Claim(ctx, time.Now(), time.Minute)
+	job, err := repositories.Claim(ctx, time.Now(), time.Minute, jobsdomain.KindFilter{})
 	if err != nil || job == nil {
 		t.Fatalf("claim = %v, %v", job, err)
 	}

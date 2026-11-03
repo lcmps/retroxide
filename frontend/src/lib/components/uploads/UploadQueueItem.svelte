@@ -40,6 +40,8 @@
 
 	.file-name {
 		margin: 0;
+		font-size: 0.65rem;
+		line-height: 1.5;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -48,9 +50,12 @@
 	.muted {
 		margin: 0;
 		color: var(--pixel-muted);
+		font-size: 0.55rem;
 	}
 
 	.message {
+		font-size: 0.55rem;
+		line-height: 1.6;
 		margin: 0;
 		padding: 0.75rem 0.85rem;
 		border: 2px solid #e18a78;

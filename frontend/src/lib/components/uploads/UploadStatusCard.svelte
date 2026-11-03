@@ -32,12 +32,19 @@
 
 <style>
 	.status-card {
+		font-size: 0.55rem;
+		line-height: 1.6;
+		overflow-wrap: anywhere;
 		display: grid;
 		gap: 0.75rem;
 		min-width: 0;
 		padding: 1rem;
 		border-left: 0.35rem solid var(--pixel-panel-strong);
 		background: #202020;
+	}
+
+	.status-card p {
+		margin: 0;
 	}
 
 	.message {

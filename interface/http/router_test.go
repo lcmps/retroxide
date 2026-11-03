@@ -211,6 +211,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"POST /api/v1/session", "DELETE /api/v1/session", "POST /api/v1/session/refresh",
 		"GET /api/v1/i18n/:locale",
 		"POST /api/v1/upload", "GET /api/v1/upload/:upload_id",
+		"GET /api/v1/platforms", "GET /api/v1/platforms/catalog",
 		"GET /api/v1/rom", "GET /api/v1/rom/:rom_id", "PATCH /api/v1/rom/:rom_id", "DELETE /api/v1/rom/:rom_id",
 		"GET /api/v1/rom/:rom_id/cover", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
 		"POST /api/v1/rom/:rom_id/download-link", "GET /api/v1/download",
@@ -218,6 +219,8 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"GET /api/v1/library", "POST /api/v1/library", "GET /api/v1/library/:library_id",
 		"POST /api/v1/library/:library_id/item", "DELETE /api/v1/library/:library_id/item/:rom_id",
 		"GET /api/v1/client", "POST /api/v1/client", "DELETE /api/v1/client/:id",
+		"GET /api/v1/users", "POST /api/v1/users", "PATCH /api/v1/users/:user_id", "DELETE /api/v1/users/:user_id", "DELETE /api/v1/users/:user_id/sessions",
+		"GET /api/v1/me", "PATCH /api/v1/me", "GET /api/v1/settings", "PATCH /api/v1/settings", "GET /api/v1/appearance",
 	}
 	for _, route := range want {
 		if !registered[route] {
@@ -514,5 +517,44 @@ func TestAttachmentDispositionEncodesUnicodeAndStripsPaths(t *testing.T) {
 		if got := attachmentDisposition(filename); got != want {
 			t.Errorf("attachmentDisposition(%q) = %q, want %q", filename, got, want)
 		}
+	}
+}
+
+// localeTestProfiles records the profile update that reached the service.
+type localeTestProfiles struct{ updated *auth.UpdateProfileRequest }
+
+func (localeTestProfiles) Profile(context.Context, identity.Requester) (auth.ProfileResponse, error) {
+	return auth.ProfileResponse{}, nil
+}
+
+func (profiles localeTestProfiles) UpdateProfile(_ context.Context, _ identity.Requester, request auth.UpdateProfileRequest) (auth.UpdateProfileResponse, error) {
+	*profiles.updated = request
+	return auth.UpdateProfileResponse{Profile: auth.ProfileResponse{Locale: request.Locale}}, nil
+}
+
+func TestRouterAcceptsOnlyLocalesWithACatalog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var updated auth.UpdateProfileRequest
+	router := NewRouter(Dependencies{
+		Profiles:      localeTestProfiles{updated: &updated},
+		Locales:       map[string][]byte{"en": []byte("{}"), "pt-BR": []byte("{}")},
+		Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: "usr-1", Role: identity.RoleUser}},
+	}, Options{})
+	patch := func(body string) int {
+		request := httptest.NewRequest(http.MethodPatch, "/api/v1/me", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer token")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response.Code
+	}
+	if code := patch(`{"locale":"fr"}`); code != http.StatusBadRequest {
+		t.Fatalf("unsupported locale = %d, want 400", code)
+	}
+	if code := patch(`{"locale":"pt-BR"}`); code != http.StatusOK || updated.Locale == nil || *updated.Locale != "pt-BR" {
+		t.Fatalf("supported locale = %d, reached service with %+v", code, updated)
+	}
+	if code := patch(`{"locale":""}`); code != http.StatusOK {
+		t.Fatalf("clearing the locale = %d, want 200", code)
 	}
 }

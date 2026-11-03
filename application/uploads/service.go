@@ -23,6 +23,8 @@ type uploadROMRepository interface {
 
 type uploadRecordRepository interface {
 	SaveUpload(context.Context, uploadsdomain.Upload) error
+	// SaveUploadWithJob records a new upload and queues its first job atomically.
+	SaveUploadWithJob(context.Context, uploadsdomain.Upload, jobsdomain.Payload) error
 	FindUpload(context.Context, string) (*uploadsdomain.Upload, error)
 }
 
@@ -35,8 +37,9 @@ type uploadHasher interface {
 	NewDigest() romdomain.Digest
 }
 
-type uploadQueue interface {
-	Enqueue(context.Context, jobsdomain.Payload) error
+// workerWaker wakes the background workers once a job has been committed.
+type workerWaker interface {
+	Notify()
 }
 
 type uploadAudit interface {
@@ -55,7 +58,7 @@ type UploadService struct {
 	uploadRepository uploadRecordRepository
 	storage          uploadStorage
 	hasher           uploadHasher
-	queue            uploadQueue
+	workers          workerWaker
 	audit            uploadAudit
 	policy           UploadPolicy
 }
@@ -65,7 +68,7 @@ func NewUploadService(
 	uploadRepository uploadRecordRepository,
 	storage uploadStorage,
 	hasher uploadHasher,
-	queue uploadQueue,
+	workers workerWaker,
 	audit uploadAudit,
 	policy UploadPolicy,
 ) *UploadService {
@@ -74,7 +77,7 @@ func NewUploadService(
 		uploadRepository: uploadRepository,
 		storage:          storage,
 		hasher:           hasher,
-		queue:            queue,
+		workers:          workers,
 		audit:            audit,
 		policy:           policy,
 	}
@@ -169,24 +172,16 @@ func (service *UploadService) Create(ctx context.Context, requester identity.Req
 		OriginalFilename: input.Filename,
 		Status:           uploadsdomain.UploadStatusProcessing,
 	}
-	if err := service.uploadRepository.SaveUpload(ctx, upload); err != nil {
-		removeStoredContent()
-		return UploadAcceptedDTO{}, err
-	}
-
-	if err := service.queue.Enqueue(ctx, jobsdomain.Payload{
-		Kind:      "identify_rom",
+	if err := service.uploadRepository.SaveUploadWithJob(ctx, upload, jobsdomain.Payload{
+		Kind:      jobsdomain.KindIdentifyROM,
 		UploadID:  uploadID,
 		ROMFileID: savedROMFile.ID,
 	}); err != nil {
-		upload.Status = uploadsdomain.UploadStatusFailed
-		message := err.Error()
-		upload.ErrorMessage = &message
-		if saveErr := service.uploadRepository.SaveUpload(ctx, upload); saveErr != nil {
-			slog.ErrorContext(ctx, "failed to mark upload failed after enqueue error", "upload_id", uploadID, "error", saveErr)
-		}
 		removeStoredContent()
 		return UploadAcceptedDTO{}, err
+	}
+	if service.workers != nil {
+		service.workers.Notify()
 	}
 
 	if service.audit != nil {

@@ -10,7 +10,7 @@
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { getErrorMessage } from '#lib/helpers/error.js';
 
-	let email = $state('');
+	let login = $state('');
 	let password = $state('');
 	let loading = $state(false);
 	let resultMessage = $state('');
@@ -24,7 +24,7 @@
 		resultMessage = '';
 
 		try {
-			const session = await createSession({ email, password });
+			const session = await createSession({ login: login.trim(), password });
 			persistStoredSession(session);
 			resultMessage = t('login.messages.success', 'Logged in successfully. Token type: {tokenType}. Expires in {expiresIn}s.', {
 				tokenType: session.token_type,
@@ -50,6 +50,10 @@
 	});
 </script>
 
+<svelte:head>
+	<title>{t('login.actions.submit', 'Login')} · Retroxide</title>
+</svelte:head>
+
 {#if !isAuthenticated}
 <main class="login-page">
   <section class="login-card stack" aria-labelledby="login-title" style="--layout-gap: 1.75rem">
@@ -57,15 +61,17 @@
     <img class="login-logo" src="/components/main-logo.png" alt="Retroxide" />
 
     <form class="login-form stack" onsubmit={submitLogin}>
-      <FormField label={t('login.fields.email', 'Email')} class="field visually-hidden-label">
+      <FormField label={t('login.fields.login', 'Email or username')} class="field visually-hidden-label">
 				<span class="field-control">
           <img class="field-icon" src="/components/btns/user.png" alt="" aria-hidden="true" />
 					<TextInput
-						type="email"
-						bind:value={email}
-						autocomplete="email"
-            aria-label={t('login.fields.email', 'Email')}
-            placeholder={t('login.fields.emailPlaceholder', 'user@example.com')}
+						type="text"
+						bind:value={login}
+						autocomplete="username"
+						autocapitalize="none"
+						spellcheck="false"
+            aria-label={t('login.fields.login', 'Email or username')}
+            placeholder={t('login.fields.loginPlaceholder', 'Email or username')}
 						required
 					/>
 				</span>
@@ -175,7 +181,7 @@
     border-radius: 0.4rem;
     background: var(--pixel-panel-strong);
     color: var(--pixel-text);
-    font-family: 'Press Start 2P', monospace;
+    font-family: var(--app-font);
     font-size: 0.55rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
