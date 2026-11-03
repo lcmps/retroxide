@@ -48,7 +48,7 @@ func TestScrapeFillsFilenameInferredROM(t *testing.T) {
 		Title: "super mario world", Platform: "snes", IdentifiedBy: romdomain.IdentifiedByFilename, Confidence: 70,
 	})
 	scraper := &fakeScraper{result: &ScrapeResult{
-		Source: "hasheous", Title: "Super Mario World", Region: "USA", Publisher: "Nintendo", ReleaseYear: "1991",
+		Source: "hasheous", Title: "Super Mario World", Region: "USA", Publisher: "Nintendo", ReleaseYear: "1991", Genre: "Platform",
 		Description: "Dinosaur Land.", Cover: pngBytes, TitleScreen: pngBytes, Screenshot: pngBytes,
 	}}
 	service := NewService(repository, storage, romTestAudit{}, scraper)
@@ -60,7 +60,8 @@ func TestScrapeFillsFilenameInferredROM(t *testing.T) {
 	if scraper.query != (ScrapeQuery{Platform: "snes", SHA1: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CRC32: "deadbeef", MD5: "cccccccccccccccccccccccccccccccc"}) {
 		t.Fatalf("scrape query = %+v", scraper.query)
 	}
-	if detail.Title != "Super Mario World" || *detail.Publisher != "Nintendo" || *detail.ReleaseYear != "1991" || *detail.Region != "USA" || *detail.Description != "Dinosaur Land." {
+	if detail.Title != "Super Mario World" || *detail.Publisher != "Nintendo" || *detail.ReleaseYear != "1991" || *detail.Region != "USA" || *detail.Description != "Dinosaur Land." ||
+		detail.Genre == nil || *detail.Genre != "Platform" {
 		t.Fatalf("detail = %+v", detail)
 	}
 	if detail.CoverArtURL == nil || !strings.HasPrefix(*detail.TitleScreenURL, "/api/v1/rom/rom-1/media/title_screen?v=") || !strings.HasPrefix(*detail.ScreenshotURL, "/api/v1/rom/rom-1/media/screenshot?v=") {
@@ -83,7 +84,7 @@ func TestScrapeKeepsManualTitleAndExistingData(t *testing.T) {
 		CoverArtPath: &cover, Publisher: &publisher,
 	})
 	service := NewService(repository, storage, romTestAudit{}, &fakeScraper{result: &ScrapeResult{
-		Source: "hasheous", Title: "Super Mario World", Publisher: "Nintendo", ReleaseYear: "1991", Cover: pngBytes,
+		Source: "hasheous", Title: "Super Mario World", Publisher: "Nintendo", ReleaseYear: "1991", Genre: strings.Repeat("g", MaxGenreLength+1), Cover: pngBytes,
 	}})
 
 	detail, err := service.Scrape(context.Background(), owner, "rom-1")
@@ -99,6 +100,9 @@ func TestScrapeKeepsManualTitleAndExistingData(t *testing.T) {
 	}
 	if saved.ReleaseYear == nil || *saved.ReleaseYear != "1991" {
 		t.Fatalf("missing year not filled: %v", saved.ReleaseYear)
+	}
+	if saved.Genre != nil {
+		t.Fatalf("overlong scraped genre stored: %q", *saved.Genre)
 	}
 	if len(storage.files) != 0 {
 		t.Fatalf("cover stored despite existing cover: %v", storage.files)

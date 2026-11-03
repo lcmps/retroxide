@@ -49,6 +49,12 @@ type libretroSystem struct {
 	thumbnails string
 }
 
+// genreDatabase is the system's genre database, which libretro keeps beside its name databases
+// under the system's name alone ("genre/Nintendo - Game Boy").
+func (system libretroSystem) genreDatabase() string {
+	return "genre/" + system.database[strings.IndexByte(system.database, '/')+1:]
+}
+
 // libretroSystems maps platform keys to libretro's database and thumbnail repository names.
 var libretroSystems = func() map[string]libretroSystem {
 	databases := map[string]string{
@@ -189,6 +195,16 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 		}
 	}
 
+	// Genres come from a separate database keyed by CRC. It only adds to a match, so it is not
+	// consulted otherwise, and a failure to read it does not fail the scrape.
+	if system, ok := libretroSystems[platform]; ok && matched && result.Genre == "" && query.CRC32 != "" {
+		if index, err := client.datIndex(ctx, system.genreDatabase(), true); err == nil {
+			if entry, ok := index.byCRC[strings.ToUpper(query.CRC32)]; ok {
+				result.Genre = entry.genre
+			}
+		}
+	}
+
 	if !matched {
 		if len(upstreamErrors) > 0 {
 			return nil, fault.UpstreamUnavailable("metadata services are unavailable, try again later", errors.Join(upstreamErrors...))
@@ -254,6 +270,7 @@ func (client *Client) lookupHasheous(ctx context.Context, query rom.ScrapeQuery)
 type datEntry struct {
 	name   string
 	region string
+	genre  string
 }
 
 type datIndex struct {
@@ -262,7 +279,7 @@ type datIndex struct {
 }
 
 func (client *Client) lookupLibretro(ctx context.Context, system libretroSystem, query rom.ScrapeQuery) (*datEntry, error) {
-	index, err := client.datIndex(ctx, system)
+	index, err := client.datIndex(ctx, system.database, false)
 	if err != nil {
 		return nil, err
 	}
@@ -275,11 +292,12 @@ func (client *Client) lookupLibretro(ctx context.Context, system libretroSystem,
 	return nil, nil
 }
 
-// datIndex returns the parsed libretro database for system, downloading it at most once at a
-// time per system. The lock only guards the maps, so lookups for other systems, and cache hits,
-// never wait on a download; failed downloads are not cached and are retried by the next caller.
-func (client *Client) datIndex(ctx context.Context, system libretroSystem) (*datIndex, error) {
-	key := system.database
+// datIndex returns the parsed libretro database, downloading it at most once at a time per
+// database. The lock only guards the maps, so lookups for other databases, and cache hits, never
+// wait on a download; failed downloads are not cached and are retried by the next caller. An
+// optional database that does not exist upstream is cached as empty.
+func (client *Client) datIndex(ctx context.Context, database string, optional bool) (*datIndex, error) {
+	key := database
 	client.mu.Lock()
 	if index, ok := client.datCache[key]; ok {
 		client.mu.Unlock()
@@ -293,7 +311,7 @@ func (client *Client) datIndex(ctx context.Context, system libretroSystem) (*dat
 	client.mu.Unlock()
 
 	if !inFlight {
-		load.index, load.err = client.downloadDAT(ctx, system)
+		load.index, load.err = client.downloadDAT(ctx, database, optional)
 		client.mu.Lock()
 		if load.err == nil {
 			client.datCache[key] = load.index
@@ -311,15 +329,19 @@ func (client *Client) datIndex(ctx context.Context, system libretroSystem) (*dat
 	}
 }
 
-func (client *Client) downloadDAT(ctx context.Context, system libretroSystem) (*datIndex, error) {
-	body, err := client.get(ctx, client.endpoints.LibretroDatabase+"/"+escapePath(system.database)+".dat", maxDATBytes)
+func (client *Client) downloadDAT(ctx context.Context, database string, optional bool) (*datIndex, error) {
+	body, err := client.get(ctx, client.endpoints.LibretroDatabase+"/"+escapePath(database)+".dat", maxDATBytes)
+	if optional && errors.Is(err, errUpstreamNoHit) {
+		return &datIndex{bySHA1: map[string]datEntry{}, byCRC: map[string]datEntry{}}, nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("downloading libretro database %q: %w", system.database, err)
+		return nil, fmt.Errorf("downloading libretro database %q: %w", database, err)
 	}
 	return parseDAT(bytes.NewReader(body))
 }
 
-// parseDAT reads clrmamepro DAT files, mapping each ROM's SHA1 and CRC to its game.
+// parseDAT reads clrmamepro DAT files, mapping each ROM's SHA1 and CRC to its game. Genre
+// databases name games in a comment instead of a name.
 func parseDAT(reader io.Reader) (*datIndex, error) {
 	index := &datIndex{bySHA1: make(map[string]datEntry), byCRC: make(map[string]datEntry)}
 	scanner := bufio.NewScanner(reader)
@@ -332,8 +354,12 @@ func parseDAT(reader io.Reader) (*datIndex, error) {
 			current = datEntry{}
 		case strings.HasPrefix(line, "name "):
 			current.name = datString(strings.TrimPrefix(line, "name "))
+		case strings.HasPrefix(line, "comment ") && current.name == "":
+			current.name = datString(strings.TrimPrefix(line, "comment "))
 		case strings.HasPrefix(line, "region "):
 			current.region = datString(strings.TrimPrefix(line, "region "))
+		case strings.HasPrefix(line, "genre "):
+			current.genre = datString(strings.TrimPrefix(line, "genre "))
 		case strings.HasPrefix(line, "rom (") && current.name != "":
 			if match := datSHA1.FindStringSubmatch(line); match != nil {
 				index.bySHA1[strings.ToUpper(match[1])] = current

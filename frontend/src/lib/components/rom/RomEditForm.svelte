@@ -27,6 +27,7 @@
 		version: rom.version ?? '',
 		publisher: rom.publisher ?? '',
 		release_year: rom.release_year ?? '',
+		genre: rom.genre ?? '',
 		description: rom.description ?? ''
 	});
 	let catalog = $state<Platform[]>([]);
@@ -72,6 +73,7 @@
 					version: values.version.trim() || null,
 					publisher: values.publisher,
 					release_year: values.release_year,
+					genre: values.genre,
 					description: values.description
 				})
 			);
@@ -128,6 +130,11 @@
 			<input bind:value={values.release_year} maxlength="16" inputmode="numeric" />
 		</label>
 	</div>
+
+	<label class="field">
+		<span>{t('rom.fields.genre', 'Genre')}</span>
+		<input bind:value={values.genre} maxlength="64" placeholder={t('rom.edit.genrePlaceholder', 'Action, Platform, Puzzle...')} />
+	</label>
 
 	<label class="field">
 		<span>{t('rom.fields.description', 'Description')}</span>

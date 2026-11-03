@@ -44,7 +44,16 @@ func (service *ListROMService) List(ctx context.Context, requester identity.Requ
 		return ROMListResponseDTO{Item: []ROMSummaryDTO{}}, nil
 	}
 
-	filter := ROMFilter{AfterCursor: request.Cursor, Platform: request.Platform, Search: request.Search}
+	sort, err := parseSort(request.Sort, request.Order)
+	if err != nil {
+		return ROMListResponseDTO{}, err
+	}
+	filter := ROMFilter{Sort: sort, Platform: request.Platform, Search: request.Search}
+	if request.Cursor != nil {
+		if filter.After, err = decodeCursor(*request.Cursor, sort); err != nil {
+			return ROMListResponseDTO{}, err
+		}
+	}
 	if !requester.HasBroadAccess() {
 		filter.UploaderID = &requester.UserID
 	}
@@ -54,7 +63,7 @@ func (service *ListROMService) List(ctx context.Context, requester identity.Requ
 	}
 	var nextCursor *string
 	if len(rows) > limit {
-		pivot := rows[limit-1].ROM.ID
+		pivot := encodeCursor(rows[limit-1].ROM, sort)
 		nextCursor = &pivot
 		rows = rows[:limit]
 	}

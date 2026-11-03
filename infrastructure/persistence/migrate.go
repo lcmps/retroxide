@@ -97,6 +97,18 @@ END;`},
 	// 19: an optional sign-in username, unique case-insensitively (it is stored lowercase).
 	{19, "add_user_username", `ALTER TABLE user ADD COLUMN username TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_username ON user(username);`},
+	// 20: a scraped or edited genre, and indexes that let the library be read in title, release,
+	// publisher, or genre order one page at a time, for everyone or one uploader. Text sorts are
+	// case-insensitive, so SQLite indexes them with NOCASE, matching the listing's ORDER BY.
+	{20, "add_rom_genre_and_sort_indexes", `ALTER TABLE rom ADD COLUMN genre TEXT;
+CREATE INDEX IF NOT EXISTS idx_rom_sort_title ON rom(title COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_sort_release ON rom(release_year COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_sort_publisher ON rom(publisher COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_sort_genre ON rom(genre COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_title ON rom(uploader_id, title COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_release ON rom(uploader_id, release_year COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_publisher ON rom(uploader_id, publisher COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_genre ON rom(uploader_id, genre COLLATE NOCASE, id);`},
 }
 
 var mysqlMigrations = []migration{
@@ -170,6 +182,16 @@ CREATE FULLTEXT INDEX ft_rom_search ON rom(title, platform);
 SET SESSION innodb_ft_enable_stopword = ON;`},
 	{19, "add_user_username", `ALTER TABLE user ADD COLUMN username VARCHAR(32) NULL;
 CREATE UNIQUE INDEX idx_user_username ON user(username);`},
+	// 20: see the SQLite migration; MySQL's column collations already compare case-insensitively.
+	{20, "add_rom_genre_and_sort_indexes", `ALTER TABLE rom ADD COLUMN genre VARCHAR(64) NULL;
+CREATE INDEX idx_rom_sort_title ON rom(title, id);
+CREATE INDEX idx_rom_sort_release ON rom(release_year, id);
+CREATE INDEX idx_rom_sort_publisher ON rom(publisher, id);
+CREATE INDEX idx_rom_sort_genre ON rom(genre, id);
+CREATE INDEX idx_rom_uploader_sort_title ON rom(uploader_id, title, id);
+CREATE INDEX idx_rom_uploader_sort_release ON rom(uploader_id, release_year, id);
+CREATE INDEX idx_rom_uploader_sort_publisher ON rom(uploader_id, publisher, id);
+CREATE INDEX idx_rom_uploader_sort_genre ON rom(uploader_id, genre, id);`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {

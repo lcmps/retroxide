@@ -31,6 +31,17 @@ game (
 )
 `
 
+const snesGenreDAT = `clrmamepro (
+	name "Nintendo - Super Nintendo Entertainment System"
+)
+
+game (
+	comment "Super Mario World (USA)"
+	genre "Platform"
+	rom ( crc B19ED489 )
+)
+`
+
 var (
 	png  = "\x89PNG\r\n\x1a\n" + strings.Repeat("p", 32)
 	jpeg = "\xff\xd8\xff\xe0" + strings.Repeat("j", 32)
@@ -40,6 +51,7 @@ type fakeUpstream struct {
 	server        *httptest.Server
 	hasheousDown  bool
 	datRequests   atomic.Int32
+	genreRequests atomic.Int32
 	requestedURLs []string
 }
 
@@ -60,6 +72,12 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 		case path == "/db/no-intro/Nintendo%20-%20Super%20Nintendo%20Entertainment%20System.dat":
 			upstream.datRequests.Add(1)
 			_, _ = writer.Write([]byte(snesDAT))
+		case path == "/db/genre/Nintendo%20-%20Super%20Nintendo%20Entertainment%20System.dat":
+			upstream.genreRequests.Add(1)
+			_, _ = writer.Write([]byte(snesGenreDAT))
+		case path == "/db/genre/Sony%20-%20PlayStation.dat":
+			upstream.genreRequests.Add(1)
+			writer.WriteHeader(http.StatusNotFound)
 		case strings.HasPrefix(path, "/thumbs/Nintendo_-_Super_Nintendo_Entertainment_System/master/"):
 			_, _ = writer.Write([]byte(png))
 		default:
@@ -87,7 +105,7 @@ func TestScrapeCombinesHasheousAndLibretro(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Source != SourceHasheous || result.Title != "Super Mario World" || result.Publisher != "Nintendo" ||
-		result.ReleaseYear != "1991" || result.Description != "Dinosaur Land." || result.Region != "USA" {
+		result.ReleaseYear != "1991" || result.Description != "Dinosaur Land." || result.Region != "USA" || result.Genre != "Platform" {
 		t.Fatalf("result = %+v", result)
 	}
 	if string(result.Cover) != jpeg {
@@ -126,6 +144,36 @@ func TestScrapeFallsBackToLibretroAndCachesDatabase(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected sanitized thumbnail request %s in %v", wantImage, upstream.requestedURLs)
+	}
+}
+
+func TestScrapeReadsGenreByCRCAndCachesMissingGenreDatabases(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.hasheousDown = true
+	client := upstream.client()
+	// The SNES genre database is keyed by CRC alone, so it adds a genre to a libretro match.
+	result, err := client.Scrape(context.Background(), rom.ScrapeQuery{Platform: "snes", SHA1: "6b47bb75d16514b6a476aa0c73a683a2a4c18765", CRC32: "b19ed489"})
+	if err != nil || result == nil || result.Genre != "Platform" {
+		t.Fatalf("Scrape() = %+v, %v; want genre Platform", result, err)
+	}
+	// Kirby is not in the genre database: no genre, and the match still succeeds.
+	result, err = client.Scrape(context.Background(), rom.ScrapeQuery{Platform: "snes", SHA1: "1111111111111111111111111111111111111111", CRC32: "11111111"})
+	if err != nil || result == nil || result.Genre != "" {
+		t.Fatalf("Scrape() = %+v, %v; want a match without genre", result, err)
+	}
+	if upstream.genreRequests.Load() != 1 {
+		t.Fatalf("genre database fetched %d times, want 1", upstream.genreRequests.Load())
+	}
+
+	// PlayStation has no genre database upstream; the miss is cached, not retried per scrape.
+	for range 2 {
+		index, err := client.datIndex(context.Background(), libretroSystems["psx"].genreDatabase(), true)
+		if err != nil || len(index.byCRC) != 0 {
+			t.Fatalf("missing genre database = %+v, %v; want an empty index", index, err)
+		}
+	}
+	if upstream.genreRequests.Load() != 2 {
+		t.Fatalf("genre databases fetched %d times, want 2", upstream.genreRequests.Load())
 	}
 }
 
@@ -182,7 +230,7 @@ func TestDatIndexSharesOneDownloadAcrossConcurrentLookups(t *testing.T) {
 		waiting.Add(1)
 		go func() {
 			defer waiting.Done()
-			index, err := client.datIndex(context.Background(), libretroSystems["snes"])
+			index, err := client.datIndex(context.Background(), libretroSystems["snes"].database, false)
 			if err == nil && index == nil {
 				err = errors.New("nil index")
 			}
@@ -191,7 +239,7 @@ func TestDatIndexSharesOneDownloadAcrossConcurrentLookups(t *testing.T) {
 	}
 
 	// Another system is not blocked behind the in-flight SNES download.
-	if _, err := client.datIndex(context.Background(), libretroSystems["gba"]); err != nil {
+	if _, err := client.datIndex(context.Background(), libretroSystems["gba"].database, false); err != nil {
 		t.Fatalf("independent system lookup failed: %v", err)
 	}
 	close(release)

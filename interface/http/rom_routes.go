@@ -50,13 +50,16 @@ func registerROMRoutes(api *gin.RouterGroup, roms rom.API, links DownloadLinks) 
 	group.POST("/:rom_id/download-link", requireService(links != nil), handler.createDownloadLink)
 }
 
-// parseROMListRequest reads GET /rom's query: limit, cursor, platform, q (search), identified.
+// parseROMListRequest reads GET /rom's query: limit, cursor, platform, q (search), identified,
+// sort (title, release, publisher, or genre), and order (asc or desc).
 func parseROMListRequest(c *gin.Context) (rom.ListRequest, error) {
 	request := rom.ListRequest{
 		Limit:    defaultROMPageSize,
 		Cursor:   optionalQuery(c, "cursor"),
 		Platform: optionalQuery(c, "platform"),
 		Search:   optionalQuery(c, "q"),
+		Sort:     c.Query("sort"),
+		Order:    c.Query("order"),
 	}
 	if raw := c.Query("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)

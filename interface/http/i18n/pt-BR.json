@@ -93,6 +93,17 @@
   "library.roms.empty": "Nenhuma ROM corresponde aos filtros atuais.",
   "library.roms.loading": "Carregando ROMs...",
   "library.roms.title": "Catalogo de ROMs",
+  "library.sort.label": "Ordenar a biblioteca",
+  "library.sort.fields.title": "Titulo",
+  "library.sort.fields.release": "Data de lancamento",
+  "library.sort.fields.publisher": "Editora",
+  "library.sort.fields.genre": "Genero",
+  "library.sort.state.none": "Ordenar por {field}",
+  "library.sort.state.asc": "Ordenado por {field}, crescente. Selecione para ordenar decrescente",
+  "library.sort.state.desc": "Ordenado por {field}, decrescente. Selecione para remover a ordenacao",
+  "library.sort.announce.asc": "Ordenado por {field}, crescente.",
+  "library.sort.announce.desc": "Ordenado por {field}, decrescente.",
+  "library.sort.announce.none": "Ordem padrao.",
   "library.subtitle": "Gerencie registros de bibliotecas usando os endpoints /api/v1/library.",
   "library.title": "Biblioteca",
   "login.actions.submit": "Entrar",
@@ -189,6 +200,7 @@
   "rom.empty": "Nenhum dado de ROM carregado.",
   "rom.fields.crc32": "CRC32",
   "rom.fields.description": "Descricao",
+  "rom.fields.genre": "Genero",
   "rom.fields.id": "ROM ID",
   "rom.fields.md5": "MD5",
   "rom.fields.platform": "Plataforma",
@@ -395,5 +407,6 @@
   "users.stats.roms": "ROMs",
   "users.stats.sessions": "Sessoes ativas",
   "users.stats.storage": "Armazenamento",
-  "users.stats.uploads": "Envios"
+  "users.stats.uploads": "Envios",
+  "rom.edit.genrePlaceholder": "Acao, Plataforma, Quebra-cabeca..."
 }

@@ -43,7 +43,7 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 	if err := ValidateUpdate(input.Title, input.Platform, input.Region, input.Version); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	if err := ValidateDetails(input.Publisher, input.ReleaseYear, input.Description); err != nil {
+	if err := ValidateDetails(input.Publisher, input.ReleaseYear, input.Genre, input.Description); err != nil {
 		return ROMDetailDTO{}, err
 	}
 	rom, err := service.findAccessibleROM(ctx, requester, romID)
@@ -67,6 +67,7 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 	}{
 		{input.Publisher, &rom.Identity.Publisher},
 		{input.ReleaseYear, &rom.Identity.ReleaseYear},
+		{input.Genre, &rom.Identity.Genre},
 		{input.Description, &rom.Identity.Description},
 	} {
 		if field.input != nil {
@@ -234,6 +235,9 @@ func (service *Service) scrape(ctx context.Context, rom *romdomain.ROM) (ROMDeta
 	fillMissing(&identity.Region, result.Region)
 	fillMissing(&identity.Publisher, result.Publisher)
 	fillMissing(&identity.ReleaseYear, result.ReleaseYear)
+	if len(strings.TrimSpace(result.Genre)) <= MaxGenreLength {
+		fillMissing(&identity.Genre, result.Genre)
+	}
 	fillMissing(&identity.Description, result.Description)
 	for _, image := range []struct {
 		target  **string
@@ -316,6 +320,7 @@ func detailOf(rom romdomain.ROM, romFile romdomain.ROMFile) ROMDetailDTO {
 		Version:        rom.Identity.Version,
 		Publisher:      rom.Identity.Publisher,
 		ReleaseYear:    rom.Identity.ReleaseYear,
+		Genre:          rom.Identity.Genre,
 		Description:    rom.Identity.Description,
 		CoverArtURL:    imageURL(rom.ID, "cover", rom.Identity.CoverArtPath),
 		TitleScreenURL: imageURL(rom.ID, "media/"+MediaTitleScreen, rom.Identity.TitleScreenPath),

@@ -249,13 +249,13 @@ func TestROMServiceUpdateEditsDetailsAndMarksManualCorrections(t *testing.T) {
 
 	// Omitted details are kept; the platform name resolves to its catalog key.
 	detail, err := service.Update(context.Background(), owner, "rom-1", UpdateROMRequest{
-		Title: "Alex Kidd", Platform: "Sega Master System", ReleaseYear: text(" 1986 "),
+		Title: "Alex Kidd", Platform: "Sega Master System", ReleaseYear: text(" 1986 "), Genre: text(" Platform "),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	saved := repository.roms["rom-1"].Identity
-	if detail.Platform != "sms" || detail.PlatformName != "Master System" || *detail.ReleaseYear != "1986" || *detail.Publisher != "Old Publisher" {
+	if detail.Platform != "sms" || detail.PlatformName != "Master System" || *detail.ReleaseYear != "1986" || *detail.Publisher != "Old Publisher" || *detail.Genre != "Platform" {
 		t.Fatalf("detail = %+v", detail)
 	}
 	if saved.IdentifiedBy != romdomain.IdentifiedByManual {
@@ -264,18 +264,22 @@ func TestROMServiceUpdateEditsDetailsAndMarksManualCorrections(t *testing.T) {
 
 	// Empty details are cleared; names outside the catalog keep their capitalization.
 	detail, err = service.Update(context.Background(), owner, "rom-1", UpdateROMRequest{
-		Title: "Alex Kidd", Platform: "Sega Pico", Publisher: text(""), Description: text("  "),
+		Title: "Alex Kidd", Platform: "Sega Pico", Publisher: text(""), Genre: text(""), Description: text("  "),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.Platform != "Sega Pico" || detail.Publisher != nil || detail.Description != nil || *detail.ReleaseYear != "1986" {
+	if detail.Platform != "Sega Pico" || detail.Publisher != nil || detail.Genre != nil || detail.Description != nil || *detail.ReleaseYear != "1986" {
 		t.Fatalf("detail after clearing = %+v", detail)
 	}
 
 	long := strings.Repeat("x", MaxDescriptionLength+1)
 	if _, err := service.Update(context.Background(), owner, "rom-1", UpdateROMRequest{Title: "Alex Kidd", Platform: "sms", Description: &long}); !fault.IsCode(err, fault.CodeValidation) {
 		t.Fatalf("overlong description = %v, want validation error", err)
+	}
+	longGenre := strings.Repeat("x", MaxGenreLength+1)
+	if _, err := service.Update(context.Background(), owner, "rom-1", UpdateROMRequest{Title: "Alex Kidd", Platform: "sms", Genre: &longGenre}); !fault.IsCode(err, fault.CodeValidation) {
+		t.Fatalf("overlong genre = %v, want validation error", err)
 	}
 }
 

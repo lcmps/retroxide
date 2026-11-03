@@ -112,3 +112,55 @@ func TestListROMServicePassesSearchAndRejectsOverlongTerms(t *testing.T) {
 		t.Fatalf("overlong search error = %v, want validation", err)
 	}
 }
+
+func TestListROMServiceSortedCursorsRoundTripAndAreBoundToTheirOrder(t *testing.T) {
+	genre := "Action"
+	repository := &listROMRepository{rows: []romdomain.ROMWithFile{
+		{ROM: romdomain.ROM{ID: "rom-1", Identity: romdomain.ROMIdentity{Title: "One", Genre: &genre}}},
+		{ROM: romdomain.ROM{ID: "rom-2", Identity: romdomain.ROMIdentity{Title: "Two"}}},
+		{ROM: romdomain.ROM{ID: "rom-3", Identity: romdomain.ROMIdentity{Title: "Three"}}},
+	}}
+	service := NewListROMService(repository)
+
+	first, err := service.List(context.Background(), adminRequester, ListRequest{Limit: 1, Sort: "genre", Order: "DESC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.filter.Sort != (ROMSort{Field: SortGenre, Descending: true}) || repository.filter.After != nil {
+		t.Fatalf("first page filter = %+v", repository.filter)
+	}
+	if first.NextCursor == nil || *first.NextCursor == "rom-1" {
+		t.Fatalf("sorted cursor = %v, want an opaque cursor", first.NextCursor)
+	}
+	if _, err := service.List(context.Background(), adminRequester, ListRequest{Limit: 1, Sort: "genre", Order: "desc", Cursor: first.NextCursor}); err != nil {
+		t.Fatal(err)
+	}
+	if after := repository.filter.After; after == nil || after.ID != "rom-1" || after.Value == nil || *after.Value != "Action" {
+		t.Fatalf("decoded cursor = %+v, want rom-1 at Action", after)
+	}
+
+	// The page ending on a ROM without a genre continues among ROMs without one.
+	second, err := service.List(context.Background(), adminRequester, ListRequest{Limit: 2, Sort: "genre", Order: "desc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.List(context.Background(), adminRequester, ListRequest{Limit: 2, Sort: "genre", Order: "desc", Cursor: second.NextCursor}); err != nil {
+		t.Fatal(err)
+	}
+	if after := repository.filter.After; after == nil || after.ID != "rom-2" || after.Value != nil {
+		t.Fatalf("decoded cursor = %+v, want rom-2 without a value", after)
+	}
+
+	for _, request := range []ListRequest{
+		{Limit: 1, Sort: "genre", Cursor: first.NextCursor},                // other direction
+		{Limit: 1, Sort: "title", Order: "desc", Cursor: first.NextCursor}, // other field
+		{Limit: 1, Sort: "genre", Order: "desc", Cursor: stringPointer("rom-1")},
+		{Limit: 1, Sort: "rating"},
+		{Limit: 1, Sort: "title", Order: "sideways"},
+		{Limit: 1, Order: "desc"},
+	} {
+		if _, err := service.List(context.Background(), adminRequester, request); !fault.IsCode(err, fault.CodeValidation) {
+			t.Errorf("List(%+v) error = %v, want validation", request, err)
+		}
+	}
+}

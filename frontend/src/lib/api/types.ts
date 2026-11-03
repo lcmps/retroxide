@@ -65,6 +65,7 @@ export type RomDetail = {
   version: string | null;
   publisher?: string | null;
   release_year?: string | null;
+  genre?: string | null;
   description?: string | null;
   cover_art_url?: string | null;
   title_screen_url?: string | null;
@@ -73,8 +74,8 @@ export type RomDetail = {
 };
 
 /**
- * Replaces a ROM's metadata. A null region or version clears it; publisher, release year, and
- * description are kept when omitted and cleared when empty.
+ * Replaces a ROM's metadata. A null region or version clears it; publisher, release year, genre,
+ * and description are kept when omitted and cleared when empty.
  */
 export type UpdateRomRequest = {
   title: string;
@@ -83,6 +84,7 @@ export type UpdateRomRequest = {
   version: string | null;
   publisher?: string;
   release_year?: string;
+  genre?: string;
   description?: string;
 };
 
