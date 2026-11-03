@@ -185,7 +185,7 @@ func scanROMsWithFiles(query *gorm.DB, operation string) ([]romdomain.ROMWithFil
 		SHA256 string `gorm:"column:sha256"`
 	}
 	err := query.
-		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, r.publisher, r.release_year, r.genre, f.sha256").
+		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, r.cover_thumb_path, r.publisher, r.release_year, r.genre, f.sha256").
 		Scan(&rows).Error
 	if err != nil {
 		return nil, databaseError(operation, err)
@@ -241,7 +241,7 @@ func romModel(rom romdomain.ROM) ROMModel {
 		ID: rom.ID, ROMFileID: rom.ROMFileID, UploaderID: rom.UploaderID,
 		Title: rom.Identity.Title, Platform: rom.Identity.Platform, Region: rom.Identity.Region,
 		Version: rom.Identity.Version, IdentifiedBy: rom.Identity.IdentifiedBy,
-		Confidence: rom.Identity.Confidence, CoverArtPath: rom.Identity.CoverArtPath,
+		Confidence: rom.Identity.Confidence, CoverArtPath: rom.Identity.CoverArtPath, CoverThumbPath: rom.Identity.CoverThumbPath,
 		Publisher: rom.Identity.Publisher, ReleaseYear: rom.Identity.ReleaseYear, Genre: rom.Identity.Genre, Description: rom.Identity.Description,
 		TitleScreenPath: rom.Identity.TitleScreenPath, ScreenshotPath: rom.Identity.ScreenshotPath,
 	}
@@ -252,7 +252,7 @@ func romEntity(model ROMModel) romdomain.ROM {
 		ID: model.ID, ROMFileID: model.ROMFileID, UploaderID: model.UploaderID,
 		Identity: romdomain.ROMIdentity{
 			Title: model.Title, Platform: model.Platform, Region: model.Region, Version: model.Version,
-			CoverArtPath: model.CoverArtPath, IdentifiedBy: model.IdentifiedBy, Confidence: model.Confidence,
+			CoverArtPath: model.CoverArtPath, CoverThumbPath: model.CoverThumbPath, IdentifiedBy: model.IdentifiedBy, Confidence: model.Confidence,
 			Publisher: model.Publisher, ReleaseYear: model.ReleaseYear, Genre: model.Genre, Description: model.Description,
 			TitleScreenPath: model.TitleScreenPath, ScreenshotPath: model.ScreenshotPath,
 		},
@@ -295,4 +295,16 @@ func (repositories *Repositories) ListPlatforms(ctx context.Context, uploaderID 
 		counts = append(counts, rom.PlatformCount{Platform: row.Platform, Count: row.Count})
 	}
 	return counts, nil
+}
+
+// SetCoverThumbnail records a ROM's cover thumbnail, unless its cover changed since the
+// thumbnail was made from it.
+func (repositories *Repositories) SetCoverThumbnail(ctx context.Context, romID, coverPath, thumbnailPath string) error {
+	err := repositories.DB.WithContext(ctx).Model(&ROMModel{}).
+		Where("id = ? AND cover_art_path = ?", romID, coverPath).
+		Update("cover_thumb_path", thumbnailPath).Error
+	if err != nil {
+		return databaseError("recording cover thumbnail", err)
+	}
+	return nil
 }

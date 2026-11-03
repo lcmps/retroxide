@@ -2,11 +2,10 @@ package rom
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"strings"
 
 	"github.com/lcmps/retroxide/application/fault"
@@ -15,10 +14,12 @@ import (
 )
 
 type Service struct {
-	repository Repository
-	storage    Storage
-	audit      Audit
-	scraper    Scraper
+	repository     Repository
+	storage        Storage
+	audit          Audit
+	scraper        Scraper
+	thumbnailer    Thumbnailer
+	thumbnailSlots chan struct{}
 }
 
 const scrapedConfidence = 95
@@ -85,8 +86,9 @@ func (service *Service) Delete(ctx context.Context, requester identity.Requester
 		return err
 	}
 	return service.repository.HardDeleteROM(ctx, romID, func(path string) error {
-		if err := service.storage.Delete(ctx, path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fault.Internal(fmt.Errorf("deleting ROM content: %w", err))
+		// The deletion has committed; a file left behind is reclaimed by the storage sweep.
+		if err := service.storage.Delete(context.WithoutCancel(ctx), path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			slog.WarnContext(ctx, "could not delete stored file; the storage sweep will reclaim it", "path", path, "error", err)
 		}
 		return nil
 	})
@@ -146,27 +148,13 @@ func (service *Service) UploadCover(ctx context.Context, requester identity.Requ
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
-	digest := sha256.Sum256(content)
-	storagePath, err := service.storage.Write(ctx, hex.EncodeToString(digest[:]), content)
-	if err != nil {
+	if err := service.storeCover(ctx, &rom.Identity, content); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	rom.Identity.CoverArtPath = &storagePath
 	if err := service.repository.SaveROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
 	return service.detail(ctx, *rom)
-}
-
-func (service *Service) ReadCover(ctx context.Context, requester identity.Requester, romID string) ([]byte, error) {
-	rom, err := service.findAccessibleROM(ctx, requester, romID)
-	if err != nil {
-		return nil, err
-	}
-	if rom.Identity.CoverArtPath == nil {
-		return nil, fault.NotFound()
-	}
-	return service.storage.Read(ctx, *rom.Identity.CoverArtPath)
 }
 
 // Scrape fills only missing metadata and images. The title and platform are replaced only while
@@ -239,19 +227,22 @@ func (service *Service) scrape(ctx context.Context, rom *romdomain.ROM) (ROMDeta
 		fillMissing(&identity.Genre, result.Genre)
 	}
 	fillMissing(&identity.Description, result.Description)
+	if identity.CoverArtPath == nil && len(result.Cover) > 0 {
+		if err := service.storeCover(ctx, identity, result.Cover); err != nil {
+			return ROMDetailDTO{}, err
+		}
+	}
 	for _, image := range []struct {
 		target  **string
 		content []byte
 	}{
-		{&identity.CoverArtPath, result.Cover},
 		{&identity.TitleScreenPath, result.TitleScreen},
 		{&identity.ScreenshotPath, result.Screenshot},
 	} {
 		if *image.target != nil || len(image.content) == 0 {
 			continue
 		}
-		digest := sha256.Sum256(image.content)
-		storagePath, err := service.storage.Write(ctx, hex.EncodeToString(digest[:]), image.content)
+		storagePath, err := service.storeImage(ctx, image.content)
 		if err != nil {
 			return ROMDetailDTO{}, err
 		}
@@ -261,24 +252,6 @@ func (service *Service) scrape(ctx context.Context, rom *romdomain.ROM) (ROMDeta
 		return ROMDetailDTO{}, err
 	}
 	return detailOf(*rom, *romFile), nil
-}
-
-func (service *Service) ReadMedia(ctx context.Context, requester identity.Requester, romID, kind string) ([]byte, error) {
-	rom, err := service.findAccessibleROM(ctx, requester, romID)
-	if err != nil {
-		return nil, err
-	}
-	var path *string
-	switch kind {
-	case MediaTitleScreen:
-		path = rom.Identity.TitleScreenPath
-	case MediaScreenshot:
-		path = rom.Identity.ScreenshotPath
-	}
-	if path == nil {
-		return nil, fault.NotFound()
-	}
-	return service.storage.Read(ctx, *path)
 }
 
 func fillMissing(target **string, value string) {

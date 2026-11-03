@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/lcmps/retroxide/application/rom"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -265,4 +266,48 @@ func TestMySQLListROMsInSortOrder(t *testing.T) {
 	}
 	defer sqlDB.Close()
 	exerciseROMSorting(t, ctx, NewRepositories(db), fmt.Sprintf("sort-%x", time.Now().UnixNano()))
+}
+
+func TestMySQLUploadSessionsAndStoragePaths(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	repositories := NewRepositories(db)
+	exerciseUploadSessions(t, ctx, repositories, fmt.Sprintf("ups_%x", time.Now().UnixNano()))
+
+	// Legacy paths are found and rewritten; keys and references are recognized.
+	suffix := fmt.Sprintf("%x", time.Now().UnixNano())
+	file := validROMFile("rf-paths-"+suffix, "paths-"+suffix)
+	legacy := "/srv/storage/" + file.Hash.SHA256
+	file.StoragePath = legacy
+	if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repositories.DeleteROMFile(ctx, file.ID) })
+	paths, err := repositories.ListLegacyStoragePaths(ctx)
+	if err != nil || !slices.Contains(paths, legacy) {
+		t.Fatalf("legacy paths = %v, %v; want %s", paths, err, legacy)
+	}
+	key := file.Hash.SHA256[:2] + "/" + file.Hash.SHA256
+	if err := repositories.ReplaceStoragePaths(ctx, map[string]string{legacy: key}); err != nil {
+		t.Fatal(err)
+	}
+	if paths, _ := repositories.ListLegacyStoragePaths(ctx); slices.Contains(paths, legacy) || slices.Contains(paths, key) {
+		t.Fatalf("legacy paths after rewriting = %v", paths)
+	}
+	referenced, err := repositories.ReferencedStoragePaths(ctx, []string{key, "zz/" + strings.Repeat("z", 64)})
+	if err != nil || !referenced[key] || len(referenced) != 1 {
+		t.Fatalf("referenced = %v, %v; want only %s", referenced, err, key)
+	}
 }

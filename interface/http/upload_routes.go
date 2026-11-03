@@ -1,11 +1,13 @@
 package http
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"math"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -32,6 +34,43 @@ func registerUploadRoutes(api *gin.RouterGroup, service uploads.Service, maxByte
 	group := api.Group("/upload", requireService(service != nil))
 	group.POST("", handler.create)
 	group.GET("/:upload_id", handler.status)
+	// Uploads sent in parts, which resume after a dropped connection.
+	group.POST("/session", handler.createSession)
+	group.GET("/session/:session_id", handler.sessionStatus)
+	group.PATCH("/session/:session_id", handler.appendToSession)
+	group.DELETE("/session/:session_id", handler.cancelSession)
+}
+
+func (handler uploadHandler) createSession(c *gin.Context) {
+	var input uploads.CreateSessionInput
+	if !bindJSON(c, &input) {
+		return
+	}
+	session, err := handler.uploads.CreateSession(c.Request.Context(), requesterFromContext(c), input)
+	respondJSON(c, http.StatusCreated, session, err)
+}
+
+func (handler uploadHandler) sessionStatus(c *gin.Context) {
+	session, err := handler.uploads.SessionStatus(c.Request.Context(), requesterFromContext(c), c.Param("session_id"))
+	respondJSON(c, http.StatusOK, session, err)
+}
+
+// appendToSession takes one part of a session upload: the raw bytes, with the Upload-Offset
+// header naming where in the file they start.
+func (handler uploadHandler) appendToSession(c *gin.Context) {
+	offset, err := strconv.ParseInt(c.GetHeader("Upload-Offset"), 10, 64)
+	if err != nil || offset < 0 {
+		writeError(c, fault.Validation("the Upload-Offset header must give the part's starting byte"))
+		return
+	}
+	body := http.MaxBytesReader(c.Writer, c.Request.Body, uploads.MaxChunkBytes)
+	content := uploadBodyReader{bufio.NewReaderSize(body, uploadReadBufferSize)}
+	session, err := handler.uploads.AppendToSession(c.Request.Context(), requesterFromContext(c), c.Param("session_id"), offset, content)
+	respondJSON(c, http.StatusOK, session, err)
+}
+
+func (handler uploadHandler) cancelSession(c *gin.Context) {
+	respondNoContent(c, handler.uploads.CancelSession(c.Request.Context(), requesterFromContext(c), c.Param("session_id")))
 }
 
 func (handler uploadHandler) create(c *gin.Context) {
@@ -39,7 +78,10 @@ func (handler uploadHandler) create(c *gin.Context) {
 	if limit <= 0 {
 		limit = defaultMaxUploadBytes
 	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, requestBodyLimit(limit))
+	body := http.MaxBytesReader(c.Writer, c.Request.Body, requestBodyLimit(limit))
+	// The multipart reader reads 4 KiB at a time, one system call each; a larger buffer in
+	// front of it reads the socket in up to 1 MiB pieces instead.
+	c.Request.Body = bufferedBody{Reader: bufio.NewReaderSize(body, uploadReadBufferSize), Closer: body}
 	part, err := uploadFilePart(c.Request)
 	if err != nil {
 		writeError(c, err)
@@ -52,6 +94,9 @@ func (handler uploadHandler) create(c *gin.Context) {
 		UploaderID: requester.UserID,
 		Filename:   part.FileName(),
 		Content:    uploadBodyReader{part},
+		// The request carries the file and a little multipart framing, so its length is the
+		// file's size to within a few hundred bytes.
+		ExpectedSize: c.Request.ContentLength,
 	}
 	if input.Filename == "" {
 		input.Filename = defaultUploadFilename
@@ -66,6 +111,15 @@ func (handler uploadHandler) create(c *gin.Context) {
 func (handler uploadHandler) status(c *gin.Context) {
 	status, err := handler.uploads.Status(c.Request.Context(), requesterFromContext(c), c.Param("upload_id"))
 	respondJSON(c, http.StatusOK, status, err)
+}
+
+// uploadReadBufferSize is how much of an upload is read from the connection at a time.
+const uploadReadBufferSize = 1 << 20
+
+// bufferedBody reads a request body through a buffer and closes the body itself.
+type bufferedBody struct {
+	io.Reader
+	io.Closer
 }
 
 // uploadFilePart advances a streaming multipart reader to the "file" field without buffering
@@ -101,11 +155,18 @@ type uploadBodyReader struct {
 
 func (body uploadBodyReader) Read(buffer []byte) (int, error) {
 	n, err := body.reader.Read(buffer)
-	if isBodyTooLarge(err) {
+	switch {
+	case isBodyTooLarge(err):
 		return n, errUploadBodyTooLarge
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return n, errUploadInterrupted
 	}
 	return n, err
 }
+
+// errUploadInterrupted reports a body that ended before the upload did, as when the client
+// disconnects mid-transfer.
+var errUploadInterrupted = fault.Validation("upload was interrupted before it finished")
 
 // requestBodyLimit is the whole-request limit for a multipart body carrying a file of up to fileLimit bytes.
 func requestBodyLimit(fileLimit int64) int64 {

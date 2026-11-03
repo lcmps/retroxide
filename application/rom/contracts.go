@@ -2,6 +2,7 @@ package rom
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 type Repository interface {
 	UpsertROMFile(context.Context, romdomain.ROMFile) (romdomain.ROMFile, error)
 	SaveROM(context.Context, romdomain.ROM) error
+	// SetCoverThumbnail records a ROM's cover thumbnail, unless its cover has changed since.
+	SetCoverThumbnail(ctx context.Context, romID, coverPath, thumbnailPath string) error
 	// ListROMsWithFiles returns up to limit ROMs ordered by ID that match filter.
 	ListROMsWithFiles(ctx context.Context, limit int, filter ROMFilter) ([]romdomain.ROMWithFile, error)
 	FindROMByID(context.Context, string) (*romdomain.ROM, error)
@@ -96,6 +99,16 @@ type ListRequest struct {
 	Order string
 }
 
+// Thumbnailer makes the small cover copies library grids show.
+type Thumbnailer interface {
+	// Thumbnail returns a small copy of an image, or ErrThumbnailNotSmaller when the image is
+	// already small enough to serve as its own thumbnail.
+	Thumbnail(content []byte) ([]byte, error)
+}
+
+// ErrThumbnailNotSmaller reports that an image needs no smaller copy.
+var ErrThumbnailNotSmaller = errors.New("image is already thumbnail-sized")
+
 type Storage interface {
 	Write(ctx context.Context, contentAddress string, content []byte) (string, error)
 	Read(ctx context.Context, storagePath string) ([]byte, error)
@@ -149,9 +162,11 @@ type API interface {
 	// DownloadFilename returns the name an accessible ROM is downloaded as.
 	DownloadFilename(context.Context, identity.Requester, string) (string, error)
 	UploadCover(context.Context, identity.Requester, string, []byte) (ROMDetailDTO, error)
-	ReadCover(context.Context, identity.Requester, string) ([]byte, error)
+	OpenCover(context.Context, identity.Requester, string) (Image, error)
+	// OpenCoverThumbnail opens the small copy of the cover that library grids show.
+	OpenCoverThumbnail(context.Context, identity.Requester, string) (Image, error)
 	Scrape(context.Context, identity.Requester, string) (ROMDetailDTO, error)
-	ReadMedia(context.Context, identity.Requester, string, string) ([]byte, error)
+	OpenMedia(context.Context, identity.Requester, string, string) (Image, error)
 	// Platforms lists the platforms of the ROMs the requester can see.
 	Platforms(context.Context, identity.Requester) ([]PlatformDTO, error)
 	// PlatformCatalog lists every known platform, for choosing one when editing a ROM.

@@ -10,6 +10,8 @@ type ROMSummaryDTO struct {
 	PlatformName string  `json:"platform_name"`
 	SHA256       string  `json:"sha256"`
 	CoverArtURL  *string `json:"cover_art_url"`
+	// CoverThumbURL is a small copy of the cover, for grids of many ROMs.
+	CoverThumbURL *string `json:"cover_thumb_url"`
 }
 
 type ROMListResponseDTO struct {

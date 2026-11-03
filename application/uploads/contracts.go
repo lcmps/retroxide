@@ -2,6 +2,7 @@ package uploads
 
 import (
 	"context"
+	"io"
 
 	"github.com/lcmps/retroxide/application/jobs"
 
@@ -44,6 +45,10 @@ type UploadAudit interface {
 type Service interface {
 	Create(context.Context, identity.Requester, UploadInput) (UploadAcceptedDTO, error)
 	Status(context.Context, identity.Requester, string) (UploadStatusDTO, error)
+	CreateSession(context.Context, identity.Requester, CreateSessionInput) (SessionDTO, error)
+	SessionStatus(context.Context, identity.Requester, string) (SessionDTO, error)
+	AppendToSession(ctx context.Context, requester identity.Requester, sessionID string, offset int64, content io.Reader) (SessionDTO, error)
+	CancelSession(context.Context, identity.Requester, string) error
 }
 
 var _ jobs.Identifier = (*IdentifyService)(nil)

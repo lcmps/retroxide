@@ -26,6 +26,15 @@ func (Service) NewDigest() romdomain.Digest {
 	return newParallelDigest()
 }
 
+// ResumeDigest continues hashing from progress saved with MarshalBinary, or starts afresh when
+// state is empty.
+func (Service) ResumeDigest(state []byte) (romdomain.ResumableDigest, error) {
+	if len(state) == 0 {
+		return newParallelDigest(), nil
+	}
+	return restoreParallelDigest(state)
+}
+
 // Hash hashes content held in memory. Content smaller than one block is hashed inline, where
 // handing it to goroutines would cost more than it saves.
 func (Service) Hash(content []byte) (romdomain.ROMHash, error) {
