@@ -17,6 +17,7 @@
 
 <style>
 	.progress-block {
+		font-size: 0.55rem;
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;
 		align-items: center;

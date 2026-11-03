@@ -19,27 +19,34 @@
 	});
 </script>
 
-<section class="page-shell stack" aria-labelledby="uploads-title">
-	<h1 id="uploads-title">{t('uploads.heading', 'Uploads')}</h1>
+<svelte:head>
+	<title>{t('uploads.heading', 'Uploads')} · Retroxide</title>
+</svelte:head>
 
-	<section class="upload-workspace stack" aria-label={t('uploads.heading', 'Uploads')}>
-		<UploadForm onupload={(files) => queue.add(files)} />
+<section class="page-shell" aria-labelledby="uploads-title">
+	<!-- Centred as a block, like the other pages; the text inside stays left-aligned. -->
+	<div class="upload-layout stack">
+		<h1 id="uploads-title">{t('uploads.heading', 'Uploads')}</h1>
 
-		{#if queue.items.length > 0}
-			<ul class="upload-queue stack" aria-label={t('uploads.queue.label', 'Upload queue')}>
-				{#each queue.items as item (item.key)}
-					<UploadQueueItem {item} />
-				{/each}
-			</ul>
-			{#if hasFinished}
-				<ActionButton type="button" onclick={() => queue.clearFinished()}>
-					{t('uploads.queue.clearFinished', 'Clear finished')}
-				</ActionButton>
+		<div class="upload-workspace stack">
+			<UploadForm onupload={(files) => queue.add(files)} />
+
+			{#if queue.items.length > 0}
+				<ul class="upload-queue stack" aria-label={t('uploads.queue.label', 'Upload queue')}>
+					{#each queue.items as item (item.key)}
+						<UploadQueueItem {item} />
+					{/each}
+				</ul>
+				{#if hasFinished}
+					<ActionButton type="button" onclick={() => queue.clearFinished()} title={t('uploads.queue.clearHint', 'Remove completed and failed uploads from this list')}>
+						{t('uploads.queue.clearFinished', 'Clear finished')}
+					</ActionButton>
+				{/if}
+			{:else}
+				<p>{t('uploads.empty', 'No uploads in progress.')}</p>
 			{/if}
-		{:else}
-			<p>{t('uploads.empty', 'No uploads in progress.')}</p>
-		{/if}
-	</section>
+		</div>
+	</div>
 </section>
 
 <style>
@@ -48,14 +55,25 @@
 		font-size: 1.5rem;
 	}
 
+	.upload-layout {
+		width: 100%;
+		max-width: 38rem;
+		margin-inline: auto;
+	}
+
 	.upload-workspace {
-		width: min(100%, 38rem);
 		padding-top: 1.5rem;
 	}
 
 	.upload-queue {
 		margin: 0;
 		padding: 0;
+	}
+
+	.upload-workspace > p {
+		margin: 0;
+		color: var(--pixel-muted);
+		font-size: 0.6rem;
 	}
 
 	@media (max-width: 640px) {
@@ -65,6 +83,10 @@
 
 		.upload-workspace {
 			padding-top: 0.5rem;
+		}
+
+		.upload-workspace > p {
+			text-align: center;
 		}
 	}
 </style>

@@ -8,12 +8,15 @@
 	import AppShell from '#lib/components/AppShell.svelte';
 	import { getSetupStatus, hasStoredSession } from '#lib/api/client.js';
 	import '@fontsource/press-start-2p';
+	import '@fontsource/ubuntu/400.css';
+	import '@fontsource/ubuntu/700.css';
+	import { applyCachedFont, loadAppearance } from '#lib/appearance.js';
 	import '#lib/styles/layout.css';
 	import '#lib/styles/pixel.css';
 
 	let { children } = $props();
 
-	const shellPrefixes = ['/library', '/uploads', '/downloads', '/rom'];
+	const shellPrefixes = ['/library', '/uploads', '/downloads', '/rom', '/profile', '/users'];
 
 	const activePath = $derived(page.url.pathname);
 	const useShell = $derived(
@@ -42,7 +45,10 @@
 		}
 	}
 
+	// Start in the last known font to avoid a flash, then follow the server's setting.
+	applyCachedFont();
 	onMount(() => {
+		void loadAppearance();
 		// An unreachable backend is treated as configured so the normal error paths apply.
 		void getSetupStatus()
 			.then((status) => {

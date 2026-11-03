@@ -91,7 +91,7 @@ func InferIdentityFromFilename(filename string) romdomain.ROMIdentity {
 	region := inferRegion(lowerName)
 	version := inferVersion(name, lowerName)
 	confidence := uint8(70)
-	if platform == "unknown" {
+	if platform == romdomain.PlatformUnknown {
 		confidence = 45
 	} else if region != nil || version != nil {
 		confidence = 80
@@ -115,24 +115,7 @@ func splitFilename(filename string) (string, string) {
 }
 
 func inferPlatform(extension string) string {
-	switch strings.ToLower(extension) {
-	case "nes":
-		return "nes"
-	case "sfc", "smc":
-		return "snes"
-	case "gba":
-		return "gba"
-	case "gb":
-		return "gb"
-	case "gbc":
-		return "gbc"
-	case "n64", "z64", "v64":
-		return "n64"
-	case "iso", "cue", "chd":
-		return "psx"
-	default:
-		return "unknown"
-	}
+	return romdomain.PlatformForExtension(extension)
 }
 
 func inferRegion(lowerName string) *string {

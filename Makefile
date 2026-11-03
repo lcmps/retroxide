@@ -12,7 +12,9 @@ export CGO_ENABLED := 0
 
 BENCH_COUNT ?= 5
 
-build: frontend-build backend-build
+# The binary embeds the built frontend, so it must be compiled afterwards even under `make -j`.
+build: frontend-build
+	$(MAKE) backend-build
 
 backend-build:
 	$(GO) build -trimpath -ldflags="$(GO_LDFLAGS)" -o bin/$(BINARY) .

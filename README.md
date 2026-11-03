@@ -62,6 +62,16 @@ export RETROXIDE_JWT_SECRET="$(openssl rand -base64 48)"
 
 Access tokens last one hour (`RETROXIDE_JWT_ACCESS_EXPIRY_SECS`) and refresh tokens seven days (`RETROXIDE_JWT_REFRESH_EXPIRY_SECS`). Every request re-checks the token against the user record, so logging out ends all of that user's sessions immediately and role changes apply on the next request.
 
+Uploads are limited to 64 MB by default. Set `RETROXIDE_MAX_UPLOAD_SIZE` in megabytes to change it, for example `RETROXIDE_MAX_UPLOAD_SIZE=4096MB` for 4 GB ROMs (a bare number also means megabytes, and `GB` works too). The older `RETROXIDE_MAX_UPLOAD_BYTES` is still read when the new setting is absent.
+
+Uploads are identified by `RETROXIDE_WORKER_COUNT` background workers (default 1), and each new ROM is then scraped for metadata and artwork by `RETROXIDE_SCRAPE_WORKER_COUNT` separate workers (default 2), so slow metadata services never delay identification.
+
+The **Profile & settings** page (the user icon at the top right) lets everyone change their email and password and read the settings that affect them. Administrators also see the server and storage settings and can edit the upload, session, network, and worker settings there. Edits are saved to `RETROXIDE_CONFIG_FILE` and take effect after a restart, except the interface font (`RETROXIDE_UI_FONT`: `pixel`, the default Press Start 2P; `ubuntu`; or `system`, the operating system's font), which applies immediately as the default for every visitor, including the sign-in page. Each user can also pick their own font and interface language on the same page; both are saved to their account, the font overriding the application default and the language overriding the browser's. Settings set through process environment variables override the file and stay read-only on the page.
+
+Users sign in with their email or, if they set one, a username (3 to 32 lowercase letters, digits, dots, dashes, or underscores; matched case-insensitively). Administrators manage accounts on the **Users** page: they can create users, change emails, usernames, and roles, reset passwords (which signs that user out everywhere), sign a user out of every device, and see each user's ROM count, storage used, uploads, active sessions, and platforms. Deleting a user moves their ROMs, libraries, and uploads to the administrator who deleted them, so nothing is lost; administrators cannot delete or demote themselves, so at least one administrator always remains.
+
+Library search uses a full-text index. On SQLite it matches any part of a title or platform; on MySQL it matches words by their beginning (`mario k` finds "Super Mario Kart", a fragment from inside a word does not), which keeps searches fast on large libraries. MySQL connections send queries with client-side parameter interpolation (one round trip per query instead of three); add `interpolateParams=false` to `RETROXIDE_MYSQL_URL` to turn it off.
+
 Login and token-refresh requests are throttled per client IP. By default the backend ignores `X-Forwarded-For`/`X-Real-IP` and uses the TCP peer address. Behind a reverse proxy, set `RETROXIDE_TRUSTED_PROXIES` to the proxy's addresses (comma-separated IPs or CIDR ranges, for example `127.0.0.1,10.0.0.0/8`) so throttling applies to real clients instead of the proxy.
 
 Run the backend from the repository root:

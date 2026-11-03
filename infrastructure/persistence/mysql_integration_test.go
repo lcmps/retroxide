@@ -101,7 +101,7 @@ func TestMySQLMigrationAndAtomicRepositories(t *testing.T) {
 	if err := repositories.Enqueue(ctx, jobsdomain.Payload{Kind: "identify_rom", UploadID: "upl-" + userID, ROMFileID: romFile.ID}); err != nil {
 		t.Fatal(err)
 	}
-	claimedJob, err := repositories.Claim(ctx, time.Now(), time.Minute)
+	claimedJob, err := repositories.Claim(ctx, time.Now(), time.Minute, jobsdomain.KindFilter{})
 	if err != nil || claimedJob == nil || claimedJob.Payload.ROMFileID != romFile.ID {
 		t.Fatalf("claimed MySQL queue job = %+v, %v", claimedJob, err)
 	}
@@ -201,7 +201,7 @@ func TestMySQLROMFileIdentifierUpgrade(t *testing.T) {
 	if err := repositories.Enqueue(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repositories.Claim(context.Background(), time.Now(), time.Minute)
+	claimed, err := repositories.Claim(context.Background(), time.Now(), time.Minute, jobsdomain.KindFilter{})
 	if err != nil || claimed == nil || claimed.Payload.ROMFileID != file.ID {
 		t.Fatalf("claimed job = %+v, %v", claimed, err)
 	}
@@ -211,4 +211,40 @@ func TestMySQLROMFileIdentifierUpgrade(t *testing.T) {
 	if err := db.Exec("INSERT INTO rom (id, rom_file_id, title, platform, identified_by, confidence) VALUES ('invalid-reference', 'missing', 'Invalid', 'snes', 'test', 1)").Error; err == nil {
 		t.Fatal("ROM-file foreign key was not restored")
 	}
+}
+
+func TestMySQLSearchUsesTheFullTextIndex(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	exerciseROMSearch(t, ctx, NewRepositories(db), fmt.Sprintf("search-%x", time.Now().UnixNano()))
+}
+
+func TestMySQLUserManagement(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	exerciseUserManagement(t, ctx, NewRepositories(db), fmt.Sprintf("um%x", time.Now().UnixNano()))
 }

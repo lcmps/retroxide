@@ -5,30 +5,33 @@
 	import { Gamepad2, Search } from "@lucide/svelte";
 	import { onMount } from "svelte";
 	import type { Snippet } from "svelte";
-	import { i18n, logger, logoutSession } from "#lib";
+	import { getProfile, i18n, logger, logoutSession } from "#lib";
 	import { useTranslate } from "#lib/i18n/helpers.js";
+	import { setUserFont } from "#lib/appearance.js";
+	import { platforms } from "#lib/platforms/catalog.svelte.js";
 
 	type Props = {
 		activePath: string;
 		children: Snippet;
 	};
 
-	const platformOptions = [
-		{ value: "nes", label: "NES" },
-		{ value: "snes", label: "SNES" },
-		{ value: "gba", label: "Game Boy Advance" },
-		{ value: "gb", label: "Game Boy" },
-		{ value: "gbc", label: "Game Boy Color" },
-		{ value: "n64", label: "Nintendo 64" },
-		{ value: "psx", label: "PlayStation" },
-	];
-
 	let { activePath, children }: Props = $props();
 
 	let selectedPlatform = $state("");
+	// Administrators get the Users page; learned from the profile once signed in.
+	let isAdmin = $state(false);
 	let searchText = $state("");
 
 	const libraryControlsEnabled = $derived(activePath === "/library");
+	// The platforms the library actually holds. A platform named in the URL but not (or no
+	// longer) listed still gets an option, so the selection stays visible.
+	const platformOptions = $derived.by(() => {
+		const options = platforms.items.map((platform) => ({ value: platform.key, label: platform.name }));
+		if (selectedPlatform && !options.some((option) => option.value.toLowerCase() === selectedPlatform.toLowerCase())) {
+			options.push({ value: selectedPlatform, label: platforms.nameFor(selectedPlatform) });
+		}
+		return options;
+	});
 	const isLibrary = $derived(activePath === "/library");
 	const translate = useTranslate(i18n);
 	const routeLabel = $derived(
@@ -36,7 +39,7 @@
 			? translate("nav.uploads", "Uploads")
 			: activePath === "/uploads"
 				? translate("nav.downloads", "Downloads")
-				: activePath.startsWith("/rom/")
+				: activePath.startsWith("/rom/") || activePath === "/profile" || activePath === "/users"
 					? translate("nav.library", "Library")
 					: "",
 	);
@@ -99,8 +102,16 @@
 		} catch (error) {
 			logger.warn("Server logout failed; clearing the local session anyway.", error);
 		}
+		// The sign-in page shows the application default font, not this user's.
+		setUserFont(null);
 		await goto(resolve("/login"), { replace: true });
 	}
+
+	// Uploads, scrapes, and deletions change which platforms exist; refresh on every navigation.
+	$effect(() => {
+		void activePath;
+		void platforms.refresh();
+	});
 
 	$effect(() => {
 		if (activePath === "/library") {
@@ -114,22 +125,35 @@
 	});
 
 	onMount(() => {
-		const handleSessionExpired = () =>
+		const handleSessionExpired = () => {
+			setUserFont(null);
 			void goto(resolve("/login"), { replace: true });
+		};
 		window.addEventListener(
 			"retroxide:session-expired",
 			handleSessionExpired,
 		);
+		const refreshPlatforms = () => void platforms.refresh();
+		window.addEventListener("focus", refreshPlatforms);
+		// The account's language wins over the browser's, on every device the user signs in on.
 		void i18n
 			.initialize()
+			.then(() => getProfile())
+			.then((profile) => {
+				isAdmin = profile.role === "admin";
+				setUserFont(profile.font);
+				return i18n.applyAccountLocale(profile.locale);
+			})
 			.catch((error: unknown) =>
-				logger.warn("Unable to initialize translations.", error),
+				logger.warn("Unable to apply the account language.", error),
 			);
-		return () =>
+		return () => {
 			window.removeEventListener(
 				"retroxide:session-expired",
 				handleSessionExpired,
 			);
+			window.removeEventListener("focus", refreshPlatforms);
+		};
 	});
 </script>
 
@@ -178,6 +202,7 @@
 				<select
 					value={selectedPlatform}
 					onchange={changePlatform}
+					onfocus={() => void platforms.refresh()}
 					aria-label={translate("rom.fields.platform", "Platform")}
 					disabled={!libraryControlsEnabled}
 					title={libraryControlsEnabled
@@ -191,7 +216,7 @@
 						>{translate("rom.fields.platform", "Platform")}</option
 					>
 					{#each platformOptions as platform (platform.value)}
-						<option value={platform.value}>{platform.label}</option>
+						<option value={platform.value} selected={platform.value.toLowerCase() === selectedPlatform.toLowerCase()}>{platform.label}</option>
 					{/each}
 				</select>
 			</label>
@@ -250,7 +275,10 @@
 			<a href={resolve("/uploads")}
 				>{translate("nav.uploads", "Uploads")}</a
 			>
-			<button type="button" onclick={() => void logout()}>
+			{#if isAdmin}
+				<a href={resolve("/users")}>{translate("nav.users", "Users")}</a>
+			{/if}
+			<button type="button" onclick={() => void logout()} title={translate("common.actions.logoutHint", "Sign out on every device")}>
 				{translate("common.actions.logout", "Log out")}
 			</button>
 		{:else}
@@ -263,6 +291,16 @@
 				<span>{routeLabel}</span>
 			</a>
 		{/if}
+		<a
+			class="app-shell__profile"
+			class:current={isActive("/profile")}
+			href={resolve("/profile")}
+			aria-label={translate("nav.profile", "Profile and settings")}
+			title={translate("nav.profile", "Profile and settings")}
+			aria-current={isActive("/profile") ? "page" : undefined}
+		>
+			<img src="/components/btns/user.png" alt="" aria-hidden="true" />
+		</a>
 	</nav>
 
 	<main class="app-shell__content" id="app-shell-content" tabindex="-1">

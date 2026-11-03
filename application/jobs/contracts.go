@@ -12,7 +12,8 @@ type Enqueuer interface {
 
 type Queue interface {
 	Enqueuer
-	Claim(context.Context, time.Time, time.Duration) (*jobsdomain.Job, error)
+	// Claim leases the oldest available job whose kind matches filter, or returns nil if none.
+	Claim(ctx context.Context, now time.Time, claimTimeout time.Duration, filter jobsdomain.KindFilter) (*jobsdomain.Job, error)
 	Complete(context.Context, string) error
 	Reschedule(context.Context, string, uint8, time.Time) error
 	DeadLetter(context.Context, jobsdomain.Job, uint8, string) error
@@ -22,4 +23,9 @@ type Queue interface {
 
 type Identifier interface {
 	Identify(context.Context, string, string) error
+}
+
+// UploadScraper fetches metadata for the ROM an upload created.
+type UploadScraper interface {
+	ScrapeUpload(ctx context.Context, uploadID string) error
 }

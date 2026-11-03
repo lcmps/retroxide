@@ -3,9 +3,14 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"strconv"
 	"strings"
+
+	"github.com/lcmps/retroxide/application/settings"
+	"github.com/lcmps/retroxide/domain/appearance"
+	romdomain "github.com/lcmps/retroxide/domain/rom"
 )
 
 type Lookup func(key string) (string, bool)
@@ -31,8 +36,12 @@ type Config struct {
 	CORSAllowedOrigins      []string
 	TrustedProxies          []string
 	WorkerCount             int
-	AdminEmail              string
-	AdminPassword           string
+	// ScrapeWorkerCount workers fetch metadata for new ROMs, separately from WorkerCount.
+	ScrapeWorkerCount int
+	// UIFont is the interface font: pixel, ubuntu, or system.
+	UIFont        string
+	AdminEmail    string
+	AdminPassword string
 }
 
 func Load(lookup Lookup) (Config, error) {
@@ -48,12 +57,9 @@ func Load(lookup Lookup) (Config, error) {
 	if dbDriver != "sqlite" && dbDriver != "mysql" {
 		return Config{}, invalid("RETROXIDE_DB_DRIVER", "expected sqlite or mysql")
 	}
-	maxUploadBytes, err := unsigned(lookup, "RETROXIDE_MAX_UPLOAD_BYTES", 64*1024*1024, 63)
+	maxUploadBytes, err := maxUploadSize(lookup)
 	if err != nil {
 		return Config{}, err
-	}
-	if maxUploadBytes == 0 {
-		return Config{}, invalid("RETROXIDE_MAX_UPLOAD_BYTES", "must be greater than zero")
 	}
 	accessExpiry, err := unsigned(lookup, "RETROXIDE_JWT_ACCESS_EXPIRY_SECS", 3600, 64)
 	if err != nil {
@@ -76,6 +82,17 @@ func Load(lookup Lookup) (Config, error) {
 	if workerCount < 1 || workerCount > 64 {
 		return Config{}, invalid("RETROXIDE_WORKER_COUNT", "must be between 1 and 64")
 	}
+	uiFont := strings.ToLower(strings.TrimSpace(get(lookup, settings.UIFontKey, settings.UIFontPixel)))
+	if !appearance.IsFont(uiFont) {
+		return Config{}, invalid(settings.UIFontKey, "expected pixel, ubuntu, or system")
+	}
+	scrapeWorkerCount, err := unsigned(lookup, "RETROXIDE_SCRAPE_WORKER_COUNT", 2, 8)
+	if err != nil {
+		return Config{}, err
+	}
+	if scrapeWorkerCount < 1 || scrapeWorkerCount > 64 {
+		return Config{}, invalid("RETROXIDE_SCRAPE_WORKER_COUNT", "must be between 1 and 64")
+	}
 	secret, ok := lookup("RETROXIDE_JWT_SECRET")
 	if !ok || secret == "" {
 		return Config{}, fmt.Errorf("%w: RETROXIDE_JWT_SECRET is not set", ErrSetupRequired)
@@ -90,7 +107,7 @@ func Load(lookup Lookup) (Config, error) {
 	if len(mimeTypes) == 0 {
 		return Config{}, invalid("RETROXIDE_ALLOWED_UPLOAD_MIME_TYPES", "must contain at least one MIME type")
 	}
-	extensions := parseList(get(lookup, "RETROXIDE_ALLOWED_UPLOAD_EXTENSIONS", "rom,bin,nes,sfc,smc,gba,gb,gbc,n64,z64,v64,iso,cue,chd"), true)
+	extensions := parseList(get(lookup, "RETROXIDE_ALLOWED_UPLOAD_EXTENSIONS", defaultUploadExtensions()), true)
 	if len(extensions) == 0 {
 		return Config{}, invalid("RETROXIDE_ALLOWED_UPLOAD_EXTENSIONS", "must contain at least one extension")
 	}
@@ -115,10 +132,11 @@ func Load(lookup Lookup) (Config, error) {
 		SQLitePath:     get(lookup, "RETROXIDE_SQLITE_PATH", "./retroxide.sqlite3"),
 		MySQLURL:       get(lookup, "RETROXIDE_MYSQL_URL", "mysql://root:root@127.0.0.1:3306/retroxide"),
 		StorageRoot:    get(lookup, "RETROXIDE_STORAGE_ROOT", "./storage"),
-		MaxUploadBytes: int64(maxUploadBytes), AllowedUploadMIMETypes: mimeTypes,
+		MaxUploadBytes: maxUploadBytes, AllowedUploadMIMETypes: mimeTypes,
 		AllowedUploadExtensions: extensions, JWTSecret: secret,
 		JWTAccessExpirySecs: accessExpiry, JWTRefreshExpirySecs: refreshExpiry,
 		CORSAllowedOrigins: origins, TrustedProxies: trustedProxies, WorkerCount: int(workerCount),
+		ScrapeWorkerCount: int(scrapeWorkerCount), UIFont: uiFont,
 		AdminEmail: adminEmail, AdminPassword: adminPassword,
 	}, nil
 }
@@ -179,4 +197,68 @@ func validProxyAddress(value string) bool {
 
 func invalid(key, message string) error {
 	return fmt.Errorf("%s is invalid: %s", key, message)
+}
+
+// defaultUploadExtensions allows generic ROM containers plus every extension that identifies a
+// known platform.
+func defaultUploadExtensions() string {
+	return strings.Join(append([]string{"rom", "bin"}, romdomain.PlatformExtensions()...), ",")
+}
+
+const (
+	// MaxUploadSizeKey sets the largest accepted upload in megabytes, e.g. "1024MB" (1 MB is
+	// 1024 × 1024 bytes). A bare number means megabytes; a "GB" suffix is accepted too.
+	MaxUploadSizeKey = "RETROXIDE_MAX_UPLOAD_SIZE"
+	// legacyMaxUploadBytesKey is the former byte-count setting, honoured only when
+	// MaxUploadSizeKey is unset so existing configurations keep working.
+	legacyMaxUploadBytesKey = "RETROXIDE_MAX_UPLOAD_BYTES"
+	defaultMaxUploadMB      = 64
+	bytesPerMB              = 1 << 20
+)
+
+func maxUploadSize(lookup Lookup) (int64, error) {
+	if raw, ok := lookup(MaxUploadSizeKey); ok {
+		size, err := ParseMegabytes(raw)
+		if err != nil {
+			return 0, invalid(MaxUploadSizeKey, err.Error())
+		}
+		return size, nil
+	}
+	if _, ok := lookup(legacyMaxUploadBytesKey); ok {
+		size, err := unsigned(lookup, legacyMaxUploadBytesKey, 0, 63)
+		if err != nil {
+			return 0, err
+		}
+		if size == 0 {
+			return 0, invalid(legacyMaxUploadBytesKey, "must be greater than zero")
+		}
+		return int64(size), nil
+	}
+	return defaultMaxUploadMB * bytesPerMB, nil
+}
+
+// ParseMegabytes reads a size such as "1024MB", "1024", or "4GB" and returns it in bytes.
+func ParseMegabytes(raw string) (int64, error) {
+	value := strings.ToUpper(strings.TrimSpace(raw))
+	multiplier := int64(bytesPerMB)
+	switch {
+	case strings.HasSuffix(value, "GB"):
+		value, multiplier = strings.TrimSuffix(value, "GB"), 1<<30
+	case strings.HasSuffix(value, "MB"):
+		value = strings.TrimSuffix(value, "MB")
+	}
+	amount, err := strconv.ParseUint(strings.TrimSpace(value), 10, 63)
+	if err != nil || amount == 0 {
+		return 0, fmt.Errorf("has invalid value %q: expected a positive size in megabytes, such as 1024MB", raw)
+	}
+	if amount > uint64(math.MaxInt64/multiplier) {
+		return 0, fmt.Errorf("has invalid value %q: size is too large", raw)
+	}
+	return int64(amount) * multiplier, nil
+}
+
+// FormatMegabytes renders a byte count the way RETROXIDE_MAX_UPLOAD_SIZE is written, rounding
+// up to whole megabytes.
+func FormatMegabytes(bytes int64) string {
+	return strconv.FormatInt((bytes+bytesPerMB-1)/bytesPerMB, 10) + "MB"
 }

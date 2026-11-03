@@ -10,4 +10,6 @@ func registerRoutes(api *gin.RouterGroup, dependencies Dependencies, options Opt
 	registerROMRoutes(api, dependencies.ROMs, dependencies.DownloadLinks)
 	registerLibraryRoutes(api, dependencies.Libraries)
 	registerClientRoutes(api, dependencies.Clients)
+	registerAccountRoutes(api, dependencies.Profiles, dependencies.Settings, dependencies.Locales)
+	registerUserRoutes(api, dependencies.Users)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/lcmps/retroxide/application/fault"
 	"gorm.io/gorm"
@@ -57,6 +58,45 @@ ALTER TABLE rom ADD COLUMN screenshot_path TEXT;`},
 CREATE INDEX IF NOT EXISTS idx_rom_platform_key ON rom(platform_key);`},
 	{14, "index_job_queue_availability", `CREATE INDEX IF NOT EXISTS idx_job_queue_available_at ON job_queue(available_at);`},
 	{15, "index_upload_rom_id", `CREATE INDEX IF NOT EXISTS idx_upload_rom_id ON upload(rom_id);`},
+	{16, "add_user_locale", `ALTER TABLE user ADD COLUMN locale TEXT;`},
+	{17, "add_user_font", `ALTER TABLE user ADD COLUMN font TEXT;`},
+	// 18: composite indexes matching the listing queries (filter, then ID order), indexes for the
+	// blob reference checks on delete, no more redundant indexes, and a trigram full-text index
+	// for title/platform search. rom_search_key gives each ROM a stable integer FTS rowid: an
+	// explicit INTEGER PRIMARY KEY survives VACUUM, unlike the implicit rowid of rom.
+	{18, "optimize_rom_indexes_and_search", `DROP INDEX IF EXISTS idx_rom_uploader_id;
+DROP INDEX IF EXISTS idx_rom_platform_key;
+DROP INDEX IF EXISTS idx_rom_platform;
+DROP INDEX IF EXISTS idx_user_email;
+DROP INDEX IF EXISTS idx_client_token_hash;
+DROP INDEX IF EXISTS idx_job_queue_created_at;
+DROP INDEX IF EXISTS idx_upload_status;
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_listing ON rom(uploader_id, id);
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_platform ON rom(uploader_id, platform_key, id, platform);
+CREATE INDEX IF NOT EXISTS idx_rom_platform_listing ON rom(platform_key, id, platform);
+CREATE INDEX IF NOT EXISTS idx_rom_cover_art_path ON rom(cover_art_path);
+CREATE INDEX IF NOT EXISTS idx_rom_title_screen_path ON rom(title_screen_path);
+CREATE INDEX IF NOT EXISTS idx_rom_screenshot_path ON rom(screenshot_path);
+CREATE INDEX IF NOT EXISTS idx_rom_file_storage_path ON rom_file(storage_path);
+CREATE TABLE IF NOT EXISTS rom_search_key (id INTEGER PRIMARY KEY, rom_id TEXT NOT NULL UNIQUE);
+CREATE VIRTUAL TABLE IF NOT EXISTS rom_search USING fts5(title, platform, tokenize='trigram');
+INSERT INTO rom_search_key (rom_id) SELECT id FROM rom;
+INSERT INTO rom_search (rowid, title, platform) SELECT k.id, r.title, r.platform FROM rom_search_key AS k JOIN rom AS r ON r.id = k.rom_id;
+CREATE TRIGGER IF NOT EXISTS rom_search_after_insert AFTER INSERT ON rom BEGIN
+	INSERT INTO rom_search_key (rom_id) VALUES (new.id);
+	INSERT INTO rom_search (rowid, title, platform) SELECT id, new.title, new.platform FROM rom_search_key WHERE rom_id = new.id;
+END;
+CREATE TRIGGER IF NOT EXISTS rom_search_after_update AFTER UPDATE OF title, platform ON rom BEGIN
+	DELETE FROM rom_search WHERE rowid = (SELECT id FROM rom_search_key WHERE rom_id = old.id);
+	INSERT INTO rom_search (rowid, title, platform) SELECT id, new.title, new.platform FROM rom_search_key WHERE rom_id = old.id;
+END;
+CREATE TRIGGER IF NOT EXISTS rom_search_after_delete AFTER DELETE ON rom BEGIN
+	DELETE FROM rom_search WHERE rowid = (SELECT id FROM rom_search_key WHERE rom_id = old.id);
+	DELETE FROM rom_search_key WHERE rom_id = old.id;
+END;`},
+	// 19: an optional sign-in username, unique case-insensitively (it is stored lowercase).
+	{19, "add_user_username", `ALTER TABLE user ADD COLUMN username TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_username ON user(username);`},
 }
 
 var mysqlMigrations = []migration{
@@ -105,6 +145,31 @@ ALTER TABLE rom ADD CONSTRAINT fk_rom_file FOREIGN KEY (rom_file_id) REFERENCES 
 CREATE INDEX idx_rom_platform_key ON rom(platform_key);`},
 	{14, "index_job_queue_availability", `CREATE INDEX idx_job_queue_available_at ON job_queue(available_at);`},
 	{15, "index_upload_rom_id", `CREATE INDEX idx_upload_rom_id ON upload(rom_id);`},
+	{16, "add_user_locale", `ALTER TABLE user ADD COLUMN locale VARCHAR(16) NULL;`},
+	{17, "add_user_font", `ALTER TABLE user ADD COLUMN font VARCHAR(16) NULL;`},
+	// 18: see the SQLite migration. Path columns are TEXT, so they get prefix indexes (paths are
+	// far shorter than 512 characters). Search uses a word FULLTEXT index, built without the
+	// stopword list so words such as "the" stay searchable; word tokens are far more selective
+	// than ngrams, which measured slower than a scan for typical searches.
+	{18, "optimize_rom_indexes_and_search", `DROP INDEX idx_rom_uploader_id ON rom;
+DROP INDEX idx_rom_platform_key ON rom;
+DROP INDEX idx_rom_platform ON rom;
+DROP INDEX idx_user_email ON user;
+DROP INDEX idx_client_token_hash ON client;
+DROP INDEX idx_job_queue_created_at ON job_queue;
+DROP INDEX idx_upload_status ON upload;
+CREATE INDEX idx_rom_uploader_listing ON rom(uploader_id, id);
+CREATE INDEX idx_rom_uploader_platform ON rom(uploader_id, platform_key, id, platform);
+CREATE INDEX idx_rom_platform_listing ON rom(platform_key, id, platform);
+CREATE INDEX idx_rom_cover_art_path ON rom(cover_art_path(512));
+CREATE INDEX idx_rom_title_screen_path ON rom(title_screen_path(512));
+CREATE INDEX idx_rom_screenshot_path ON rom(screenshot_path(512));
+CREATE INDEX idx_rom_file_storage_path ON rom_file(storage_path(512));
+SET SESSION innodb_ft_enable_stopword = OFF;
+CREATE FULLTEXT INDEX ft_rom_search ON rom(title, platform);
+SET SESSION innodb_ft_enable_stopword = ON;`},
+	{19, "add_user_username", `ALTER TABLE user ADD COLUMN username VARCHAR(32) NULL;
+CREATE UNIQUE INDEX idx_user_username ON user(username);`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {
@@ -159,14 +224,41 @@ func RunMigrations(ctx context.Context, db *gorm.DB) error {
 	return nil
 }
 
+// splitMigrationStatements splits a migration on semicolons, keeping each BEGIN ... END block
+// (a trigger body, whose statements end in semicolons too) inside its statement.
 func splitMigrationStatements(sql string) []string {
-	parts := strings.Split(sql, ";")
-	statements := make([]string, 0, len(parts))
-	for _, part := range parts {
-		statement := strings.TrimSpace(part)
-		if statement != "" {
-			statements = append(statements, statement)
+	var statements []string
+	var current strings.Builder
+	depth := 0
+	for _, line := range strings.SplitAfter(sql, "\n") {
+		for _, word := range strings.FieldsFunc(strings.ToUpper(line), func(r rune) bool {
+			return !unicode.IsLetter(r) && r != '_'
+		}) {
+			switch word {
+			case "BEGIN":
+				depth++
+			case "END":
+				if depth > 0 {
+					depth--
+				}
+			}
 		}
+		for {
+			index := strings.IndexByte(line, ';')
+			if index < 0 || depth > 0 {
+				current.WriteString(line)
+				break
+			}
+			current.WriteString(line[:index])
+			if statement := strings.TrimSpace(current.String()); statement != "" {
+				statements = append(statements, statement)
+			}
+			current.Reset()
+			line = line[index+1:]
+		}
+	}
+	if statement := strings.TrimSpace(current.String()); statement != "" {
+		statements = append(statements, statement)
 	}
 	return statements
 }

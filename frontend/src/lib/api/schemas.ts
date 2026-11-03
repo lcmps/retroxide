@@ -41,7 +41,8 @@ export function parseRomListResponse(value: unknown): RomListResponse {
 			throw new Error('Invalid ROM list response');
 		}
 		if (!(typeof rom.cover_art_url === 'string' || rom.cover_art_url === null || rom.cover_art_url === undefined)) throw new Error('Invalid ROM list response');
-		return { rom_id: rom.rom_id, title: rom.title, platform: rom.platform, sha256: rom.sha256, cover_art_url: rom.cover_art_url ?? null };
+		const platformName = typeof rom.platform_name === 'string' && rom.platform_name ? rom.platform_name : rom.platform;
+		return { rom_id: rom.rom_id, title: rom.title, platform: rom.platform, platform_name: platformName, sha256: rom.sha256, cover_art_url: rom.cover_art_url ?? null };
 	});
 
 	return { item, next_cursor: payload.next_cursor };

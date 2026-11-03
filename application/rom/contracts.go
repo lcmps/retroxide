@@ -21,10 +21,21 @@ type Repository interface {
 	// FindUploadedFilename returns the original filename of the upload that created the ROM,
 	// or nil when no upload is linked to it.
 	FindUploadedFilename(ctx context.Context, romID string) (*string, error)
+	// FindROMIDByUploadID returns the ROM an upload created, or nil while it has none.
+	FindROMIDByUploadID(ctx context.Context, uploadID string) (*string, error)
+	// ListPlatforms counts ROMs per platform, restricted to one uploader when uploaderID is set.
+	ListPlatforms(ctx context.Context, uploaderID *string) ([]PlatformCount, error)
 	CountROMsByROMFileID(context.Context, string) (uint64, error)
 	DeleteROM(context.Context, string) error
 	DeleteROMFile(context.Context, string) error
 	HardDeleteROM(context.Context, string, func(string) error) error
+}
+
+// PlatformCount is how many ROMs carry a platform. Platform is the stored value as first seen;
+// values differing only in case are counted together.
+type PlatformCount struct {
+	Platform string
+	Count    uint64
 }
 
 // StoredContent is an open, seekable handle on stored bytes; the caller must close it.
@@ -80,7 +91,9 @@ type ScrapeQuery struct {
 
 // ScrapeResult leaves fields empty when the source had no value; images are validated PNG, JPEG, or WebP bytes.
 type ScrapeResult struct {
-	Source      string
+	Source string
+	// Platform is the platform key the source reported (see romdomain.PlatformKeyForName).
+	Platform    string
 	Title       string
 	Region      string
 	Publisher   string
@@ -108,4 +121,8 @@ type API interface {
 	ReadCover(context.Context, identity.Requester, string) ([]byte, error)
 	Scrape(context.Context, identity.Requester, string) (ROMDetailDTO, error)
 	ReadMedia(context.Context, identity.Requester, string, string) ([]byte, error)
+	// Platforms lists the platforms of the ROMs the requester can see.
+	Platforms(context.Context, identity.Requester) ([]PlatformDTO, error)
+	// PlatformCatalog lists every known platform, for choosing one when editing a ROM.
+	PlatformCatalog() []PlatformDTO
 }

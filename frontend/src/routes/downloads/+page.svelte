@@ -100,7 +100,7 @@
 			{
 				romId: rom.rom_id,
 				title: rom.title,
-				platform: rom.platform,
+				platform: rom.platform_name,
 				status: 'ready',
 				filename: null,
 				error: null
@@ -154,6 +154,10 @@
 	});
 </script>
 
+<svelte:head>
+	<title>{t('downloads.heading', 'Downloads')} · Retroxide</title>
+</svelte:head>
+
 <section class="page-shell stack" aria-labelledby="downloads-title">
 	<h1 id="downloads-title">{t('downloads.heading', 'Downloads')}</h1>
 
@@ -166,20 +170,25 @@
 						<span>{item.platform}</span>
 					</div>
 					<div class="download-actions">
-						<IconButton type="button" icon="/components/btns/Play - 01.png" activeIcon="/components/btns/Play - 02.png" active={item.status === 'downloading'} label={t('downloads.actions.start', 'Start download')} onclick={() => void startDownload(item.romId)} disabled={item.status === 'downloading'} />
-						<IconButton type="button" icon="/components/btns/Cancel - 01.png" label={t('downloads.actions.remove', 'Remove')} onclick={() => removeQueueItem(item.romId)} />
+						<IconButton type="button" icon="/components/btns/Play - 01.png" activeIcon="/components/btns/Play - 02.png" active={item.status === 'downloading'} label={t('downloads.actions.startFor', 'Start downloading {title}', { title: item.title })} onclick={() => void startDownload(item.romId)} disabled={item.status === 'downloading'} />
+						<IconButton type="button" icon="/components/btns/Cancel - 01.png" label={t('downloads.actions.removeFor', 'Remove {title} from the queue', { title: item.title })} onclick={() => removeQueueItem(item.romId)} />
 					</div>
 				</li>
 			{/each}
 		</ul>
 	{:else if catalog.loading && catalog.items.length === 0}
-		<p class="page-state">{t('downloads.catalog.loading', 'Loading ROMs...')}</p>
+		<p class="page-state" role="status">{t('downloads.catalog.loading', 'Loading ROMs...')}</p>
 	{:else}
 		<ul class="download-list" aria-label={t('downloads.catalog.title', 'Available ROMs')}>
 			{#each catalog.items as rom (rom.rom_id)}
 				<li class="download-row">
-					<div><strong>{rom.title}</strong><span>{rom.platform}</span></div>
-					<ActionButton type="button" onclick={() => addToQueue(rom)}>{t('downloads.actions.add', 'Add to queue')}</ActionButton>
+					<div><strong>{rom.title}</strong><span>{rom.platform_name}</span></div>
+					<ActionButton
+						type="button"
+						onclick={() => addToQueue(rom)}
+						aria-label={t('downloads.actions.addFor', 'Add {title} to the download queue', { title: rom.title })}
+						title={t('downloads.actions.addFor', 'Add {title} to the download queue', { title: rom.title })}
+					>{t('downloads.actions.add', 'Add to queue')}</ActionButton>
 				</li>
 			{/each}
 		</ul>
@@ -224,7 +233,10 @@
 
 	@media (max-width: 40rem) {
 		h1 { font-size: 1rem; }
-		.download-row { align-items: flex-start; gap: 1rem; }
-		.download-row strong { font-size: 0.65rem; line-height: 1.5; }
+		.download-list { gap: 1.75rem; margin-top: 0.75rem; }
+		.download-row { flex-direction: column; align-items: center; gap: 0.75rem; min-height: 0; text-align: center; }
+		.download-row > div:first-child { justify-items: center; }
+		.download-row strong { font-size: 0.65rem; line-height: 1.5; overflow-wrap: anywhere; }
+		.page-state, .message { text-align: center; }
 	}
 </style>

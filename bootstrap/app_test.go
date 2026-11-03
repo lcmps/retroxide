@@ -56,7 +56,7 @@ func TestBuildCreatesSQLiteSchemaAndHealthRouter(t *testing.T) {
 	workerContext, cancelWorker := context.WithCancel(context.Background())
 	workerDone := make(chan error, 1)
 	go func() {
-		workerDone <- jobs.Run(workerContext, settings.WorkerCount, app.jobQueue, app.identifier, app.jobNotifier)
+		workerDone <- jobs.Run(workerContext, app.jobQueue, app.jobPools...)
 	}()
 	defer func() {
 		cancelWorker()

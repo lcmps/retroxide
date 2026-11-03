@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// identifyPool runs workers that only identify uploads.
+func identifyPool(workers int, identifier Identifier, notifier *Notifier) Pool {
+	return Pool{Name: "identify", Workers: workers, Handlers: ROMPipeline(identifier, nil, nil), Notifier: notifier}
+}
+
 type workerTestQueue struct {
 	job         *jobsdomain.Job
 	claimCount  atomic.Int32
@@ -19,7 +24,7 @@ type workerTestQueue struct {
 
 func (*workerTestQueue) Enqueue(context.Context, jobsdomain.Payload) error { return nil }
 
-func (queue *workerTestQueue) Claim(ctx context.Context, _ time.Time, _ time.Duration) (*jobsdomain.Job, error) {
+func (queue *workerTestQueue) Claim(ctx context.Context, _ time.Time, _ time.Duration, _ jobsdomain.KindFilter) (*jobsdomain.Job, error) {
 	if queue.claimCount.Add(1) == 1 {
 		return queue.job, nil
 	}
@@ -72,7 +77,7 @@ type parallelTestQueue struct {
 
 func (*parallelTestQueue) Enqueue(context.Context, jobsdomain.Payload) error { return nil }
 
-func (queue *parallelTestQueue) Claim(ctx context.Context, _ time.Time, _ time.Duration) (*jobsdomain.Job, error) {
+func (queue *parallelTestQueue) Claim(ctx context.Context, _ time.Time, _ time.Duration, _ jobsdomain.KindFilter) (*jobsdomain.Job, error) {
 	queue.mu.Lock()
 	if len(queue.jobs) > 0 {
 		job := queue.jobs[0]
@@ -123,14 +128,14 @@ func (identifier *parallelTestIdentifier) Identify(context.Context, string, stri
 func TestRunDrainsClaimedJobOnShutdown(t *testing.T) {
 	queue := &workerTestQueue{job: &jobsdomain.Job{
 		ID:      "7",
-		Payload: jobsdomain.Payload{Kind: "identify_rom", UploadID: "upl-1", ROMFileID: "rf-1"},
+		Payload: jobsdomain.Payload{Kind: jobsdomain.KindIdentifyROM, UploadID: "upl-1", ROMFileID: "rf-1"},
 	}}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, 1, queue, workerTestIdentifier{started: started, release: release}, nil)
+		done <- Run(ctx, queue, identifyPool(1, workerTestIdentifier{started: started, release: release}, nil))
 	}()
 
 	select {
@@ -159,9 +164,9 @@ func TestRunDrainsClaimedJobOnShutdown(t *testing.T) {
 
 func TestProcessJobReschedulesAfterIdentifierPanic(t *testing.T) {
 	queue := &workerTestQueue{}
-	job := jobsdomain.Job{ID: "job-1", Payload: jobsdomain.Payload{Kind: "identify_rom", UploadID: "upl-1", ROMFileID: "rf-1"}}
+	job := jobsdomain.Job{ID: "job-1", Payload: jobsdomain.Payload{Kind: jobsdomain.KindIdentifyROM, UploadID: "upl-1", ROMFileID: "rf-1"}}
 
-	processJob(context.Background(), queue, panickingIdentifier{}, job)
+	processJob(context.Background(), queue, ROMPipeline(panickingIdentifier{}, queue, nil), job)
 
 	if queue.rescheduled.Load() != 1 || queue.lastAttempt.Load() != 1 {
 		t.Fatalf("reschedules=%d attempt=%d, want one reschedule at attempt 1", queue.rescheduled.Load(), queue.lastAttempt.Load())
@@ -170,14 +175,14 @@ func TestProcessJobReschedulesAfterIdentifierPanic(t *testing.T) {
 
 func TestRunProcessesJobsConcurrentlyWithinWorkerLimit(t *testing.T) {
 	queue := &parallelTestQueue{jobs: []jobsdomain.Job{
-		{ID: "job-1", Payload: jobsdomain.Payload{Kind: "identify_rom", UploadID: "upl-1", ROMFileID: "rf-1"}},
-		{ID: "job-2", Payload: jobsdomain.Payload{Kind: "identify_rom", UploadID: "upl-2", ROMFileID: "rf-2"}},
+		{ID: "job-1", Payload: jobsdomain.Payload{Kind: jobsdomain.KindIdentifyROM, UploadID: "upl-1", ROMFileID: "rf-1"}},
+		{ID: "job-2", Payload: jobsdomain.Payload{Kind: jobsdomain.KindIdentifyROM, UploadID: "upl-2", ROMFileID: "rf-2"}},
 	}}
 	identifier := &parallelTestIdentifier{started: make(chan struct{}, 2), release: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, 2, queue, identifier, nil)
+		done <- Run(ctx, queue, identifyPool(2, identifier, nil))
 	}()
 	for range 2 {
 		select {
@@ -221,7 +226,7 @@ func (queue *wakeTestQueue) Enqueue(_ context.Context, payload jobsdomain.Payloa
 	return nil
 }
 
-func (queue *wakeTestQueue) Claim(context.Context, time.Time, time.Duration) (*jobsdomain.Job, error) {
+func (queue *wakeTestQueue) Claim(context.Context, time.Time, time.Duration, jobsdomain.KindFilter) (*jobsdomain.Job, error) {
 	queue.claims.Add(1)
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
@@ -247,7 +252,7 @@ func TestRunWakesIdleWorkerOnEnqueueAndBacksOffWhileIdle(t *testing.T) {
 	identifier := recordingIdentifier{identified: make(chan string, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = Run(ctx, 1, queue, identifier, notifier) }()
+	go func() { _ = Run(ctx, queue, identifyPool(1, identifier, notifier)) }()
 
 	// Idle waits grow 200ms, 400ms, 800ms...: after 700ms the worker is mid-way through an 800ms
 	// wait, having claimed only a few times rather than every 200ms forever.
@@ -256,7 +261,7 @@ func TestRunWakesIdleWorkerOnEnqueueAndBacksOffWhileIdle(t *testing.T) {
 		t.Fatalf("idle worker claimed %d times in 700ms, want backoff", claims)
 	}
 	enqueuedAt := time.Now()
-	if err := queue.Enqueue(ctx, jobsdomain.Payload{Kind: "identify_rom", UploadID: "upl-1", ROMFileID: "rf-1"}); err != nil {
+	if err := queue.Enqueue(ctx, jobsdomain.Payload{Kind: jobsdomain.KindIdentifyROM, UploadID: "upl-1", ROMFileID: "rf-1"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -286,5 +291,113 @@ func TestNotifierCoalescesAndToleratesNil(t *testing.T) {
 	case <-notifier.wake():
 		t.Fatal("coalesced notifications delivered twice")
 	default:
+	}
+}
+
+type recordingEnqueuer struct{ payloads []jobsdomain.Payload }
+
+func (enqueuer *recordingEnqueuer) Enqueue(_ context.Context, payload jobsdomain.Payload) error {
+	enqueuer.payloads = append(enqueuer.payloads, payload)
+	return nil
+}
+
+type recordingScraper struct{ uploads []string }
+
+func (scraper *recordingScraper) ScrapeUpload(_ context.Context, uploadID string) error {
+	scraper.uploads = append(scraper.uploads, uploadID)
+	return nil
+}
+
+func TestROMPipelineQueuesAScrapeOnceIdentified(t *testing.T) {
+	enqueuer, scraper := &recordingEnqueuer{}, &recordingScraper{}
+	handlers := ROMPipeline(recordingIdentifier{identified: make(chan string, 1)}, enqueuer, scraper)
+	ctx := context.Background()
+
+	identify := jobsdomain.Payload{Kind: jobsdomain.KindIdentifyROM, UploadID: "upl-1", ROMFileID: "rf-1"}
+	if err := handlers[jobsdomain.KindIdentifyROM].Handle(ctx, identify); err != nil {
+		t.Fatal(err)
+	}
+	want := jobsdomain.Payload{Kind: jobsdomain.KindScrapeROM, UploadID: "upl-1", ROMFileID: "rf-1"}
+	if len(enqueuer.payloads) != 1 || enqueuer.payloads[0] != want {
+		t.Fatalf("enqueued %+v, want %+v", enqueuer.payloads, want)
+	}
+	if err := handlers[jobsdomain.KindScrapeROM].Handle(ctx, want); err != nil || len(scraper.uploads) != 1 || scraper.uploads[0] != "upl-1" {
+		t.Fatalf("scrape handler err=%v scraped=%v", err, scraper.uploads)
+	}
+	if handlers[jobsdomain.KindScrapeROM].RetryBase <= handlers[jobsdomain.KindIdentifyROM].RetryBase {
+		t.Fatal("scrape retries should back off longer than identification retries")
+	}
+
+	identifyOnly := ROMPipeline(recordingIdentifier{identified: make(chan string, 1)}, enqueuer, nil)
+	if _, ok := identifyOnly[jobsdomain.KindScrapeROM]; ok {
+		t.Fatal("no scrape handler expected without a scraper")
+	}
+}
+
+// filterRecordingQueue records the kind filter each claim used.
+type filterRecordingQueue struct {
+	workerTestQueue
+	mu      sync.Mutex
+	filters []jobsdomain.KindFilter
+}
+
+func (queue *filterRecordingQueue) Claim(ctx context.Context, _ time.Time, _ time.Duration, filter jobsdomain.KindFilter) (*jobsdomain.Job, error) {
+	queue.mu.Lock()
+	queue.filters = append(queue.filters, filter)
+	queue.mu.Unlock()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestRunClaimsWithEachPoolsKindFilter(t *testing.T) {
+	queue := &filterRecordingQueue{}
+	scrapes := jobsdomain.KindFilter{Kinds: []string{jobsdomain.KindScrapeROM}}
+	others := jobsdomain.KindFilter{Kinds: scrapes.Kinds, Exclude: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, queue, Pool{Name: "identify", Workers: 1, Kinds: others}, Pool{Name: "scrape", Workers: 1, Kinds: scrapes})
+	}()
+	deadline := time.After(time.Second)
+	for {
+		queue.mu.Lock()
+		claims := len(queue.filters)
+		queue.mu.Unlock()
+		if claims == 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatalf("saw %d claims, want one per pool", claims)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	excluded, included := 0, 0
+	for _, filter := range queue.filters {
+		if len(filter.Kinds) != 1 || filter.Kinds[0] != jobsdomain.KindScrapeROM {
+			t.Fatalf("unexpected filter %+v", filter)
+		}
+		if filter.Exclude {
+			excluded++
+		} else {
+			included++
+		}
+	}
+	if excluded != 1 || included != 1 {
+		t.Fatalf("filters = %+v, want one excluding and one selecting scrapes", queue.filters)
+	}
+}
+
+func TestRunRejectsInvalidPools(t *testing.T) {
+	if err := Run(context.Background(), &workerTestQueue{}); err == nil {
+		t.Fatal("Run() without pools succeeded")
+	}
+	if err := Run(context.Background(), &workerTestQueue{}, Pool{Workers: 0}); err == nil {
+		t.Fatal("Run() with an empty pool succeeded")
 	}
 }

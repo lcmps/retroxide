@@ -9,6 +9,7 @@ import (
 
 type UserRepository interface {
 	FindByEmail(context.Context, string) (*authdomain.User, error)
+	FindByUsername(context.Context, string) (*authdomain.User, error)
 	FindByID(context.Context, string) (*authdomain.User, error)
 	SaveUser(context.Context, authdomain.User) error
 	// IncrementTokenVersion invalidates every token issued to the user so far.

@@ -121,6 +121,8 @@ var publicRoutes = map[string]map[string]struct{}{
 		"/health": {}, "/api/openapi.json": {}, setupPath: {},
 		// Authorized by the signed token in the query string instead of a bearer token.
 		downloadLinkPath: {},
+		// Presentation settings the sign-in page needs.
+		appearancePath: {},
 	},
 	http.MethodPost: {
 		"/api/v1/session": {}, "/api/v1/session/refresh": {},

@@ -33,7 +33,7 @@ func TestNewApplicationAssemblesDependencies(t *testing.T) {
 	if !reflect.DeepEqual(app.Config, settings) || app.Logger != logger {
 		t.Fatal("configuration or configured logger was not retained")
 	}
-	if app.Database == nil || app.Router == nil || app.JobQueue == nil || app.Identifier == nil {
+	if app.Database == nil || app.Router == nil || app.JobQueue == nil || app.Identifier == nil || len(app.JobPools) != 2 {
 		t.Fatal("application dependencies are incomplete")
 	}
 	response := httptest.NewRecorder()

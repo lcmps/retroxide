@@ -17,6 +17,7 @@ import (
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
+	romdomain "github.com/lcmps/retroxide/domain/rom"
 )
 
 const (
@@ -48,15 +49,46 @@ type libretroSystem struct {
 	thumbnails string
 }
 
-var libretroSystems = map[string]libretroSystem{
-	"nes":  {database: "no-intro/Nintendo - Nintendo Entertainment System", thumbnails: "Nintendo_-_Nintendo_Entertainment_System"},
-	"snes": {database: "no-intro/Nintendo - Super Nintendo Entertainment System", thumbnails: "Nintendo_-_Super_Nintendo_Entertainment_System"},
-	"gba":  {database: "no-intro/Nintendo - Game Boy Advance", thumbnails: "Nintendo_-_Game_Boy_Advance"},
-	"gb":   {database: "no-intro/Nintendo - Game Boy", thumbnails: "Nintendo_-_Game_Boy"},
-	"gbc":  {database: "no-intro/Nintendo - Game Boy Color", thumbnails: "Nintendo_-_Game_Boy_Color"},
-	"n64":  {database: "no-intro/Nintendo - Nintendo 64", thumbnails: "Nintendo_-_Nintendo_64"},
-	"psx":  {database: "redump/Sony - PlayStation", thumbnails: "Sony_-_PlayStation"},
-}
+// libretroSystems maps platform keys to libretro's database and thumbnail repository names.
+var libretroSystems = func() map[string]libretroSystem {
+	databases := map[string]string{
+		"nes":      "no-intro/Nintendo - Nintendo Entertainment System",
+		"fds":      "no-intro/Nintendo - Family Computer Disk System",
+		"snes":     "no-intro/Nintendo - Super Nintendo Entertainment System",
+		"gb":       "no-intro/Nintendo - Game Boy",
+		"gbc":      "no-intro/Nintendo - Game Boy Color",
+		"gba":      "no-intro/Nintendo - Game Boy Advance",
+		"n64":      "no-intro/Nintendo - Nintendo 64",
+		"nds":      "no-intro/Nintendo - Nintendo DS",
+		"vb":       "no-intro/Nintendo - Virtual Boy",
+		"pokemini": "no-intro/Nintendo - Pokemon Mini",
+		"sg1000":   "no-intro/Sega - SG-1000",
+		"sms":      "no-intro/Sega - Master System - Mark III",
+		"gg":       "no-intro/Sega - Game Gear",
+		"genesis":  "no-intro/Sega - Mega Drive - Genesis",
+		"32x":      "no-intro/Sega - 32X",
+		"psx":      "redump/Sony - PlayStation",
+		"pce":      "no-intro/NEC - PC Engine - TurboGrafx 16",
+		"ngp":      "no-intro/SNK - Neo Geo Pocket",
+		"ngpc":     "no-intro/SNK - Neo Geo Pocket Color",
+		"ws":       "no-intro/Bandai - WonderSwan",
+		"wsc":      "no-intro/Bandai - WonderSwan Color",
+		"a2600":    "no-intro/Atari - 2600",
+		"a7800":    "no-intro/Atari - 7800",
+		"lynx":     "no-intro/Atari - Lynx",
+		"jaguar":   "no-intro/Atari - Jaguar",
+		"coleco":   "no-intro/Coleco - ColecoVision",
+		"vectrex":  "no-intro/GCE - Vectrex",
+		"intv":     "no-intro/Mattel - Intellivision",
+	}
+	systems := make(map[string]libretroSystem, len(databases))
+	for key, database := range databases {
+		// Thumbnail repositories use the database's system name with spaces as underscores.
+		name := database[strings.IndexByte(database, '/')+1:]
+		systems[key] = libretroSystem{database: database, thumbnails: strings.ReplaceAll(name, " ", "_")}
+	}
+	return systems
+}()
 
 var (
 	hasheousImageID  = regexp.MustCompile(`^[A-Fa-f0-9]{16,128}$`)
@@ -108,6 +140,9 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 		if match.Signature != nil && match.Signature.Game != nil {
 			result.ReleaseYear = match.Signature.Game.Year
 		}
+		if match.Platform != nil {
+			result.Platform = romdomain.PlatformKeyForName(match.Platform.Name)
+		}
 		if imageID := match.attribute("Logo"); hasheousImageID.MatchString(imageID) {
 			if image, err := client.fetchImage(ctx, client.endpoints.Hasheous+"/api/v1/images/"+imageID); err == nil {
 				result.Cover = image
@@ -117,7 +152,12 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 		}
 	}
 
-	if system, ok := libretroSystems[query.Platform]; ok {
+	// A hash match names the actual system, which beats a platform guessed from the extension.
+	platform := query.Platform
+	if result.Platform != "" {
+		platform = result.Platform
+	}
+	if system, ok := libretroSystems[platform]; ok {
 		entry, err := client.lookupLibretro(ctx, system, query)
 		if err != nil {
 			upstreamErrors = append(upstreamErrors, err)
@@ -159,7 +199,10 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 }
 
 type hasheousMatch struct {
-	Name      string `json:"name"`
+	Name     string `json:"name"`
+	Platform *struct {
+		Name string `json:"name"`
+	} `json:"platform"`
 	Publisher *struct {
 		Name string `json:"name"`
 	} `json:"publisher"`

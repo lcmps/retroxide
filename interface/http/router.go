@@ -13,7 +13,9 @@ import (
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/libraries"
 	"github.com/lcmps/retroxide/application/rom"
+	"github.com/lcmps/retroxide/application/settings"
 	"github.com/lcmps/retroxide/application/uploads"
+	"github.com/lcmps/retroxide/application/users"
 	"github.com/lcmps/retroxide/domain/identity"
 )
 
@@ -36,6 +38,9 @@ type Dependencies struct {
 	Libraries     libraries.API
 	Sessions      auth.SessionAPI
 	Clients       auth.ClientAPI
+	Profiles      auth.ProfileAPI
+	Settings      settings.API
+	Users         users.API
 	Authenticator Authenticator
 	DownloadLinks DownloadLinks
 	Locales       map[string][]byte

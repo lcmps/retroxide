@@ -34,6 +34,9 @@ func registerROMRoutes(api *gin.RouterGroup, roms rom.API, links DownloadLinks) 
 	handler := romHandler{roms: roms, links: links}
 	api.GET(strings.TrimPrefix(downloadLinkPath, api.BasePath()), requireService(roms != nil && links != nil), handler.downloadWithLink)
 
+	api.GET("/platforms", requireService(roms != nil), handler.platforms)
+	api.GET("/platforms/catalog", requireService(roms != nil), handler.platformCatalog)
+
 	group := api.Group("/rom", requireService(roms != nil))
 	group.GET("", handler.list)
 	group.GET("/:rom_id", handler.get)
@@ -80,6 +83,17 @@ func (handler romHandler) list(c *gin.Context) {
 	}
 	page, err := handler.roms.List(c.Request.Context(), requesterFromContext(c), request)
 	respondJSON(c, http.StatusOK, page, err)
+}
+
+// platforms lists the platforms present in the requester's library, for the platform filter.
+func (handler romHandler) platforms(c *gin.Context) {
+	platforms, err := handler.roms.Platforms(c.Request.Context(), requesterFromContext(c))
+	respondJSON(c, http.StatusOK, gin.H{"item": platforms}, err)
+}
+
+// platformCatalog lists every known platform, for the platform choice when editing a ROM.
+func (handler romHandler) platformCatalog(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"item": handler.roms.PlatformCatalog()})
 }
 
 func (handler romHandler) get(c *gin.Context) {

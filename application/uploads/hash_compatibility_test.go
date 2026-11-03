@@ -49,7 +49,7 @@ func TestUploadServiceDuplicateHashCompatibility(t *testing.T) {
 			if !fault.IsCode(err, test.code) {
 				t.Fatalf("Create() error = %v, want %s", err, test.code)
 			}
-			if storage.writes != 0 || storage.pending() != 0 || len(queue.payloads) != 0 {
+			if storage.writes != 0 || storage.pending() != 0 || queue.notified != 0 {
 				t.Fatal("existing content must not be written or enqueued again")
 			}
 		})

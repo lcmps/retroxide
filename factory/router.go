@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lcmps/retroxide/application/fault"
+	appsettings "github.com/lcmps/retroxide/application/settings"
 	"github.com/lcmps/retroxide/infrastructure/auth"
 	"github.com/lcmps/retroxide/infrastructure/config"
 	httpadapter "github.com/lcmps/retroxide/interface/http"
@@ -28,6 +29,9 @@ func NewRouter(settings config.Config, services *Services, logger *slog.Logger) 
 		Libraries:     services.Libraries,
 		Sessions:      services.Sessions,
 		Clients:       services.Clients,
+		Profiles:      services.Sessions,
+		Users:         services.Users,
+		Settings:      appsettings.NewService(config.NewSettingsStore(config.FilePath(config.ProcessLookup), config.ProcessLookup, settings)),
 		Authenticator: services.Authenticator,
 		DownloadLinks: auth.NewDownloadLinkSigner(settings.JWTSecret, downloadLinkLifetime),
 		Locales:       locales,

@@ -30,6 +30,15 @@ func (repository authTestUserRepository) FindByEmail(_ context.Context, email st
 	return &user, nil
 }
 
+func (repository authTestUserRepository) FindByUsername(_ context.Context, username string) (*authdomain.User, error) {
+	for _, user := range repository.usersByID {
+		if user.Username != nil && *user.Username == username {
+			return &user, nil
+		}
+	}
+	return nil, nil
+}
+
 func (repository authTestUserRepository) FindByID(_ context.Context, userID string) (*authdomain.User, error) {
 	user, ok := repository.usersByID[userID]
 	if !ok {
@@ -396,3 +405,46 @@ func TestClientServiceListsOnlyForAdminWithoutTokenSecrets(t *testing.T) {
 }
 
 func authStringPointer(value string) *string { return &value }
+
+func TestSessionServiceLoginAcceptsEmailOrUsername(t *testing.T) {
+	username := "player1"
+	user := authdomain.User{ID: "usr-1", Email: "player@example.com", Username: &username, PasswordHash: "hashed:secret-pass", Role: identity.RoleUser}
+	users := authTestUserRepository{
+		usersByEmail: map[string]authdomain.User{user.Email: user},
+		usersByID:    map[string]authdomain.User{user.ID: user},
+	}
+	service := NewSessionService(users, &authTestHasher{}, &authTestTokenService{}, &authTestRefreshRepository{records: map[string]authdomain.RefreshToken{}})
+	for name, request := range map[string]LoginRequest{
+		"username":           {Login: "player1", Password: "secret-pass"},
+		"username, any case": {Login: " Player1 ", Password: "secret-pass"},
+		"email":              {Login: "player@example.com", Password: "secret-pass"},
+		"legacy email field": {Email: "player@example.com", Password: "secret-pass"},
+	} {
+		if _, err := service.Login(context.Background(), request); err != nil {
+			t.Errorf("%s: Login() = %v", name, err)
+		}
+	}
+	for name, request := range map[string]LoginRequest{
+		"wrong password": {Login: "player1", Password: "nope"},
+		"unknown user":   {Login: "nobody", Password: "secret-pass"},
+	} {
+		if _, err := service.Login(context.Background(), request); !fault.IsCode(err, fault.CodeUnauthorized) {
+			t.Errorf("%s: Login() = %v, want unauthorized", name, err)
+		}
+	}
+}
+
+func TestValidateUsername(t *testing.T) {
+	for _, valid := range []string{"abc", "player.one", "a_b-c", "x9", "1up"} {
+		if len(valid) >= MinUsernameLength {
+			if err := ValidateUsername(valid); err != nil {
+				t.Errorf("ValidateUsername(%q) = %v", valid, err)
+			}
+		}
+	}
+	for _, invalid := range []string{"ab", "-lead", "has space", "me@home", "UPPER", strings.Repeat("a", MaxUsernameLength+1)} {
+		if err := ValidateUsername(invalid); err == nil {
+			t.Errorf("ValidateUsername(%q) succeeded", invalid)
+		}
+	}
+}
