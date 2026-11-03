@@ -64,3 +64,39 @@ func sequentialSum(content []byte) (romdomain.ROMHash, error) {
 	_, _ = digest.Write(content)
 	return digest.Sum()
 }
+
+func TestResumedDigestMatchesOneUninterruptedPass(t *testing.T) {
+	content := make([]byte, 3*blockSize+777)
+	for index := range content {
+		content[index] = byte(index * 13)
+	}
+	want, _ := sequentialSum(content)
+	service := New()
+	digest, err := service.ResumeDigest(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Save after each uneven part, then continue in a fresh digest, as across requests.
+	for offset, part := 0, 0; offset < len(content); part++ {
+		end := min(offset+(part%3+1)*400_000+17, len(content))
+		if _, err := digest.Write(content[offset:end]); err != nil {
+			t.Fatal(err)
+		}
+		offset = end
+		state, err := digest.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if digest, err = service.ResumeDigest(state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := digest.Sum(); err != nil || got != want {
+		t.Fatalf("resumed digest = %+v, %v; want %+v", got, err, want)
+	}
+	for _, state := range [][]byte{{9}, {digestStateVersion, 200}, append([]byte{digestStateVersion}, make([]byte, 3)...)} {
+		if _, err := service.ResumeDigest(state); err == nil {
+			t.Errorf("ResumeDigest(%v) accepted corrupt progress", state)
+		}
+	}
+}

@@ -10,7 +10,12 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// HardDeleteROM deletes a ROM and everything recorded for it, then calls deletePath for each
+// stored file nothing references any more. Files are removed only after the deletion commits:
+// a failed commit then leaves every record with its file, never a record whose file is gone. A
+// file deletePath fails to remove is left for the storage sweep, and does not fail the deletion.
 func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID string, deletePath func(string) error) error {
+	var orphanPaths []string
 	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rom ROMModel
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", romID).Take(&rom).Error; err != nil {
@@ -61,7 +66,7 @@ func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID strin
 			}
 		}
 		paths := []string{}
-		for _, path := range []*string{rom.CoverArtPath, rom.TitleScreenPath, rom.ScreenshotPath} {
+		for _, path := range []*string{rom.CoverArtPath, rom.CoverThumbPath, rom.TitleScreenPath, rom.ScreenshotPath} {
 			if path != nil && *path != "" {
 				paths = append(paths, *path)
 			}
@@ -70,14 +75,13 @@ func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID strin
 			paths = append(paths, file.StoragePath)
 		}
 		seen := make(map[string]bool)
-		var orphanPaths []string
 		for _, path := range paths {
 			if path == "" || seen[path] {
 				continue
 			}
 			seen[path] = true
 			var references int64
-			if err := tx.Model(&ROMModel{}).Where("cover_art_path = ? OR title_screen_path = ? OR screenshot_path = ?", path, path, path).Count(&references).Error; err != nil {
+			if err := tx.Model(&ROMModel{}).Where("cover_art_path = ? OR cover_thumb_path = ? OR title_screen_path = ? OR screenshot_path = ?", path, path, path, path).Count(&references).Error; err != nil {
 				return err
 			}
 			if references != 0 {
@@ -90,11 +94,6 @@ func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID strin
 				orphanPaths = append(orphanPaths, path)
 			}
 		}
-		for _, path := range orphanPaths {
-			if err := deletePath(path); err != nil {
-				return err
-			}
-		}
 		return nil
 	})
 	if err != nil {
@@ -103,6 +102,16 @@ func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID strin
 			return err
 		}
 		return databaseError("hard deleting ROM", err)
+	}
+	// An upload of the same content may have stored and recorded the file again since.
+	referenced, err := repositories.ReferencedStoragePaths(context.WithoutCancel(ctx), orphanPaths)
+	if err != nil {
+		return nil // the deletion stands; the storage sweep reclaims what is left
+	}
+	for _, path := range orphanPaths {
+		if !referenced[path] {
+			_ = deletePath(path)
+		}
 	}
 	return nil
 }

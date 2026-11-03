@@ -91,6 +91,9 @@ describe('authenticated API requests', () => {
 		await fetchRomCover('rom-1', '/api/v1/rom/rom-1/cover?v=0123456789abcdef');
 
 		expect(fetchMock).toHaveBeenCalledWith('/api/v1/rom/rom-1/cover?v=0123456789abcdef', expect.anything());
+
+		await fetchRomCover('rom-1', '/api/v1/rom/rom-1/cover/thumb?v=fedcba9876543210', true);
+		expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/rom/rom-1/cover/thumb?v=fedcba9876543210', expect.anything());
 	});
 
 	it('revokes the server session and always clears local credentials', async () => {

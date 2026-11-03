@@ -75,7 +75,7 @@ type testStorage struct {
 	deleteCtxErr error
 }
 
-func (storage *testStorage) Stage(_ context.Context, content io.Reader) (StagedContent, error) {
+func (storage *testStorage) Stage(_ context.Context, content io.Reader, _ int64) (StagedContent, error) {
 	data, err := io.ReadAll(content)
 	if err != nil {
 		return nil, err
@@ -324,4 +324,45 @@ func TestUploadServiceCleanupSurvivesRequestCancellation(t *testing.T) {
 
 func uploadStringPointer(value string) *string {
 	return &value
+}
+
+// roomyStorage is storage that reports how much content fits.
+type roomyStorage struct {
+	testStorage
+	room int64
+}
+
+func (storage *roomyStorage) HasRoomFor(size int64) bool { return size <= storage.room }
+
+func TestUploadServiceRefusesUploadsThatDoNotFitBeforeWritingThem(t *testing.T) {
+	storage := &roomyStorage{room: 100}
+	service := NewUploadService(&testROMRepository{}, &testUploadRepository{}, storage, romhash.New(), &testQueue{}, &testAudit{}, UploadPolicy{
+		MaxUploadBytes:    1 << 30,
+		AllowedMIMETypes:  []string{"application/octet-stream"},
+		AllowedExtensions: []string{"sfc"},
+	})
+	requester := identity.Requester{UserID: "user-1", Role: identity.RoleUser}
+	upload := func(expected int64) error {
+		_, err := service.Create(context.Background(), requester, UploadInput{
+			Filename: "game.sfc", Content: bytes.NewReader([]byte("abc")), ExpectedSize: expected,
+		})
+		return err
+	}
+	if err := upload(1 << 20); !fault.IsCode(err, fault.CodeInsufficientStorage) {
+		t.Fatalf("upload larger than free space: %v, want insufficient storage", err)
+	}
+	if storage.staged != 0 {
+		t.Fatal("content was staged although it could not fit")
+	}
+	// Fitting uploads, and uploads of unknown size, go ahead.
+	for _, expected := range []int64{50, 0} {
+		if err := upload(expected); err != nil && !fault.IsCode(err, fault.CodeROMAlreadyExists) {
+			t.Fatalf("upload of %d bytes: %v", expected, err)
+		}
+	}
+	// An announced size beyond the upload limit is left to the limit, reported as too large.
+	service.policy.MaxUploadBytes = 10
+	if err := upload(1 << 30); fault.IsCode(err, fault.CodeInsufficientStorage) {
+		t.Fatalf("over-limit upload reported as a full disk")
+	}
 }

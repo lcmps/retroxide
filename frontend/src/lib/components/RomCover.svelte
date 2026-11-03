@@ -11,9 +11,11 @@
 		romId: string;
 		/** The summary's cover_art_url; nothing is fetched when it is absent. */
 		coverArtUrl?: string | null;
+		/** The summary's cover_thumb_url; when present the small copy is shown instead. */
+		coverThumbUrl?: string | null;
 	};
 
-	let { romId, coverArtUrl }: Props = $props();
+	let { romId, coverArtUrl, coverThumbUrl }: Props = $props();
 
 	let container = $state<HTMLElement>();
 	let src = $state<string>();
@@ -24,7 +26,8 @@
 		if (!container || !coverArtUrl) {
 			return;
 		}
-		const url = coverArtUrl;
+		const thumbnail = Boolean(coverThumbUrl);
+		const url = coverThumbUrl || coverArtUrl;
 		let cancelled = false;
 		let objectUrl: string | undefined;
 
@@ -34,7 +37,7 @@
 					return;
 				}
 				observer.disconnect();
-				void limitCoverRequests(async () => (cancelled ? null : fetchRomCover(romId, url)))
+				void limitCoverRequests(async () => (cancelled ? null : fetchRomCover(romId, url, thumbnail)))
 					.then((blob) => {
 						if (blob && !cancelled) {
 							objectUrl = URL.createObjectURL(blob);

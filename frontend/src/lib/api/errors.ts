@@ -30,6 +30,10 @@ const ERROR_TRANSLATIONS: Record<string, { key: string; fallback: string }> = {
 		key: 'uploads.errors.tooLarge',
 		fallback: 'Upload exceeds the maximum allowed size.'
 	},
+	insufficient_storage: {
+		key: 'uploads.errors.diskFull',
+		fallback: 'The server does not have enough free disk space for this ROM.'
+	},
 	upload_type_not_allowed: {
 		key: 'uploads.errors.unsupportedType',
 		fallback: 'This file type is not allowed for uploads.'

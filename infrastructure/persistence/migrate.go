@@ -109,6 +109,14 @@ CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_title ON rom(uploader_id, title
 CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_release ON rom(uploader_id, release_year COLLATE NOCASE, id);
 CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_publisher ON rom(uploader_id, publisher COLLATE NOCASE, id);
 CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_genre ON rom(uploader_id, genre COLLATE NOCASE, id);`},
+	// 21: a small copy of the cover for library grids, indexed like the other image paths so
+	// deleting a ROM can check whether another still references it.
+	{21, "add_rom_cover_thumbnail", `ALTER TABLE rom ADD COLUMN cover_thumb_path TEXT;
+CREATE INDEX IF NOT EXISTS idx_rom_cover_thumb_path ON rom(cover_thumb_path);`},
+	// 22: uploads sent in parts, which resume after a dropped connection. updated_at is in Unix
+	// seconds and indexed, so idle sessions are found without reading the table.
+	{22, "add_upload_sessions", `CREATE TABLE IF NOT EXISTS upload_session (id TEXT PRIMARY KEY, uploader_id TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT, size INTEGER NOT NULL, received INTEGER NOT NULL, hash_state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_upload_session_updated_at ON upload_session(updated_at);`},
 }
 
 var mysqlMigrations = []migration{
@@ -192,6 +200,10 @@ CREATE INDEX idx_rom_uploader_sort_title ON rom(uploader_id, title, id);
 CREATE INDEX idx_rom_uploader_sort_release ON rom(uploader_id, release_year, id);
 CREATE INDEX idx_rom_uploader_sort_publisher ON rom(uploader_id, publisher, id);
 CREATE INDEX idx_rom_uploader_sort_genre ON rom(uploader_id, genre, id);`},
+	{21, "add_rom_cover_thumbnail", `ALTER TABLE rom ADD COLUMN cover_thumb_path TEXT NULL;
+CREATE INDEX idx_rom_cover_thumb_path ON rom(cover_thumb_path(512));`},
+	{22, "add_upload_sessions", `CREATE TABLE IF NOT EXISTS upload_session (id VARCHAR(64) PRIMARY KEY, uploader_id VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, mime_type VARCHAR(255) NULL, size BIGINT UNSIGNED NOT NULL, received BIGINT UNSIGNED NOT NULL, hash_state BLOB NOT NULL, updated_at BIGINT NOT NULL);
+CREATE INDEX idx_upload_session_updated_at ON upload_session(updated_at);`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {

@@ -19,6 +19,7 @@ const (
 	CodeUnsupportedMediaType Code = "unsupported_media_type"
 	CodeUpstreamUnavailable  Code = "upstream_unavailable"
 	CodeRateLimited          Code = "rate_limited"
+	CodeInsufficientStorage  Code = "insufficient_storage"
 	CodeInternal             Code = "internal_error"
 )
 
@@ -67,6 +68,11 @@ func Internal(cause error) *Error {
 
 func UpstreamUnavailable(message string, cause error) *Error {
 	return &Error{Code: CodeUpstreamUnavailable, Message: message, Cause: cause}
+}
+
+// InsufficientStorage reports that the server's disk cannot hold the content.
+func InsufficientStorage() *Error {
+	return &Error{Code: CodeInsufficientStorage, Message: "the server does not have enough free disk space"}
 }
 
 func RateLimited() *Error {

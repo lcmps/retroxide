@@ -4,7 +4,10 @@ import (
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	stdhash "hash"
 	"hash/crc32"
@@ -92,8 +95,8 @@ func (digest *parallelDigest) dispatch() {
 	}
 }
 
-// Sum hashes any remaining content and returns the bundle; the digest is unusable afterwards.
-func (digest *parallelDigest) Sum() (romdomain.ROMHash, error) {
+// wait hashes any content still buffered and waits until every hash has consumed it.
+func (digest *parallelDigest) wait() {
 	if len(digest.current) > 0 {
 		digest.dispatch()
 	}
@@ -102,6 +105,52 @@ func (digest *parallelDigest) Sum() (romdomain.ROMHash, error) {
 			<-done
 		}
 	}
+}
+
+// digestStateVersion prefixes saved progress, so a format change is detected, not misread.
+const digestStateVersion = 1
+
+// MarshalBinary saves the progress of all four hashes; the digest stays usable.
+func (digest *parallelDigest) MarshalBinary() ([]byte, error) {
+	digest.wait()
+	state := []byte{digestStateVersion}
+	for _, hash := range digest.hashes {
+		saved, err := hash.(encoding.BinaryMarshaler).MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("saving hash progress: %w", err)
+		}
+		state = binary.AppendUvarint(state, uint64(len(saved)))
+		state = append(state, saved...)
+	}
+	return state, nil
+}
+
+// restoreParallelDigest continues a digest from MarshalBinary's output.
+func restoreParallelDigest(state []byte) (*parallelDigest, error) {
+	digest := newParallelDigest()
+	if len(state) == 0 || state[0] != digestStateVersion {
+		return nil, errors.New("hash progress has an unknown format")
+	}
+	rest := state[1:]
+	for _, hash := range digest.hashes {
+		length, read := binary.Uvarint(rest)
+		if read <= 0 || uint64(len(rest)-read) < length {
+			return nil, errors.New("hash progress is truncated")
+		}
+		if err := hash.(encoding.BinaryUnmarshaler).UnmarshalBinary(rest[read : read+int(length)]); err != nil {
+			return nil, fmt.Errorf("restoring hash progress: %w", err)
+		}
+		rest = rest[read+int(length):]
+	}
+	if len(rest) != 0 {
+		return nil, errors.New("hash progress has trailing data")
+	}
+	return digest, nil
+}
+
+// Sum hashes any remaining content and returns the bundle; the digest is unusable afterwards.
+func (digest *parallelDigest) Sum() (romdomain.ROMHash, error) {
+	digest.wait()
 	return romdomain.NewROMHash(
 		hex.EncodeToString(digest.hashes[0].Sum(nil)),
 		hex.EncodeToString(digest.hashes[1].Sum(nil)),

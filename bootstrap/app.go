@@ -28,6 +28,8 @@ type App struct {
 	logger   *slog.Logger
 	jobQueue jobs.Queue
 	jobPools []jobs.Pool
+	// maintenance runs periodic chores beside the workers; it may be nil.
+	maintenance func(context.Context)
 }
 
 func Build(ctx context.Context, settings config.Config, logger *slog.Logger) (*App, error) {
@@ -41,7 +43,7 @@ func Build(ctx context.Context, settings config.Config, logger *slog.Logger) (*A
 func newApp(application *factory.Application) *App {
 	return &App{
 		config: application.Config, database: application.Database, router: application.Router, logger: application.Logger,
-		jobQueue: application.JobQueue, jobPools: application.JobPools,
+		jobQueue: application.JobQueue, jobPools: application.JobPools, maintenance: application.Maintenance,
 	}
 }
 
@@ -90,6 +92,13 @@ func (app *App) supervise(ctx context.Context, server *http.Server, serverResult
 	go func() {
 		workerResult <- jobs.Run(workerContext, app.jobQueue, app.jobPools...)
 	}()
+	maintenanceDone := make(chan struct{})
+	go func() {
+		defer close(maintenanceDone)
+		if app.maintenance != nil {
+			app.maintenance(workerContext)
+		}
+	}()
 
 	var runErr error
 	workerFinished := false
@@ -114,6 +123,7 @@ func (app *App) supervise(ctx context.Context, server *http.Server, serverResult
 		}
 	}
 	cancelWorker()
+	<-maintenanceDone // it uses the database, which Close shuts
 	if !workerFinished {
 		if workerErr := <-workerResult; workerErr != nil && !errors.Is(workerErr, context.Canceled) {
 			runErr = errors.Join(runErr, workerErr)

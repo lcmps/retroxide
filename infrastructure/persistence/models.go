@@ -11,6 +11,19 @@ type UploadModel struct {
 
 func (UploadModel) TableName() string { return "upload" }
 
+type UploadSessionModel struct {
+	ID         string  `gorm:"column:id;primaryKey;size:64"`
+	UploaderID string  `gorm:"column:uploader_id;not null;size:64"`
+	Filename   string  `gorm:"column:filename;not null;size:255"`
+	MIMEType   *string `gorm:"column:mime_type;size:255"`
+	Size       int64   `gorm:"column:size;not null"`
+	Received   int64   `gorm:"column:received;not null"`
+	HashState  []byte  `gorm:"column:hash_state;not null"`
+	UpdatedAt  int64   `gorm:"column:updated_at;not null;autoUpdateTime:false"`
+}
+
+func (UploadSessionModel) TableName() string { return "upload_session" }
+
 type ROMFileModel struct {
 	ID          string `gorm:"column:id;primaryKey;size:67"`
 	SHA256      string `gorm:"column:sha256;not null;uniqueIndex;size:64"`
@@ -34,6 +47,7 @@ type ROMModel struct {
 	IdentifiedBy    string  `gorm:"column:identified_by;not null;size:128"`
 	Confidence      uint8   `gorm:"column:confidence;not null"`
 	CoverArtPath    *string `gorm:"column:cover_art_path;type:text"`
+	CoverThumbPath  *string `gorm:"column:cover_thumb_path;type:text"`
 	Publisher       *string `gorm:"column:publisher;size:255"`
 	ReleaseYear     *string `gorm:"column:release_year;size:16"`
 	Genre           *string `gorm:"column:genre;size:64"`

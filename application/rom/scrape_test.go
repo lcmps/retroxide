@@ -2,6 +2,7 @@ package rom
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -71,9 +72,13 @@ func TestScrapeFillsFilenameInferredROM(t *testing.T) {
 	if saved.IdentifiedBy != "hasheous" || saved.Confidence != scrapedConfidence {
 		t.Fatalf("identity source = %q/%d", saved.IdentifiedBy, saved.Confidence)
 	}
-	screenshot, err := service.ReadMedia(context.Background(), owner, "rom-1", MediaScreenshot)
-	if err != nil || string(screenshot) != string(pngBytes) {
-		t.Fatalf("ReadMedia() = %q, %v", screenshot, err)
+	image, err := service.OpenMedia(context.Background(), owner, "rom-1", MediaScreenshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	screenshot, _ := io.ReadAll(image)
+	if string(screenshot) != string(pngBytes) || image.Version == "" {
+		t.Fatalf("OpenMedia() = %q, version %q", screenshot, image.Version)
 	}
 }
 
@@ -232,5 +237,78 @@ func TestPlatformsListsVisiblePlatformsByNameWithUnknownLast(t *testing.T) {
 	admin, err := service.Platforms(context.Background(), identity.Requester{UserID: "admin", Role: identity.RoleAdmin})
 	if err != nil || len(admin) != 4 {
 		t.Fatalf("admin Platforms() = %+v, %v; want all 4 platforms", admin, err)
+	}
+}
+
+// fakeThumbnailer returns a fixed thumbnail, or err.
+type fakeThumbnailer struct {
+	calls int
+	err   error
+}
+
+func (thumbnailer *fakeThumbnailer) Thumbnail([]byte) ([]byte, error) {
+	thumbnailer.calls++
+	if thumbnailer.err != nil {
+		return nil, thumbnailer.err
+	}
+	return []byte("\xff\xd8\xffthumbnail"), nil
+}
+
+func TestScrapeStoresACoverThumbnail(t *testing.T) {
+	repository, storage := scrapeFixture(t, romdomain.ROMIdentity{Title: "x", Platform: "snes", IdentifiedBy: romdomain.IdentifiedByFilename})
+	thumbnailer := &fakeThumbnailer{}
+	service := NewService(repository, storage, romTestAudit{}, &fakeScraper{result: &ScrapeResult{Source: "hasheous", Title: "X", Cover: pngBytes}}).WithThumbnails(thumbnailer)
+	if _, err := service.Scrape(context.Background(), owner, "rom-1"); err != nil {
+		t.Fatal(err)
+	}
+	saved := repository.roms["rom-1"].Identity
+	if saved.CoverThumbPath == nil || *saved.CoverThumbPath == *saved.CoverArtPath {
+		t.Fatalf("thumbnail path = %v, want its own copy", saved.CoverThumbPath)
+	}
+	image, err := service.OpenCoverThumbnail(context.Background(), owner, "rom-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _ := io.ReadAll(image)
+	if string(content) != "\xff\xd8\xffthumbnail" || thumbnailer.calls != 1 {
+		t.Fatalf("thumbnail = %q after %d scalings", content, thumbnailer.calls)
+	}
+	summary := Summarize(romdomain.ROMWithFile{ROM: repository.roms["rom-1"]})
+	if summary.CoverThumbURL == nil || !strings.HasPrefix(*summary.CoverThumbURL, "/api/v1/rom/rom-1/cover/thumb?v=") {
+		t.Fatalf("cover_thumb_url = %v", summary.CoverThumbURL)
+	}
+}
+
+func TestCoverThumbnailsAreMadeOnFirstRequestForOlderCovers(t *testing.T) {
+	cover := "/storage/old-cover"
+	repository, storage := scrapeFixture(t, romdomain.ROMIdentity{Title: "x", Platform: "snes", CoverArtPath: &cover})
+	storage.files[cover] = pngBytes
+	thumbnailer := &fakeThumbnailer{}
+	service := NewService(repository, storage, romTestAudit{}, nil).WithThumbnails(thumbnailer)
+	for range 2 {
+		if _, err := service.OpenCoverThumbnail(context.Background(), owner, "rom-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if thumbnailer.calls != 1 || repository.roms["rom-1"].Identity.CoverThumbPath == nil {
+		t.Fatalf("scaled %d times, thumbnail %v; want one recorded scaling", thumbnailer.calls, repository.roms["rom-1"].Identity.CoverThumbPath)
+	}
+
+	// A cover that is already small, or cannot be decoded, is its own thumbnail.
+	repository, storage = scrapeFixture(t, romdomain.ROMIdentity{Title: "x", Platform: "snes", CoverArtPath: &cover})
+	storage.files[cover] = pngBytes
+	service = NewService(repository, storage, romTestAudit{}, nil).WithThumbnails(&fakeThumbnailer{err: ErrThumbnailNotSmaller})
+	if _, err := service.OpenCoverThumbnail(context.Background(), owner, "rom-1"); err != nil {
+		t.Fatal(err)
+	}
+	if path := repository.roms["rom-1"].Identity.CoverThumbPath; path == nil || *path != cover {
+		t.Fatalf("thumbnail path = %v, want the cover itself", path)
+	}
+
+	// Without a cover there is no thumbnail.
+	repository, storage = scrapeFixture(t, romdomain.ROMIdentity{Title: "x", Platform: "snes"})
+	service = NewService(repository, storage, romTestAudit{}, nil).WithThumbnails(thumbnailer)
+	if _, err := service.OpenCoverThumbnail(context.Background(), owner, "rom-1"); !fault.IsCode(err, fault.CodeNotFound) {
+		t.Fatalf("thumbnail without cover = %v, want not found", err)
 	}
 }

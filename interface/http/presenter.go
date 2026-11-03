@@ -68,6 +68,8 @@ func httpStatusForError(code fault.Code) int {
 		return http.StatusBadGateway
 	case fault.CodeRateLimited:
 		return http.StatusTooManyRequests
+	case fault.CodeInsufficientStorage:
+		return http.StatusInsufficientStorage
 	default:
 		return http.StatusInternalServerError
 	}

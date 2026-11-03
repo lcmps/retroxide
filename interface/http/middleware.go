@@ -91,7 +91,7 @@ func setCORSHeaders(c *gin.Context, origin string, allowAny bool) {
 		c.Header("Vary", "Origin")
 	}
 	c.Header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-	c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+	c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Upload-Offset")
 	c.Header("Access-Control-Expose-Headers", "Accept-Ranges, Content-Disposition, Content-Range, ETag, Last-Modified, X-Request-ID")
 }
 

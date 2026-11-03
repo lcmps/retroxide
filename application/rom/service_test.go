@@ -64,6 +64,15 @@ func (*romTestRepository) ListROMsWithFiles(context.Context, int, ROMFilter) ([]
 	return nil, nil
 }
 
+func (repository *romTestRepository) SetCoverThumbnail(_ context.Context, romID, coverPath, thumbnailPath string) error {
+	rom, ok := repository.roms[romID]
+	if ok && rom.Identity.CoverArtPath != nil && *rom.Identity.CoverArtPath == coverPath {
+		rom.Identity.CoverThumbPath = &thumbnailPath
+		repository.roms[romID] = rom
+	}
+	return nil
+}
+
 func (repository *romTestRepository) FindROMByID(_ context.Context, romID string) (*romdomain.ROM, error) {
 	rom, ok := repository.roms[romID]
 	if !ok {

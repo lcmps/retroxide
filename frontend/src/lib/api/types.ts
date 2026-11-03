@@ -15,6 +15,8 @@ export type RomSummary = {
   platform_name: string;
   sha256: string;
   cover_art_url?: string | null;
+  /** A small copy of the cover, for grids of many ROMs. */
+  cover_thumb_url?: string | null;
 };
 
 export type RomListResponse = {

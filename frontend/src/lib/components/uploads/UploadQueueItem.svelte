@@ -18,6 +18,9 @@
 		<p class="muted">{t('uploads.queue.waiting', 'Waiting to upload...')}</p>
 	{:else if item.phase === 'uploading'}
 		<UploadProgress percent={item.progress} />
+		{#if item.reconnecting}
+			<p class="muted" role="status">{t('uploads.queue.reconnecting', 'Connection lost. Retrying where the upload stopped...')}</p>
+		{/if}
 	{:else if item.phase === 'rejected'}
 		<p class="message message--error" role="alert">
 			{getErrorMessage(item.error, 'common.errors.upload', 'Failed to upload ROM', t)}

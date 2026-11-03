@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/sha1"
@@ -8,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/lcmps/retroxide/application/rom"
+	"slices"
 	"strings"
 	"testing"
 
@@ -818,5 +820,55 @@ func TestRepositoriesSortedListingsWalkTheSortIndexes(t *testing.T) {
 		if !strings.Contains(plan, test.index) || strings.Contains(plan, "TEMP B-TREE") {
 			t.Errorf("%s: plan %q should use %s with no sort step", test.name, plan, test.index)
 		}
+	}
+}
+
+func TestRepositoriesTrackUploadSessions(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	exerciseUploadSessions(t, ctx, repositories, "ups_sqlite")
+}
+
+// exerciseUploadSessions checks upload sessions on any dialect; IDs start with prefix.
+func exerciseUploadSessions(t *testing.T, ctx context.Context, repositories *Repositories, prefix string) {
+	t.Helper()
+	mime := "application/octet-stream"
+	session := uploadsdomain.Session{
+		ID: prefix + "_1", UploaderID: "player", Filename: "game.sfc", MIMEType: &mime,
+		Size: 5 << 30, HashState: []byte{1, 2, 3}, UpdatedAt: time.Now().Add(-48 * time.Hour),
+	}
+	if err := repositories.SaveUploadSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repositories.DeleteUploadSession(ctx, session.ID) })
+	found, err := repositories.FindUploadSession(ctx, session.ID)
+	if err != nil || found == nil || found.Size != 5<<30 || *found.MIMEType != mime || !bytes.Equal(found.HashState, []byte{1, 2, 3}) {
+		t.Fatalf("FindUploadSession() = %+v, %v", found, err)
+	}
+	idle, err := repositories.ListIdleUploadSessions(ctx, time.Now().Add(-24*time.Hour))
+	if err != nil || !slices.Contains(idle, session.ID) {
+		t.Fatalf("idle sessions = %v, %v; want %s", idle, err, session.ID)
+	}
+
+	advanced := *found
+	advanced.Received, advanced.HashState, advanced.UpdatedAt = 4<<30, []byte{4, 5}, time.Now()
+	if ok, err := repositories.AdvanceUploadSession(ctx, advanced, 0); err != nil || !ok {
+		t.Fatalf("advance = %v, %v", ok, err)
+	}
+	// A second request for the same part finds the session already moved on.
+	if ok, err := repositories.AdvanceUploadSession(ctx, advanced, 0); err != nil || ok {
+		t.Fatalf("stale advance = %v, %v; want refused", ok, err)
+	}
+	found, _ = repositories.FindUploadSession(ctx, session.ID)
+	if found.Received != 4<<30 || !bytes.Equal(found.HashState, []byte{4, 5}) {
+		t.Fatalf("advanced session = %+v", found)
+	}
+	if idle, _ := repositories.ListIdleUploadSessions(ctx, time.Now().Add(-24*time.Hour)); slices.Contains(idle, session.ID) {
+		t.Fatal("an advanced session is still listed as idle")
+	}
+	if err := repositories.DeleteUploadSession(ctx, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := repositories.FindUploadSession(ctx, session.ID); err != nil || found != nil {
+		t.Fatalf("deleted session = %+v, %v", found, err)
 	}
 }

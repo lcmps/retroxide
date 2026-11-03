@@ -52,6 +52,12 @@ func (writer *gzipResponseWriter) Write(data []byte) (int, error) {
 	return writer.gzip.Write(data)
 }
 
+// Unwrap exposes the writer underneath, for writers that send files directly; they do so only
+// for responses this middleware leaves uncompressed.
+func (writer *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
+}
+
 func (writer *gzipResponseWriter) WriteString(data string) (int, error) {
 	return writer.Write([]byte(data))
 }

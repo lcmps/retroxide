@@ -78,12 +78,13 @@ func (service *ListROMService) List(ctx context.Context, requester identity.Requ
 // Summarize maps a ROM and its content hash to the summary shape used in listings.
 func Summarize(row romdomain.ROMWithFile) ROMSummaryDTO {
 	return ROMSummaryDTO{
-		ROMID:        row.ROM.ID,
-		Title:        row.ROM.Identity.Title,
-		Platform:     row.ROM.Identity.Platform,
-		PlatformName: romdomain.PlatformName(row.ROM.Identity.Platform),
-		SHA256:       row.SHA256,
-		CoverArtURL:  imageURL(row.ROM.ID, "cover", row.ROM.Identity.CoverArtPath),
+		ROMID:         row.ROM.ID,
+		Title:         row.ROM.Identity.Title,
+		Platform:      row.ROM.Identity.Platform,
+		PlatformName:  romdomain.PlatformName(row.ROM.Identity.Platform),
+		SHA256:        row.SHA256,
+		CoverArtURL:   imageURL(row.ROM.ID, "cover", row.ROM.Identity.CoverArtPath),
+		CoverThumbURL: coverThumbURL(row.ROM),
 	}
 }
 

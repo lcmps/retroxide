@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"github.com/lcmps/retroxide/infrastructure/imaging"
 	"log/slog"
 	"net/http"
 	"time"
@@ -47,8 +48,8 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 				AllowedMIMETypes:  settings.AllowedUploadMIMETypes,
 				AllowedExtensions: settings.AllowedUploadExtensions,
 			},
-		),
-		ROMs:          rom.NewService(repositories, storage, audit, NewScraper()),
+		).WithSessions(repositories, storage, hashadapter.New()),
+		ROMs:          rom.NewService(repositories, storage, audit, NewScraper()).WithThumbnails(imaging.NewThumbnailer()),
 		Libraries:     libraries.NewService(repositories, repositories),
 		Sessions:      sessions,
 		Users:         users.NewService(repositories, hasher, sessions),
