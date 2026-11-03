@@ -4,7 +4,9 @@ import { isTerminalUploadState, UploadTracker, type FetchUploadStatus, type Uplo
 
 export type SendUpload = (
 	file: File,
-	onProgress: (loadedBytes: number, totalBytes: number) => void
+	onProgress: (loadedBytes: number, totalBytes: number) => void,
+	/** Reports whether the transfer is waiting to retry after a dropped connection. */
+	onReconnecting?: (reconnecting: boolean) => void
 ) => Promise<UploadAcceptedResponse>;
 
 /** queued → uploading → accepted (processing is then tracked) or rejected (the transfer failed). */
@@ -23,6 +25,8 @@ export class UploadItem {
 	phase = $state<UploadPhase>('queued');
 	/** Transfer progress as a percentage from 0 to 100. */
 	progress = $state(0);
+	/** Whether the transfer lost its connection and is waiting to retry. */
+	reconnecting = $state(false);
 	/** Why the transfer was rejected; translated by the view. */
 	error = $state.raw<unknown>(null);
 	readonly tracker: UploadTracker;
@@ -98,9 +102,16 @@ export class UploadQueue {
 		}
 		item.phase = 'uploading';
 		try {
-			const accepted = await this.#send(item.file, (loaded, total) => {
-				item.progress = total > 0 ? Math.round((loaded / total) * 100) : 0;
-			});
+			const accepted = await this.#send(
+				item.file,
+				(loaded, total) => {
+					item.progress = total > 0 ? Math.round((loaded / total) * 100) : 0;
+				},
+				(reconnecting) => {
+					item.reconnecting = reconnecting;
+				}
+			);
+			item.reconnecting = false;
 			item.progress = 100;
 			item.phase = 'accepted';
 			if (!this.#stopped) {

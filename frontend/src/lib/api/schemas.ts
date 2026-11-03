@@ -40,9 +40,10 @@ export function parseRomListResponse(value: unknown): RomListResponse {
 		if (!rom || typeof rom.rom_id !== 'string' || typeof rom.title !== 'string' || typeof rom.platform !== 'string' || typeof rom.sha256 !== 'string') {
 			throw new Error('Invalid ROM list response');
 		}
-		if (!(typeof rom.cover_art_url === 'string' || rom.cover_art_url === null || rom.cover_art_url === undefined)) throw new Error('Invalid ROM list response');
+		const optionalUrl = (value: unknown) => typeof value === 'string' || value === null || value === undefined;
+		if (!optionalUrl(rom.cover_art_url) || !optionalUrl(rom.cover_thumb_url)) throw new Error('Invalid ROM list response');
 		const platformName = typeof rom.platform_name === 'string' && rom.platform_name ? rom.platform_name : rom.platform;
-		return { rom_id: rom.rom_id, title: rom.title, platform: rom.platform, platform_name: platformName, sha256: rom.sha256, cover_art_url: rom.cover_art_url ?? null };
+		return { rom_id: rom.rom_id, title: rom.title, platform: rom.platform, platform_name: platformName, sha256: rom.sha256, cover_art_url: (rom.cover_art_url as string | null | undefined) ?? null, cover_thumb_url: (rom.cover_thumb_url as string | null | undefined) ?? null };
 	});
 
 	return { item, next_cursor: payload.next_cursor };

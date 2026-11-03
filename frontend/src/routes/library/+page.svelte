@@ -94,7 +94,7 @@
 			{#each pager.items as rom (rom.rom_id)}
 				<li>
 					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={rom.title}>
-						<div class="rom-cover" aria-hidden="true"><RomCover romId={rom.rom_id} coverArtUrl={rom.cover_art_url} /></div>
+						<div class="rom-cover" aria-hidden="true"><RomCover romId={rom.rom_id} coverArtUrl={rom.cover_art_url} coverThumbUrl={rom.cover_thumb_url} /></div>
 						<Tooltip.Root>
 							<Tooltip.Trigger>
 								{#snippet child({ props })}
