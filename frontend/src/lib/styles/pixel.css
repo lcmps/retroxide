@@ -260,16 +260,7 @@ input::placeholder {
 	border-radius: 0;
 }
 
-.app-shell__back {
-	gap: 0.75rem;
-}
 
-.app-shell__back img {
-	width: 2.25rem;
-	height: 2.25rem;
-	object-fit: contain;
-	image-rendering: pixelated;
-}
 
 /* The profile button: the pixel-art user icon, always the rightmost header item. */
 .app-shell__nav .app-shell__profile {
@@ -301,9 +292,13 @@ input::placeholder {
 	color: var(--pixel-focus);
 }
 
+/* The current section is underlined as well as brighter, so it does not rely on colour alone. */
 .app-shell__nav a.current,
 .app-shell__nav button.current {
 	color: var(--pixel-focus);
+	text-decoration: underline;
+	text-decoration-thickness: 2px;
+	text-underline-offset: 0.35em;
 }
 
 .app-shell__content {
@@ -345,7 +340,9 @@ input::placeholder {
 	border: 0;
 }
 
-@media (max-width: 800px) {
+/* Below this width the controls and every link no longer fit on one row with the pixel font
+   (the widest), so the links move to their own row under the header. */
+@media (max-width: 1120px) {
 	.app-shell {
 		padding-inline: 0.75rem;
 	}
@@ -422,14 +419,7 @@ input::placeholder {
 		letter-spacing: 0.05em;
 	}
 
-	.app-shell__back {
-		gap: 0.5rem;
-	}
 
-	.app-shell__back img {
-		width: 1.5rem;
-		height: 1.5rem;
-	}
 
 	.app-shell__content > .page-shell h1 {
 		margin-inline: auto;
@@ -491,14 +481,7 @@ input::placeholder {
 		letter-spacing: 0.05em;
 	}
 
-	.app-shell__back {
-		gap: 0.5rem;
-	}
 
-	.app-shell__back img {
-		width: 1.4rem;
-		height: 1.4rem;
-	}
 
 	.app-shell__content {
 		grid-column: 1 / -1;
@@ -507,6 +490,20 @@ input::placeholder {
 
 	.app-shell__content > .page-shell h1 {
 		font-size: 1rem;
+	}
+}
+
+/* Narrow landscape screens cannot fit the controls and every link on one row: the links wrap
+   onto their own row below the controls. */
+@media (orientation: landscape) and (max-height: 500px) and (max-width: 780px) {
+	.app-shell {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.app-shell__nav {
+		flex-wrap: wrap;
+		justify-content: center;
+		margin-top: 0.6rem;
 	}
 }
 

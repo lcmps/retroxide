@@ -27,7 +27,8 @@ function fakeServer(size: number) {
 			const done = received === size;
 			return { session_id: sessionId, size, received, max_chunk_size: 64 * MiB, upload: done ? { upload_id: 'upl_1', status: 'processing' as const } : undefined };
 		}),
-		uploadWhole: vi.fn(async () => ({ upload_id: 'upl_small', status: 'processing' as const }))
+		uploadWhole: vi.fn(async () => ({ upload_id: 'upl_small', status: 'processing' as const })),
+		checkDuplicate: vi.fn(async () => {})
 	};
 	return {
 		api,
@@ -47,7 +48,9 @@ function memoryStorage(initial: Record<string, string> = {}) {
 	};
 }
 
-const instant = { sleep: async () => {}, waitUntilOnline: async () => {} };
+// Hashing never finishes unless a test says so, so other tests see no duplicate checks.
+const never = () => new Promise<string>(() => {});
+const instant = { sleep: async () => {}, waitUntilOnline: async () => {}, hash: never };
 
 describe('resumable uploads', () => {
 	it('sends small files in one request', async () => {
@@ -111,5 +114,57 @@ describe('resumable uploads', () => {
 		for (let attempt = 0; attempt < 30; attempt++) server.failNext(new ApiClientError({ message: 'offline' }));
 		const file = new File([new Uint8Array(size)], 'big.iso');
 		await expect(uploadResumable(file, server.api, { onProgress: () => {} }, { ...instant, storage: memoryStorage() })).rejects.toThrow('offline');
+	});
+});
+
+describe('duplicate checks while uploading', () => {
+	it('stops uploading a ROM the library already has once the file is hashed', async () => {
+		const size = RESUMABLE_FROM_BYTES + 8 * MiB;
+		const server = fakeServer(size);
+		let finishHash: (digest: string) => void = () => {};
+		const hashed = new Promise<string>((resolve) => (finishHash = resolve));
+		server.api.checkDuplicate = vi.fn(async () => {
+			throw new ApiClientError({ message: 'exists', code: 'rom_already_exists', status: 409 });
+		});
+		const sendPart = server.api.sendPart;
+		server.api.sendPart = vi.fn(async (...args: Parameters<typeof sendPart>) => {
+			const result = await sendPart(...args);
+			finishHash('a'.repeat(64)); // hashing finishes during the first part
+			return result;
+		});
+		const storage = memoryStorage();
+		const file = new File([new Uint8Array(size)], 'known.iso');
+		await expect(uploadResumable(file, server.api, { onProgress: () => {} }, { ...instant, storage, hash: () => hashed })).rejects.toMatchObject({
+			code: 'rom_already_exists'
+		});
+		expect(server.api.checkDuplicate).toHaveBeenCalledWith('ups_1', 'a'.repeat(64));
+		expect(server.parts).toEqual([0]); // one part of three
+		expect(storage.items.size).toBe(0);
+	});
+
+	it('uploads new ROMs in full, checks once, and stops hashing when done', async () => {
+		const size = RESUMABLE_FROM_BYTES + 8 * MiB;
+		const server = fakeServer(size);
+		let aborted = false;
+		const hash = (_file: File, signal: AbortSignal) => {
+			signal.addEventListener('abort', () => (aborted = true));
+			return Promise.resolve('b'.repeat(64));
+		};
+		const file = new File([new Uint8Array(size)], 'new.iso');
+		await uploadResumable(file, server.api, { onProgress: () => {} }, { ...instant, storage: memoryStorage(), hash });
+		expect(server.parts).toHaveLength(3);
+		expect(server.api.checkDuplicate).toHaveBeenCalledTimes(1);
+		expect(aborted).toBe(true);
+	});
+
+	it('goes on when the check itself fails', async () => {
+		const size = RESUMABLE_FROM_BYTES;
+		const server = fakeServer(size);
+		server.api.checkDuplicate = vi.fn(async () => {
+			throw new ApiClientError({ message: 'offline' });
+		});
+		const file = new File([new Uint8Array(size)], 'new.iso');
+		const accepted = await uploadResumable(file, server.api, { onProgress: () => {} }, { ...instant, storage: memoryStorage(), hash: async () => 'c'.repeat(64) });
+		expect(accepted.upload_id).toBe('upl_1');
 	});
 });
