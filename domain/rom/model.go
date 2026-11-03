@@ -50,14 +50,17 @@ const (
 )
 
 type ROMIdentity struct {
-	Title           string
-	Platform        string
-	Region          *string
-	Version         *string
-	Publisher       *string
-	ReleaseYear     *string
-	Description     *string
-	CoverArtPath    *string
+	Title        string
+	Platform     string
+	Region       *string
+	Version      *string
+	Publisher    *string
+	ReleaseYear  *string
+	Genre        *string
+	Description  *string
+	CoverArtPath *string
+	// CoverThumbPath is a small copy of the cover for library grids.
+	CoverThumbPath  *string
 	TitleScreenPath *string
 	ScreenshotPath  *string
 	IdentifiedBy    string

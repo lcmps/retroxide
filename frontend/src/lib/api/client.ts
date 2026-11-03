@@ -326,9 +326,15 @@ export async function fetchCatalog(locale: Locale): Promise<TranslationCatalog> 
 }
 
 /** Server-side ROM list filters: exact platform and case-insensitive search. */
+/** A library order: by ID (the default, when absent), or a field in either direction. */
+export type RomSortField = 'title' | 'release' | 'publisher' | 'genre';
+export type RomSortOrder = 'asc' | 'desc';
+
 export type RomListFilters = {
   platform?: string;
   q?: string;
+  sort?: RomSortField;
+  order?: RomSortOrder;
 };
 
 export function listRoms(limit = 10, cursor?: string, filters: RomListFilters = {}): Promise<RomListResponse> {
@@ -341,6 +347,10 @@ export function listRoms(limit = 10, cursor?: string, filters: RomListFilters = 
   }
   if (filters.q) {
     params.set('q', filters.q);
+  }
+  if (filters.sort) {
+    params.set('sort', filters.sort);
+    params.set('order', filters.order ?? 'asc');
   }
 
   return requestJson<unknown>(`/rom?${params.toString()}`, { withAuth: true }).then(parseRomListResponse);
@@ -478,12 +488,14 @@ export function uploadRomCover(romId: string, file: File): Promise<RomDetail> {
 }
 
 /**
- * Fetches a ROM's cover. Passing the summary's cover_art_url keeps its content version, so the
- * browser can serve repeat requests from its HTTP cache.
+ * Fetches a ROM's cover, or with thumbnail its small copy for grids. Passing the summary's
+ * cover_art_url (or cover_thumb_url) keeps its content version, so the browser can serve repeat
+ * requests from its HTTP cache.
  */
-export async function fetchRomCover(romId: string, coverArtUrl?: string | null): Promise<Blob> {
-  const version = coverArtUrl ? new URL(coverArtUrl, 'http://localhost').search : '';
-  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/cover${version}`, { withAuth: true });
+export async function fetchRomCover(romId: string, coverUrl?: string | null, thumbnail = false): Promise<Blob> {
+  const version = coverUrl ? new URL(coverUrl, 'http://localhost').search : '';
+  const resource = thumbnail ? 'cover/thumb' : 'cover';
+  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/${resource}${version}`, { withAuth: true });
   return response.blob();
 }
 
@@ -551,6 +563,89 @@ export function uploadRom(
     throw getXmlHttpRequestError(request);
   }
   return parseUploadAcceptedResponse(parseJsonText<unknown>(request.responseText, request.status));
+  })();
+}
+
+/** An upload sent in parts, which resumes after a dropped connection. */
+export type UploadSession = {
+  session_id: string;
+  size: number;
+  /** Bytes received so far: where the next part starts. */
+  received: number;
+  max_chunk_size: number;
+  /** Set once every byte has arrived and the upload was accepted. */
+  upload?: UploadAcceptedResponse;
+};
+
+export function createUploadSession(file: File): Promise<UploadSession> {
+  return requestJson<UploadSession>('/upload/session', {
+    method: 'POST',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: file.name, size: file.size, mime_type: file.type || undefined })
+  });
+}
+
+export function getUploadSession(sessionId: string): Promise<UploadSession> {
+  return requestJson<UploadSession>(`/upload/session/${encodeURIComponent(sessionId)}`, { withAuth: true });
+}
+
+/** Reports the file's SHA-256; a ROM the library already has ends the session with a 409. */
+export function checkUploadSessionDuplicate(sessionId: string, sha256: string): Promise<void> {
+  return requestNoContent(`/upload/session/${encodeURIComponent(sessionId)}/check`, {
+    method: 'POST',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sha256 })
+  });
+}
+
+export function cancelUploadSession(sessionId: string): Promise<void> {
+  return requestNoContent(`/upload/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE', withAuth: true });
+}
+
+/**
+ * Sends one part of a session upload, starting at offset. Progress reports the part's bytes.
+ * Network failures reject with an ApiClientError without a status.
+ */
+export function sendUploadPart(
+  sessionId: string,
+  offset: number,
+  part: Blob,
+  onProgress?: (loadedBytes: number) => void
+): Promise<UploadSession> {
+  const send = (): Promise<XMLHttpRequest> => new Promise((resolve, reject) => {
+    const session = readStoredSession();
+    if (!session) {
+      reject(new Error('Missing stored session token.'));
+      return;
+    }
+    const request = new XMLHttpRequest();
+    request.open('PATCH', createApiUrl(`/upload/session/${encodeURIComponent(sessionId)}`));
+    request.responseType = 'text';
+    request.setRequestHeader('Accept', 'application/json');
+    request.setRequestHeader('Authorization', `Bearer ${session.access_token}`);
+    request.setRequestHeader('Content-Type', 'application/offset+octet-stream');
+    request.setRequestHeader('Upload-Offset', String(offset));
+    request.upload.addEventListener('progress', (event) => onProgress?.(event.loaded));
+    request.addEventListener('load', () => resolve(request));
+    request.addEventListener('error', () => reject(new ApiClientError({ message: 'Network request failed' })));
+    request.addEventListener('timeout', () => reject(new ApiClientError({ message: 'Network request timed out' })));
+    request.send(part);
+  });
+
+  return (async () => {
+    await ensureFreshSession();
+    let request = await send();
+    if (request.status === 401 && await refreshStoredSession()) request = await send();
+    if (request.status < 200 || request.status >= 300) {
+      if (request.status === 401) {
+        clearStoredSession();
+        notifySessionExpired();
+      }
+      throw getXmlHttpRequestError(request);
+    }
+    return parseJsonText<UploadSession>(request.responseText, request.status);
   })();
 }
 

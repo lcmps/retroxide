@@ -1,7 +1,9 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { Tooltip } from 'bits-ui';
+	import LibrarySort from '#lib/components/LibrarySort.svelte';
 	import LoadMoreSentinel from '#lib/components/LoadMoreSentinel.svelte';
 	import RomCover from '#lib/components/RomCover.svelte';
 	import { i18n } from '#lib';
@@ -9,6 +11,7 @@
 	import { getErrorMessage } from '#lib/helpers/error.js';
 	import { platforms } from '#lib/platforms/catalog.svelte.js';
 	import { RomPager } from '#lib/roms/pager.svelte.js';
+	import { applySortToParams, sortFromParams, type RomSort } from '#lib/roms/sort.js';
 	import { onMount } from 'svelte';
 
 	/** Wait for typing to pause before searching the server. */
@@ -23,6 +26,7 @@
 
 	const selectedPlatform = $derived(page.url.searchParams.get('platform')?.trim() ?? '');
 	const searchQuery = $derived(page.url.searchParams.get('q')?.trim().toLowerCase() ?? '');
+	const sort = $derived(sortFromParams(page.url.searchParams));
 	const pageTitle = $derived(
 		selectedPlatform
 			? platforms.nameFor(selectedPlatform)
@@ -35,7 +39,12 @@
 	// Filtering and search run on the server, one page at a time, so large catalogs load only
 	// what is on screen. Filter changes restart from the first page.
 	$effect(() => {
-		const filters = { platform: selectedPlatform || undefined, q: searchQuery || undefined };
+		const filters = {
+			platform: selectedPlatform || undefined,
+			q: searchQuery || undefined,
+			sort: sort?.field,
+			order: sort?.order
+		};
 		if (!ready) {
 			return;
 		}
@@ -44,6 +53,15 @@
 		return () => clearTimeout(timer);
 	});
 
+
+	/** Keeps the order in the URL, beside the search and platform, so it survives reloads and links. */
+	function changeSort(next: RomSort): void {
+		const params = applySortToParams(page.url.searchParams, next);
+		void goto(params.size > 0 ? `/library?${params.toString()}` : '/library', {
+			replace: true,
+			reset: false
+		});
+	}
 
 	onMount(() => {
 		void i18n
@@ -64,6 +82,7 @@
 <section class="page-shell stack" aria-labelledby="library-title" style="--layout-gap: 2.75rem">
 	<div class="library-heading">
 		<h1 id="library-title">{pageTitle}</h1>
+		<LibrarySort {sort} onchange={changeSort} />
 	</div>
 
 	{#if pager.items.length === 0 && (pager.loading || !ready)}
@@ -75,7 +94,7 @@
 			{#each pager.items as rom (rom.rom_id)}
 				<li>
 					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={rom.title}>
-						<div class="rom-cover" aria-hidden="true"><RomCover romId={rom.rom_id} coverArtUrl={rom.cover_art_url} /></div>
+						<div class="rom-cover" aria-hidden="true"><RomCover romId={rom.rom_id} coverArtUrl={rom.cover_art_url} coverThumbUrl={rom.cover_thumb_url} /></div>
 						<Tooltip.Root>
 							<Tooltip.Trigger>
 								{#snippet child({ props })}
@@ -108,6 +127,15 @@
 		margin: 0;
 		font-size: 1.5rem;
 		line-height: 1.35;
+	}
+
+	/* The title and the sort buttons share a row, the buttons at its end; narrow screens wrap them. */
+	.library-heading {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem 1.5rem;
 	}
 
 	.library-state {
@@ -189,6 +217,11 @@
 	@media (max-width: 640px) {
 		h1 {
 			font-size: 1rem;
+		}
+
+		.library-heading {
+			justify-content: center;
+			text-align: center;
 		}
 
 		.library-state {

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
@@ -47,6 +48,12 @@ func DefaultEndpoints() Endpoints {
 type libretroSystem struct {
 	database   string
 	thumbnails string
+}
+
+// genreDatabase is the system's genre database, which libretro keeps beside its name databases
+// under the system's name alone ("genre/Nintendo - Game Boy").
+func (system libretroSystem) genreDatabase() string {
+	return "genre/" + system.database[strings.IndexByte(system.database, '/')+1:]
 }
 
 // libretroSystems maps platform keys to libretro's database and thumbnail repository names.
@@ -103,10 +110,25 @@ type Client struct {
 	http      *http.Client
 	endpoints Endpoints
 
+	// diskCache, when set, keeps downloaded databases between restarts.
+	diskCache *datDiskCache
+	// idleAfter is how long a parsed database stays in memory unused.
+	idleAfter time.Duration
+
 	mu       sync.Mutex
-	datCache map[string]*datIndex
+	datCache map[string]*cachedIndex
 	datLoads map[string]*datLoad
 }
+
+// cachedIndex is a parsed database in memory, dropped once idle.
+type cachedIndex struct {
+	index *datIndex
+	idle  *time.Timer
+}
+
+// defaultIdleAfter keeps a database in memory through a burst of scrapes (a batch of uploads)
+// without holding every system's database forever: nine systems take about 30 MB.
+const defaultIdleAfter = 15 * time.Minute
 
 // datLoad is an in-flight database download that concurrent lookups for the same system share.
 type datLoad struct {
@@ -118,17 +140,43 @@ type datLoad struct {
 var _ rom.Scraper = (*Client)(nil)
 
 func NewClient(httpClient *http.Client, endpoints Endpoints) *Client {
-	return &Client{http: httpClient, endpoints: endpoints, datCache: make(map[string]*datIndex), datLoads: make(map[string]*datLoad)}
+	return &Client{
+		http: httpClient, endpoints: endpoints, idleAfter: defaultIdleAfter,
+		datCache: make(map[string]*cachedIndex), datLoads: make(map[string]*datLoad),
+	}
 }
 
+// CacheDatabasesIn keeps downloaded libretro databases in dir, so a restart reads them from
+// disk instead of downloading them again. Copies younger than maxAge are used as they are; older
+// ones are revalidated with the server, and used anyway when it cannot be reached.
+func (client *Client) CacheDatabasesIn(dir string, maxAge time.Duration) *Client {
+	client.diskCache = &datDiskCache{dir: dir, maxAge: maxAge}
+	return client
+}
+
+// Scrape looks the ROM up by hash and gathers its metadata and images. Requests that do not
+// depend on each other run concurrently: the system's libretro databases download while Hasheous
+// is asked, and the cover, title screen, screenshot, and genre are fetched together.
 func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.ScrapeResult, error) {
 	result := &rom.ScrapeResult{}
 	matched := false
-	var upstreamErrors []error
+	var failures upstreamErrors
+	var background sync.WaitGroup
+	defer background.Wait()
+
+	// Start the databases of the platform guessed from the extension. Lookups below join these
+	// downloads (or read their cache); a failure here resurfaces from the lookup that needs it.
+	if system, ok := libretroSystems[query.Platform]; ok {
+		background.Go(func() { _, _ = client.datIndex(ctx, system.database, false) })
+		if query.CRC32 != "" {
+			background.Go(func() { _, _ = client.datIndex(ctx, system.genreDatabase(), true) })
+		}
+	}
 
 	match, err := client.lookupHasheous(ctx, query)
+	hasheousCover := ""
 	if err != nil {
-		upstreamErrors = append(upstreamErrors, err)
+		failures.add(err)
 	} else if match != nil {
 		matched = true
 		result.Source = SourceHasheous
@@ -144,11 +192,7 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 			result.Platform = romdomain.PlatformKeyForName(match.Platform.Name)
 		}
 		if imageID := match.attribute("Logo"); hasheousImageID.MatchString(imageID) {
-			if image, err := client.fetchImage(ctx, client.endpoints.Hasheous+"/api/v1/images/"+imageID); err == nil {
-				result.Cover = image
-			} else if !errors.Is(err, errUpstreamNoHit) {
-				upstreamErrors = append(upstreamErrors, err)
-			}
+			hasheousCover = client.endpoints.Hasheous + "/api/v1/images/" + imageID
 		}
 	}
 
@@ -157,10 +201,11 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 	if result.Platform != "" {
 		platform = result.Platform
 	}
-	if system, ok := libretroSystems[platform]; ok {
-		entry, err := client.lookupLibretro(ctx, system, query)
-		if err != nil {
-			upstreamErrors = append(upstreamErrors, err)
+	system, known := libretroSystems[platform]
+	var entry *datEntry
+	if known {
+		if entry, err = client.lookupLibretro(ctx, system, query); err != nil {
+			failures.add(err)
 		} else if entry != nil {
 			matched = true
 			if result.Source == "" {
@@ -168,34 +213,72 @@ func (client *Client) Scrape(ctx context.Context, query rom.ScrapeQuery) (*rom.S
 				result.Title = canonicalTitle(entry.name)
 			}
 			result.Region = entry.region
-			for _, image := range []struct {
-				kind   string
-				target *[]byte
-			}{
-				{"Named_Boxarts", &result.Cover},
-				{"Named_Titles", &result.TitleScreen},
-				{"Named_Snaps", &result.Screenshot},
-			} {
-				if len(*image.target) > 0 {
-					continue
-				}
-				content, err := client.fetchImage(ctx, client.thumbnailURL(system, image.kind, entry.name))
-				if err == nil {
-					*image.target = content
-				} else if !errors.Is(err, errUpstreamNoHit) {
-					upstreamErrors = append(upstreamErrors, err)
-				}
-			}
 		}
 	}
 
+	var fetches sync.WaitGroup
+	fetch := func(target *[]byte, url string) {
+		fetches.Go(func() {
+			if content, err := client.fetchImage(ctx, url); err == nil {
+				*target = content
+			} else if !errors.Is(err, errUpstreamNoHit) {
+				failures.add(err)
+			}
+		})
+	}
+	if hasheousCover != "" {
+		fetch(&result.Cover, hasheousCover)
+	}
+	if entry != nil {
+		fetch(&result.TitleScreen, client.thumbnailURL(system, "Named_Titles", entry.name))
+		fetch(&result.Screenshot, client.thumbnailURL(system, "Named_Snaps", entry.name))
+		// Box art stands in for the Hasheous cover, so it is fetched up front only without one.
+		if hasheousCover == "" {
+			fetch(&result.Cover, client.thumbnailURL(system, "Named_Boxarts", entry.name))
+		}
+	}
+	// Genres come from a separate database keyed by CRC. They only add to a match, and a
+	// failure to read them does not fail the scrape.
+	if known && matched && query.CRC32 != "" {
+		fetches.Go(func() {
+			if index, err := client.datIndex(ctx, system.genreDatabase(), true); err == nil {
+				if genre, ok := index.byCRC[strings.ToUpper(query.CRC32)]; ok {
+					result.Genre = genre.genre
+				}
+			}
+		})
+	}
+	fetches.Wait()
+	if entry != nil && hasheousCover != "" && len(result.Cover) == 0 {
+		fetch(&result.Cover, client.thumbnailURL(system, "Named_Boxarts", entry.name))
+		fetches.Wait()
+	}
+
 	if !matched {
-		if len(upstreamErrors) > 0 {
-			return nil, fault.UpstreamUnavailable("metadata services are unavailable, try again later", errors.Join(upstreamErrors...))
+		if errs := failures.all(); len(errs) > 0 {
+			return nil, fault.UpstreamUnavailable("metadata services are unavailable, try again later", errors.Join(errs...))
 		}
 		return nil, nil
 	}
 	return result, nil
+}
+
+// upstreamErrors collects failures from concurrent requests.
+type upstreamErrors struct {
+	mu     sync.Mutex
+	errors []error
+}
+
+func (failures *upstreamErrors) add(err error) {
+	failures.mu.Lock()
+	defer failures.mu.Unlock()
+	failures.errors = append(failures.errors, err)
+}
+
+func (failures *upstreamErrors) all() []error {
+	failures.mu.Lock()
+	defer failures.mu.Unlock()
+	return failures.errors
 }
 
 type hasheousMatch struct {
@@ -254,6 +337,7 @@ func (client *Client) lookupHasheous(ctx context.Context, query rom.ScrapeQuery)
 type datEntry struct {
 	name   string
 	region string
+	genre  string
 }
 
 type datIndex struct {
@@ -262,7 +346,7 @@ type datIndex struct {
 }
 
 func (client *Client) lookupLibretro(ctx context.Context, system libretroSystem, query rom.ScrapeQuery) (*datEntry, error) {
-	index, err := client.datIndex(ctx, system)
+	index, err := client.datIndex(ctx, system.database, false)
 	if err != nil {
 		return nil, err
 	}
@@ -275,15 +359,17 @@ func (client *Client) lookupLibretro(ctx context.Context, system libretroSystem,
 	return nil, nil
 }
 
-// datIndex returns the parsed libretro database for system, downloading it at most once at a
-// time per system. The lock only guards the maps, so lookups for other systems, and cache hits,
-// never wait on a download; failed downloads are not cached and are retried by the next caller.
-func (client *Client) datIndex(ctx context.Context, system libretroSystem) (*datIndex, error) {
-	key := system.database
+// datIndex returns the parsed libretro database, downloading it at most once at a time per
+// database. The lock only guards the maps, so lookups for other databases, and cache hits, never
+// wait on a download; failed downloads are not cached and are retried by the next caller. An
+// optional database that does not exist upstream is cached as empty.
+func (client *Client) datIndex(ctx context.Context, database string, optional bool) (*datIndex, error) {
+	key := database
 	client.mu.Lock()
-	if index, ok := client.datCache[key]; ok {
+	if cached, ok := client.datCache[key]; ok {
+		cached.idle.Reset(client.idleAfter)
 		client.mu.Unlock()
-		return index, nil
+		return cached.index, nil
 	}
 	load, inFlight := client.datLoads[key]
 	if !inFlight {
@@ -293,10 +379,12 @@ func (client *Client) datIndex(ctx context.Context, system libretroSystem) (*dat
 	client.mu.Unlock()
 
 	if !inFlight {
-		load.index, load.err = client.downloadDAT(ctx, system)
+		load.index, load.err = client.loadDAT(ctx, database, optional)
 		client.mu.Lock()
 		if load.err == nil {
-			client.datCache[key] = load.index
+			cached := &cachedIndex{index: load.index}
+			cached.idle = time.AfterFunc(client.idleAfter, func() { client.forget(key, cached) })
+			client.datCache[key] = cached
 		}
 		delete(client.datLoads, key)
 		client.mu.Unlock()
@@ -311,15 +399,73 @@ func (client *Client) datIndex(ctx context.Context, system libretroSystem) (*dat
 	}
 }
 
-func (client *Client) downloadDAT(ctx context.Context, system libretroSystem) (*datIndex, error) {
-	body, err := client.get(ctx, client.endpoints.LibretroDatabase+"/"+escapePath(system.database)+".dat", maxDATBytes)
+// forget drops a parsed database from memory, unless it was replaced since.
+func (client *Client) forget(key string, cached *cachedIndex) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.datCache[key] == cached {
+		delete(client.datCache, key)
+	}
+}
+
+// loadDAT reads a database from the disk cache when it is fresh, and otherwise downloads it,
+// asking the server only whether a stale cached copy changed.
+func (client *Client) loadDAT(ctx context.Context, database string, optional bool) (*datIndex, error) {
+	cache := client.diskCache
+	if cache == nil {
+		return client.downloadDAT(ctx, database, optional)
+	}
+	cached := cache.lookup(database)
+	if cached.fresh {
+		if index, err := cached.read(); err == nil {
+			return index, nil
+		}
+	}
+	body, etag, err := client.getConditional(ctx, client.endpoints.LibretroDatabase+"/"+escapePath(database)+".dat", cached.etag, maxDATBytes)
+	switch {
+	case errors.Is(err, errNotModified):
+		cache.touch(database)
+		if index, readErr := cached.read(); readErr == nil {
+			return index, nil
+		}
+		// The copy vanished meanwhile; download it outright.
+		return client.downloadDAT(ctx, database, optional)
+	case optional && errors.Is(err, errUpstreamNoHit):
+		cache.storeMissing(database)
+		return emptyDATIndex(), nil
+	case err != nil:
+		if cached.exists {
+			if index, readErr := cached.read(); readErr == nil {
+				return index, nil // stale, but better than nothing while offline
+			}
+		}
+		return nil, fmt.Errorf("downloading libretro database %q: %w", database, err)
+	}
+	index, err := parseDAT(bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("downloading libretro database %q: %w", system.database, err)
+		return nil, err
+	}
+	cache.store(database, body, etag)
+	return index, nil
+}
+
+func emptyDATIndex() *datIndex {
+	return &datIndex{bySHA1: map[string]datEntry{}, byCRC: map[string]datEntry{}}
+}
+
+func (client *Client) downloadDAT(ctx context.Context, database string, optional bool) (*datIndex, error) {
+	body, err := client.get(ctx, client.endpoints.LibretroDatabase+"/"+escapePath(database)+".dat", maxDATBytes)
+	if optional && errors.Is(err, errUpstreamNoHit) {
+		return emptyDATIndex(), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("downloading libretro database %q: %w", database, err)
 	}
 	return parseDAT(bytes.NewReader(body))
 }
 
-// parseDAT reads clrmamepro DAT files, mapping each ROM's SHA1 and CRC to its game.
+// parseDAT reads clrmamepro DAT files, mapping each ROM's SHA1 and CRC to its game. Genre
+// databases name games in a comment instead of a name.
 func parseDAT(reader io.Reader) (*datIndex, error) {
 	index := &datIndex{bySHA1: make(map[string]datEntry), byCRC: make(map[string]datEntry)}
 	scanner := bufio.NewScanner(reader)
@@ -332,8 +478,12 @@ func parseDAT(reader io.Reader) (*datIndex, error) {
 			current = datEntry{}
 		case strings.HasPrefix(line, "name "):
 			current.name = datString(strings.TrimPrefix(line, "name "))
+		case strings.HasPrefix(line, "comment ") && current.name == "":
+			current.name = datString(strings.TrimPrefix(line, "comment "))
 		case strings.HasPrefix(line, "region "):
 			current.region = datString(strings.TrimPrefix(line, "region "))
+		case strings.HasPrefix(line, "genre "):
+			current.genre = datString(strings.TrimPrefix(line, "genre "))
 		case strings.HasPrefix(line, "rom (") && current.name != "":
 			if match := datSHA1.FindStringSubmatch(line); match != nil {
 				index.bySHA1[strings.ToUpper(match[1])] = current
@@ -388,6 +538,43 @@ func (client *Client) fetchImage(ctx context.Context, target string) ([]byte, er
 	default:
 		return nil, errUpstreamNoHit
 	}
+}
+
+// errNotModified reports that a conditional request found the cached copy current.
+var errNotModified = errors.New("not modified")
+
+// getConditional fetches target unless it still has etag, returning its body and new ETag.
+func (client *Client) getConditional(ctx context.Context, target, etag string, limit int64) ([]byte, string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	request.Header.Set("User-Agent", userAgent)
+	if etag != "" {
+		request.Header.Set("If-None-Match", etag)
+	}
+	response, err := client.http.Do(request)
+	if err != nil {
+		return nil, "", err
+	}
+	defer response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusNotModified:
+		return nil, "", errNotModified
+	case http.StatusNotFound:
+		return nil, "", errUpstreamNoHit
+	case http.StatusOK:
+	default:
+		return nil, "", fmt.Errorf("GET %s: unexpected status %d", target, response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if int64(len(body)) > limit {
+		return nil, "", fmt.Errorf("GET %s: response exceeds %d bytes", target, limit)
+	}
+	return body, response.Header.Get("ETag"), nil
 }
 
 func (client *Client) get(ctx context.Context, target string, limit int64) ([]byte, error) {

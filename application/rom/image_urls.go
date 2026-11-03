@@ -3,6 +3,8 @@ package rom
 import (
 	"path/filepath"
 	"strings"
+
+	romdomain "github.com/lcmps/retroxide/domain/rom"
 )
 
 // imageVersionLength is how many hex digits of an image's SHA-256 its URL carries.
@@ -23,6 +25,18 @@ func imageURL(romID, resource string, storagePath *string) *string {
 		url += "?" + ImageVersionParam + "=" + address[:imageVersionLength]
 	}
 	return &url
+}
+
+// coverThumbURL returns the URL of a ROM's cover thumbnail, or nil without a cover. Until the
+// thumbnail exists it is versioned by the cover it will be made from.
+func coverThumbURL(rom romdomain.ROM) *string {
+	if rom.Identity.CoverArtPath == nil {
+		return nil
+	}
+	if rom.Identity.CoverThumbPath != nil {
+		return imageURL(rom.ID, "cover/thumb", rom.Identity.CoverThumbPath)
+	}
+	return imageURL(rom.ID, "cover/thumb", rom.Identity.CoverArtPath)
 }
 
 // ImageVersionMatches reports whether version is the content version of an image with the

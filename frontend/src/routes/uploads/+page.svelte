@@ -3,13 +3,18 @@
 	import ActionButton from '#lib/components/ActionButton.svelte';
 	import UploadForm from '#lib/components/uploads/UploadForm.svelte';
 	import UploadQueueItem from '#lib/components/uploads/UploadQueueItem.svelte';
-	import { uploadRom, uploadStatus } from '#lib/api/client.js';
+	import { uploadStatus } from '#lib/api/client.js';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
 	import { UploadQueue } from '#lib/uploads/queue.svelte.js';
+	import { serverApi, uploadResumable } from '#lib/uploads/resumable.js';
 
 	const t = useTranslate(i18n);
-	const queue = new UploadQueue(uploadRom, uploadStatus);
+	// Large files go in parts that survive a dropped connection and resume when added again.
+	const queue = new UploadQueue(
+		(file, onProgress, onReconnecting) => uploadResumable(file, serverApi, { onProgress, onReconnecting }),
+		uploadStatus
+	);
 
 	const hasFinished = $derived(queue.items.some((item) => item.finished));
 

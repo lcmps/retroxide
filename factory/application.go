@@ -31,6 +31,9 @@ type Application struct {
 	// JobPools are the background workers that process JobQueue.
 	JobPools   []jobs.Pool
 	Identifier jobs.Identifier
+	// Maintenance runs periodic chores, such as removing unreferenced files, until its context
+	// ends.
+	Maintenance func(context.Context)
 }
 
 func NewApplication(ctx context.Context, settings config.Config, logger *slog.Logger) (*Application, error) {
@@ -52,6 +55,9 @@ func assembleApplication(ctx context.Context, settings config.Config, logger *sl
 		return nil, buildErr
 	}
 	storage := NewStorage(settings)
+	if err := prepareStorage(ctx, logger, repositories, storage); err != nil {
+		return fail(err)
+	}
 	hasher := auth.NewArgon2PasswordHasher()
 	tokens := auth.NewJWTService(settings.JWTSecret, settings.JWTAccessExpirySecs, settings.JWTRefreshExpirySecs)
 	if err := seedAdmin(ctx, repositories, hasher, settings.AdminEmail, settings.AdminPassword); err != nil {
@@ -68,6 +74,9 @@ func assembleApplication(ctx context.Context, settings config.Config, logger *sl
 	return &Application{
 		Config: settings, Database: database, Router: router, Logger: logger,
 		JobQueue: queue, JobPools: pools, Identifier: services.Identifier,
+		Maintenance: func(ctx context.Context) {
+			runMaintenance(ctx, logger, expireUploadSessions(services.Uploads), sweepUnreferencedFiles(repositories, storage))
+		},
 	}, nil
 }
 

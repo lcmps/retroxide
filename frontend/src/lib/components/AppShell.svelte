@@ -32,25 +32,13 @@
 		}
 		return options;
 	});
-	const isLibrary = $derived(activePath === "/library");
 	const translate = useTranslate(i18n);
-	const routeLabel = $derived(
-		activePath === "/downloads"
-			? translate("nav.uploads", "Uploads")
-			: activePath === "/uploads"
-				? translate("nav.downloads", "Downloads")
-				: activePath.startsWith("/rom/") || activePath === "/profile" || activePath === "/users"
-					? translate("nav.library", "Library")
-					: "",
-	);
-	const backPath = $derived(
-		activePath === "/downloads"
-			? "/uploads"
-			: activePath === "/uploads"
-				? "/downloads"
-				: "/library",
-	);
-
+	const navLinks = $derived([
+		{ path: "/library" as const, label: translate("nav.library", "Library") },
+		{ path: "/downloads" as const, label: translate("nav.downloads", "Downloads") },
+		{ path: "/uploads" as const, label: translate("nav.uploads", "Uploads") },
+		...(isAdmin ? [{ path: "/users" as const, label: translate("nav.users", "Users") }] : []),
+	]);
 	async function updateLibrarySearchParams(
 		nextPlatform: string,
 		nextQuery: string,
@@ -90,6 +78,11 @@
 	function changeSearch(event: Event): void {
 		searchText = (event.currentTarget as HTMLInputElement).value;
 		void updateLibrarySearchParams(selectedPlatform, searchText);
+	}
+
+	/** Whether the page belongs to a link's section: a ROM's page belongs to the library. */
+	function inSection(path: string): boolean {
+		return isActive(path) || (path === "/library" && activePath.startsWith("/rom/"));
 	}
 
 	function isActive(path: string): boolean {
@@ -268,29 +261,17 @@
 		class="app-shell__nav"
 		aria-label={translate("app.shell.navigation", "Primary navigation")}
 	>
-		{#if isLibrary}
-			<a href={resolve("/downloads")}
-				>{translate("nav.downloads", "Downloads")}</a
+		<!-- The same links on every page; the current one is marked. -->
+		{#each navLinks as link (link.path)}
+			<a
+				href={resolve(link.path)}
+				class:current={inSection(link.path)}
+				aria-current={activePath === link.path ? "page" : undefined}>{link.label}</a
 			>
-			<a href={resolve("/uploads")}
-				>{translate("nav.uploads", "Uploads")}</a
-			>
-			{#if isAdmin}
-				<a href={resolve("/users")}>{translate("nav.users", "Users")}</a>
-			{/if}
-			<button type="button" onclick={() => void logout()} title={translate("common.actions.logoutHint", "Sign out on every device")}>
-				{translate("common.actions.logout", "Log out")}
-			</button>
-		{:else}
-			<a class="app-shell__back" href={resolve(backPath)}>
-				<img
-					src="/components/btns/Back - 01.png"
-					alt=""
-					aria-hidden="true"
-				/>
-				<span>{routeLabel}</span>
-			</a>
-		{/if}
+		{/each}
+		<button type="button" onclick={() => void logout()} title={translate("common.actions.logoutHint", "Sign out on every device")}>
+			{translate("common.actions.logout", "Log out")}
+		</button>
 		<a
 			class="app-shell__profile"
 			class:current={isActive("/profile")}

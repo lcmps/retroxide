@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"io/fs"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -104,54 +102,73 @@ func TestROMHardDeleteCleansMetadataAndBytes(t *testing.T) {
 	}
 	assertDeleteCount(t, repositories, &LibraryModel{}, 1)
 	for _, path := range paths {
-		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("deleted path %s: stat error = %v", path, err)
+		if stored(files, path) {
+			t.Errorf("deleted path %s remains", path)
 		}
 	}
 }
 
 type failingDeleteStorage struct {
 	*storage.Filesystem
-	failPath string
+	failPath     string
+	beforeDelete func()
 }
 
 var errDeleteStorage = errors.New("storage unavailable")
 
 func (files *failingDeleteStorage) Delete(ctx context.Context, path string) error {
+	if files.beforeDelete != nil {
+		files.beforeDelete()
+	}
 	if path == files.failPath {
 		return errDeleteStorage
 	}
 	return files.Filesystem.Delete(ctx, path)
 }
 
-func TestROMHardDeleteFailureRetainsMetadataForRetry(t *testing.T) {
+// stored reports whether files holds content at path.
+func stored(files *storage.Filesystem, path string) bool {
+	content, err := files.Open(context.Background(), path)
+	if err != nil {
+		return false
+	}
+	_ = content.Close()
+	return true
+}
+
+// Files are removed only after the deletion commits, so a failed commit can never leave a
+// record whose file is gone. A file that cannot be removed then stays behind for the storage
+// sweep to reclaim; the deletion itself still succeeds.
+func TestROMHardDeleteRemovesFilesOnlyAfterCommitting(t *testing.T) {
 	for _, kind := range []string{"screenshot", "rom_bytes"} {
 		t.Run(kind, func(t *testing.T) {
 			repositories, ctx := openTestRepositories(t)
 			files := &failingDeleteStorage{Filesystem: storage.New(t.TempDir())}
 			rom, paths := seedDeleteROM(t, repositories, files.Filesystem)
-			files.failPath = paths[3]
+			failed := paths[3]
 			if kind == "rom_bytes" {
-				files.failPath = paths[0]
+				failed = paths[0]
+			}
+			files.failPath = failed
+			var committedBeforeDelete bool
+			files.beforeDelete = func() {
+				var count int64
+				repositories.DB.Model(&ROMModel{}).Where("id = ?", rom.ID).Count(&count)
+				committedBeforeDelete = count == 0
 			}
 			service := romapp.NewService(repositories, files, nil, nil)
-			requester := identity.Requester{UserID: "owner", Role: identity.RoleUser}
-			if err := service.Delete(ctx, requester, rom.ID); !errors.Is(err, errDeleteStorage) || !fault.IsCode(err, fault.CodeInternal) {
-				t.Errorf("Delete error = %v, want internal storage failure", err)
+			if err := service.Delete(ctx, identity.Requester{UserID: "owner", Role: identity.RoleUser}, rom.ID); err != nil {
+				t.Fatalf("Delete error = %v, want success despite the storage failure", err)
 			}
-			for _, model := range []any{&ROMModel{}, &ROMFileModel{}, &LibraryItemModel{}, &JobDeadLetterModel{}} {
-				assertDeleteCount(t, repositories, model, 1)
+			if !committedBeforeDelete {
+				t.Fatal("files were deleted before the deletion committed")
 			}
-			assertDeleteCount(t, repositories, &UploadModel{}, 3)
-			assertDeleteCount(t, repositories, &JobQueueModel{}, 2)
-			files.failPath = ""
-			if err := service.Delete(ctx, requester, rom.ID); err != nil {
-				t.Fatalf("retry failed: %v", err)
+			for _, model := range []any{&ROMModel{}, &ROMFileModel{}, &LibraryItemModel{}, &JobDeadLetterModel{}, &UploadModel{}, &JobQueueModel{}} {
+				assertDeleteCount(t, repositories, model, 0)
 			}
-			assertDeleteCount(t, repositories, &ROMModel{}, 0)
 			for _, path := range paths {
-				if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-					t.Errorf("path remains after retry: %s (%v)", path, err)
+				if stored(files.Filesystem, path) != (path == failed) {
+					t.Errorf("path %s stored = %v, want only the failed one left", path, stored(files.Filesystem, path))
 				}
 			}
 		})
@@ -211,8 +228,8 @@ func TestROMHardDeletePreservesSharedFileAndMedia(t *testing.T) {
 		}
 	}
 	for _, path := range paths[2:] {
-		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("orphan media remains: %s (%v)", path, err)
+		if stored(files, path) {
+			t.Errorf("orphan media remains: %s", path)
 		}
 	}
 }

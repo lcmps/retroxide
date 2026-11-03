@@ -20,20 +20,38 @@ func New() Service {
 	return Service{}
 }
 
-// NewDigest returns a streaming digest computing every hash in a single pass.
+// NewDigest returns a streaming digest computing every hash in a single pass over the content,
+// each hash on its own goroutine.
 func (Service) NewDigest() romdomain.Digest {
-	digest := &digest{sha256: sha256.New(), sha1: sha1.New(), md5: md5.New(), crc32: crc32.NewIEEE()}
-	digest.Writer = io.MultiWriter(digest.sha256, digest.sha1, digest.md5, digest.crc32)
-	return digest
+	return newParallelDigest()
 }
 
-// Hash hashes content held in memory.
-func (service Service) Hash(content []byte) (romdomain.ROMHash, error) {
-	digest := service.NewDigest()
+// ResumeDigest continues hashing from progress saved with MarshalBinary, or starts afresh when
+// state is empty.
+func (Service) ResumeDigest(state []byte) (romdomain.ResumableDigest, error) {
+	if len(state) == 0 {
+		return newParallelDigest(), nil
+	}
+	return restoreParallelDigest(state)
+}
+
+// Hash hashes content held in memory. Content smaller than one block is hashed inline, where
+// handing it to goroutines would cost more than it saves.
+func (Service) Hash(content []byte) (romdomain.ROMHash, error) {
+	var digest romdomain.Digest = newParallelDigest()
+	if len(content) < blockSize {
+		digest = newSequentialDigest()
+	}
 	if _, err := digest.Write(content); err != nil {
 		return romdomain.ROMHash{}, fmt.Errorf("hashing rom content: %w", err)
 	}
 	return digest.Sum()
+}
+
+func newSequentialDigest() *digest {
+	digest := &digest{sha256: sha256.New(), sha1: sha1.New(), md5: md5.New(), crc32: crc32.NewIEEE()}
+	digest.Writer = io.MultiWriter(digest.sha256, digest.sha1, digest.md5, digest.crc32)
+	return digest
 }
 
 type digest struct {

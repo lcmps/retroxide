@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/lcmps/retroxide/application/rom"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -177,8 +178,8 @@ func TestMySQLROMFileIdentifierUpgrade(t *testing.T) {
 	if _, err := repositories.UpsertROMFile(context.Background(), legacy); err != nil {
 		t.Fatal(err)
 	}
-	legacyROM := romdomain.ROM{ID: "legacy-rom", ROMFileID: legacy.ID, UploaderID: "system", Identity: romdomain.ROMIdentity{Title: "Legacy", Platform: "snes"}}
-	if err := repositories.SaveROM(context.Background(), legacyROM); err != nil {
+	// Inserted directly: the repository writes columns that later migrations add.
+	if err := db.Exec("INSERT INTO rom (id, rom_file_id, uploader_id, title, platform, identified_by, confidence) VALUES ('legacy-rom', ?, 'system', 'Legacy', 'snes', '', 0)", legacy.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
@@ -186,7 +187,7 @@ func TestMySQLROMFileIdentifierUpgrade(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if restored, err := repositories.FindROMByID(context.Background(), legacyROM.ID); err != nil || restored == nil || restored.ROMFileID != legacy.ID {
+	if restored, err := repositories.FindROMByID(context.Background(), "legacy-rom"); err != nil || restored == nil || restored.ROMFileID != legacy.ID {
 		t.Fatalf("legacy ROM after upgrade = %+v, %v", restored, err)
 	}
 	file := validROMFile("new-file", "new content")
@@ -247,4 +248,69 @@ func TestMySQLUserManagement(t *testing.T) {
 	}
 	defer sqlDB.Close()
 	exerciseUserManagement(t, ctx, NewRepositories(db), fmt.Sprintf("um%x", time.Now().UnixNano()))
+}
+
+func TestMySQLListROMsInSortOrder(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	exerciseROMSorting(t, ctx, NewRepositories(db), fmt.Sprintf("sort-%x", time.Now().UnixNano()))
+}
+
+func TestMySQLUploadSessionsAndStoragePaths(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	repositories := NewRepositories(db)
+	exerciseUploadSessions(t, ctx, repositories, fmt.Sprintf("ups_%x", time.Now().UnixNano()))
+	if counts, err := repositories.CountForMetrics(ctx); err != nil || counts.ROMFiles < 0 || counts.JobsQueued == nil {
+		t.Fatalf("CountForMetrics() = %+v, %v", counts, err)
+	}
+
+	// Legacy paths are found and rewritten; keys and references are recognized.
+	suffix := fmt.Sprintf("%x", time.Now().UnixNano())
+	file := validROMFile("rf-paths-"+suffix, "paths-"+suffix)
+	legacy := "/srv/storage/" + file.Hash.SHA256
+	file.StoragePath = legacy
+	if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repositories.DeleteROMFile(ctx, file.ID) })
+	paths, err := repositories.ListLegacyStoragePaths(ctx)
+	if err != nil || !slices.Contains(paths, legacy) {
+		t.Fatalf("legacy paths = %v, %v; want %s", paths, err, legacy)
+	}
+	key := file.Hash.SHA256[:2] + "/" + file.Hash.SHA256
+	if err := repositories.ReplaceStoragePaths(ctx, map[string]string{legacy: key}); err != nil {
+		t.Fatal(err)
+	}
+	if paths, _ := repositories.ListLegacyStoragePaths(ctx); slices.Contains(paths, legacy) || slices.Contains(paths, key) {
+		t.Fatalf("legacy paths after rewriting = %v", paths)
+	}
+	referenced, err := repositories.ReferencedStoragePaths(ctx, []string{key, "zz/" + strings.Repeat("z", 64)})
+	if err != nil || !referenced[key] || len(referenced) != 1 {
+		t.Fatalf("referenced = %v, %v; want only %s", referenced, err, key)
+	}
 }

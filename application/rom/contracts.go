@@ -2,6 +2,7 @@ package rom
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 type Repository interface {
 	UpsertROMFile(context.Context, romdomain.ROMFile) (romdomain.ROMFile, error)
 	SaveROM(context.Context, romdomain.ROM) error
+	// SetCoverThumbnail records a ROM's cover thumbnail, unless its cover has changed since.
+	SetCoverThumbnail(ctx context.Context, romID, coverPath, thumbnailPath string) error
 	// ListROMsWithFiles returns up to limit ROMs ordered by ID that match filter.
 	ListROMsWithFiles(ctx context.Context, limit int, filter ROMFilter) ([]romdomain.ROMWithFile, error)
 	FindROMByID(context.Context, string) (*romdomain.ROM, error)
@@ -45,10 +48,37 @@ type StoredContent struct {
 	ModifiedAt time.Time
 }
 
+// SortField names a listing order. The zero value lists ROMs by ID, the order they were added in
+// no particular sense, which is the cheapest to page through.
+type SortField string
+
+const (
+	SortDefault   SortField = ""
+	SortTitle     SortField = "title"
+	SortRelease   SortField = "release"
+	SortPublisher SortField = "publisher"
+	SortGenre     SortField = "genre"
+)
+
+// ROMSort orders a listing by Field, ties broken by ID. ROMs without a value for Field come
+// last in either direction.
+type ROMSort struct {
+	Field      SortField
+	Descending bool
+}
+
+// ROMCursor is the position after which the next page starts: the last ROM's ID and, for a
+// sorted listing, its value for the sort field (nil once the listing reached ROMs without one).
+type ROMCursor struct {
+	ID    string
+	Value *string
+}
+
 // ROMFilter selects ROMs for listing; nil fields are not applied.
 type ROMFilter struct {
-	// AfterCursor returns only ROMs whose ID sorts after it.
-	AfterCursor *string
+	// After returns only ROMs that come after it in Sort order.
+	After *ROMCursor
+	Sort  ROMSort
 	// Platform matches the platform case-insensitively.
 	Platform *string
 	// UploaderID restricts results to one owner's uploads.
@@ -64,7 +94,20 @@ type ListRequest struct {
 	Platform   *string
 	Search     *string
 	Identified *bool
+	// Sort is one of the SortField values; Order is "asc" (the default) or "desc".
+	Sort  string
+	Order string
 }
+
+// Thumbnailer makes the small cover copies library grids show.
+type Thumbnailer interface {
+	// Thumbnail returns a small copy of an image, or ErrThumbnailNotSmaller when the image is
+	// already small enough to serve as its own thumbnail.
+	Thumbnail(content []byte) ([]byte, error)
+}
+
+// ErrThumbnailNotSmaller reports that an image needs no smaller copy.
+var ErrThumbnailNotSmaller = errors.New("image is already thumbnail-sized")
 
 type Storage interface {
 	Write(ctx context.Context, contentAddress string, content []byte) (string, error)
@@ -98,6 +141,7 @@ type ScrapeResult struct {
 	Region      string
 	Publisher   string
 	ReleaseYear string
+	Genre       string
 	Description string
 	Cover       []byte
 	TitleScreen []byte
@@ -118,9 +162,11 @@ type API interface {
 	// DownloadFilename returns the name an accessible ROM is downloaded as.
 	DownloadFilename(context.Context, identity.Requester, string) (string, error)
 	UploadCover(context.Context, identity.Requester, string, []byte) (ROMDetailDTO, error)
-	ReadCover(context.Context, identity.Requester, string) ([]byte, error)
+	OpenCover(context.Context, identity.Requester, string) (Image, error)
+	// OpenCoverThumbnail opens the small copy of the cover that library grids show.
+	OpenCoverThumbnail(context.Context, identity.Requester, string) (Image, error)
 	Scrape(context.Context, identity.Requester, string) (ROMDetailDTO, error)
-	ReadMedia(context.Context, identity.Requester, string, string) ([]byte, error)
+	OpenMedia(context.Context, identity.Requester, string, string) (Image, error)
 	// Platforms lists the platforms of the ROMs the requester can see.
 	Platforms(context.Context, identity.Requester) ([]PlatformDTO, error)
 	// PlatformCatalog lists every known platform, for choosing one when editing a ROM.

@@ -1,8 +1,7 @@
 package http
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -43,6 +42,7 @@ func registerROMRoutes(api *gin.RouterGroup, roms rom.API, links DownloadLinks) 
 	group.PATCH("/:rom_id", handler.update)
 	group.DELETE("/:rom_id", handler.delete)
 	group.GET("/:rom_id/cover", handler.cover)
+	group.GET("/:rom_id/cover/thumb", handler.coverThumbnail)
 	group.POST("/:rom_id/cover", handler.uploadCover)
 	group.POST("/:rom_id/scrape", handler.scrape)
 	group.GET("/:rom_id/media/:kind", handler.media)
@@ -50,13 +50,16 @@ func registerROMRoutes(api *gin.RouterGroup, roms rom.API, links DownloadLinks) 
 	group.POST("/:rom_id/download-link", requireService(links != nil), handler.createDownloadLink)
 }
 
-// parseROMListRequest reads GET /rom's query: limit, cursor, platform, q (search), identified.
+// parseROMListRequest reads GET /rom's query: limit, cursor, platform, q (search), identified,
+// sort (title, release, publisher, or genre), and order (asc or desc).
 func parseROMListRequest(c *gin.Context) (rom.ListRequest, error) {
 	request := rom.ListRequest{
 		Limit:    defaultROMPageSize,
 		Cursor:   optionalQuery(c, "cursor"),
 		Platform: optionalQuery(c, "platform"),
 		Search:   optionalQuery(c, "q"),
+		Sort:     c.Query("sort"),
+		Order:    c.Query("order"),
 	}
 	if raw := c.Query("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
@@ -115,8 +118,13 @@ func (handler romHandler) delete(c *gin.Context) {
 }
 
 func (handler romHandler) cover(c *gin.Context) {
-	content, err := handler.roms.ReadCover(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"))
-	serveImage(c, content, err)
+	image, err := handler.roms.OpenCover(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"))
+	serveImage(c, image, err)
+}
+
+func (handler romHandler) coverThumbnail(c *gin.Context) {
+	image, err := handler.roms.OpenCoverThumbnail(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"))
+	serveImage(c, image, err)
 }
 
 func (handler romHandler) uploadCover(c *gin.Context) {
@@ -135,8 +143,8 @@ func (handler romHandler) scrape(c *gin.Context) {
 }
 
 func (handler romHandler) media(c *gin.Context) {
-	content, err := handler.roms.ReadMedia(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), c.Param("kind"))
-	serveImage(c, content, err)
+	image, err := handler.roms.OpenMedia(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), c.Param("kind"))
+	serveImage(c, image, err)
 }
 
 func (handler romHandler) download(c *gin.Context) {
@@ -187,9 +195,9 @@ func (handler romHandler) streamDownload(c *gin.Context, requester identity.Requ
 		return
 	}
 	defer output.Content.Close()
-	writeDownload(c, output)
+	sent := writeDownload(c, output)
 	if bodyWasServed(c) && output.Served != nil {
-		output.Served(c.Request.Context(), int64(c.Writer.Size()))
+		output.Served(c.Request.Context(), sent)
 	}
 }
 
@@ -212,35 +220,40 @@ func readCoverUpload(c *gin.Context) ([]byte, error) {
 	return content, nil
 }
 
-// serveImage writes stored image bytes with their sniffed type; unrecognized content is treated as missing.
+// serveImage streams a stored image with its sniffed type; unrecognized content is treated as
+// missing.
 //
-// Responses carry a content ETag. Requests whose URL names the image's content version (see
-// rom.ImageVersionParam) are cacheable indefinitely, since a changed image gets a new URL;
-// unversioned requests must revalidate, which costs only a 304 when unchanged.
-func serveImage(c *gin.Context, content []byte, err error) {
+// Responses carry the image's SHA-256 as their ETag, taken from its content address, so neither
+// a full response nor a 304 reads or hashes more than the first bytes. Requests whose URL names
+// the image's content version (see rom.ImageVersionParam) are cacheable indefinitely, since a
+// changed image gets a new URL; unversioned requests must revalidate, which costs only a 304
+// when unchanged.
+func serveImage(c *gin.Context, image rom.Image, err error) {
 	if err != nil {
 		writeError(c, err)
 		return
 	}
-	contentType := imageContentType(content)
-	if contentType == "" {
+	defer image.Close()
+	head := make([]byte, 16)
+	read, _ := io.ReadFull(image, head)
+	contentType := imageContentType(head[:read])
+	if _, seekErr := image.Seek(0, io.SeekStart); contentType == "" || seekErr != nil {
 		writeError(c, fault.NotFound())
 		return
 	}
-	digest := sha256.Sum256(content)
-	contentHash := hex.EncodeToString(digest[:])
-	etag := `"` + contentHash + `"`
-	c.Header("ETag", etag)
-	if rom.ImageVersionMatches(c.Query(rom.ImageVersionParam), contentHash) {
-		c.Header("Cache-Control", "private, max-age=31536000, immutable")
+	header := c.Writer.Header()
+	header.Set("Content-Type", contentType)
+	if image.Version != "" {
+		header.Set("ETag", `"`+image.Version+`"`)
 	} else {
-		c.Header("Cache-Control", "private, no-cache")
+		header.Set("ETag", fmt.Sprintf(`W/"%x-%x"`, image.Size, image.ModifiedAt.UnixNano()))
 	}
-	if c.GetHeader("If-None-Match") == etag {
-		c.Status(http.StatusNotModified)
-		return
+	if image.Version != "" && rom.ImageVersionMatches(c.Query(rom.ImageVersionParam), image.Version) {
+		header.Set("Cache-Control", "private, max-age=31536000, immutable")
+	} else {
+		header.Set("Cache-Control", "private, no-cache")
 	}
-	c.Data(http.StatusOK, contentType, content)
+	serveFile(c, "", image.StoredContent)
 }
 
 func imageContentType(content []byte) string {

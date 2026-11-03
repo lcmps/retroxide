@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
@@ -31,6 +32,17 @@ game (
 )
 `
 
+const snesGenreDAT = `clrmamepro (
+	name "Nintendo - Super Nintendo Entertainment System"
+)
+
+game (
+	comment "Super Mario World (USA)"
+	genre "Platform"
+	rom ( crc B19ED489 )
+)
+`
+
 var (
 	png  = "\x89PNG\r\n\x1a\n" + strings.Repeat("p", 32)
 	jpeg = "\xff\xd8\xff\xe0" + strings.Repeat("j", 32)
@@ -40,7 +52,19 @@ type fakeUpstream struct {
 	server        *httptest.Server
 	hasheousDown  bool
 	datRequests   atomic.Int32
+	genreRequests atomic.Int32
+	// imageDelay, when set, holds every image response, so tests can see fetches overlap.
+	imageDelay    time.Duration
+	inFlight      atomic.Int32
+	maxInFlight   atomic.Int32
+	mu            sync.Mutex
 	requestedURLs []string
+}
+
+func (upstream *fakeUpstream) requested() []string {
+	upstream.mu.Lock()
+	defer upstream.mu.Unlock()
+	return append([]string(nil), upstream.requestedURLs...)
 }
 
 func newFakeUpstream(t *testing.T) *fakeUpstream {
@@ -48,7 +72,16 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 	upstream := &fakeUpstream{}
 	upstream.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		path := request.URL.EscapedPath()
+		upstream.mu.Lock()
 		upstream.requestedURLs = append(upstream.requestedURLs, path)
+		upstream.mu.Unlock()
+		if upstream.imageDelay > 0 && (strings.HasPrefix(path, "/thumbs/") || strings.HasPrefix(path, "/hasheous/api/v1/images/")) {
+			current := upstream.inFlight.Add(1)
+			defer upstream.inFlight.Add(-1)
+			for peak := upstream.maxInFlight.Load(); current > peak && !upstream.maxInFlight.CompareAndSwap(peak, current); peak = upstream.maxInFlight.Load() {
+			}
+			time.Sleep(upstream.imageDelay)
+		}
 		switch {
 		case strings.HasPrefix(path, "/hasheous/") && upstream.hasheousDown:
 			writer.WriteHeader(http.StatusServiceUnavailable)
@@ -60,6 +93,12 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 		case path == "/db/no-intro/Nintendo%20-%20Super%20Nintendo%20Entertainment%20System.dat":
 			upstream.datRequests.Add(1)
 			_, _ = writer.Write([]byte(snesDAT))
+		case path == "/db/genre/Nintendo%20-%20Super%20Nintendo%20Entertainment%20System.dat":
+			upstream.genreRequests.Add(1)
+			_, _ = writer.Write([]byte(snesGenreDAT))
+		case path == "/db/genre/Sony%20-%20PlayStation.dat":
+			upstream.genreRequests.Add(1)
+			writer.WriteHeader(http.StatusNotFound)
 		case strings.HasPrefix(path, "/thumbs/Nintendo_-_Super_Nintendo_Entertainment_System/master/"):
 			_, _ = writer.Write([]byte(png))
 		default:
@@ -87,7 +126,7 @@ func TestScrapeCombinesHasheousAndLibretro(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Source != SourceHasheous || result.Title != "Super Mario World" || result.Publisher != "Nintendo" ||
-		result.ReleaseYear != "1991" || result.Description != "Dinosaur Land." || result.Region != "USA" {
+		result.ReleaseYear != "1991" || result.Description != "Dinosaur Land." || result.Region != "USA" || result.Genre != "Platform" {
 		t.Fatalf("result = %+v", result)
 	}
 	if string(result.Cover) != jpeg {
@@ -96,7 +135,7 @@ func TestScrapeCombinesHasheousAndLibretro(t *testing.T) {
 	if string(result.TitleScreen) != png || string(result.Screenshot) != png {
 		t.Fatal("libretro title screen and screenshot missing")
 	}
-	for _, requested := range upstream.requestedURLs {
+	for _, requested := range upstream.requested() {
 		if strings.Contains(requested, "Named_Boxarts") {
 			t.Fatal("box art fetched although Hasheous supplied a cover")
 		}
@@ -121,11 +160,41 @@ func TestScrapeFallsBackToLibretroAndCachesDatabase(t *testing.T) {
 	}
 	wantImage := "/thumbs/Nintendo_-_Super_Nintendo_Entertainment_System/master/Named_Boxarts/Kirby%27s%20Dream%20Course_%20Special%20_%20Rev%201%20%28Europe%29.png"
 	found := false
-	for _, requested := range upstream.requestedURLs {
+	for _, requested := range upstream.requested() {
 		found = found || requested == wantImage
 	}
 	if !found {
-		t.Fatalf("expected sanitized thumbnail request %s in %v", wantImage, upstream.requestedURLs)
+		t.Fatalf("expected sanitized thumbnail request %s in %v", wantImage, upstream.requested())
+	}
+}
+
+func TestScrapeReadsGenreByCRCAndCachesMissingGenreDatabases(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.hasheousDown = true
+	client := upstream.client()
+	// The SNES genre database is keyed by CRC alone, so it adds a genre to a libretro match.
+	result, err := client.Scrape(context.Background(), rom.ScrapeQuery{Platform: "snes", SHA1: "6b47bb75d16514b6a476aa0c73a683a2a4c18765", CRC32: "b19ed489"})
+	if err != nil || result == nil || result.Genre != "Platform" {
+		t.Fatalf("Scrape() = %+v, %v; want genre Platform", result, err)
+	}
+	// Kirby is not in the genre database: no genre, and the match still succeeds.
+	result, err = client.Scrape(context.Background(), rom.ScrapeQuery{Platform: "snes", SHA1: "1111111111111111111111111111111111111111", CRC32: "11111111"})
+	if err != nil || result == nil || result.Genre != "" {
+		t.Fatalf("Scrape() = %+v, %v; want a match without genre", result, err)
+	}
+	if upstream.genreRequests.Load() != 1 {
+		t.Fatalf("genre database fetched %d times, want 1", upstream.genreRequests.Load())
+	}
+
+	// PlayStation has no genre database upstream; the miss is cached, not retried per scrape.
+	for range 2 {
+		index, err := client.datIndex(context.Background(), libretroSystems["psx"].genreDatabase(), true)
+		if err != nil || len(index.byCRC) != 0 {
+			t.Fatalf("missing genre database = %+v, %v; want an empty index", index, err)
+		}
+	}
+	if upstream.genreRequests.Load() != 2 {
+		t.Fatalf("genre databases fetched %d times, want 2", upstream.genreRequests.Load())
 	}
 }
 
@@ -182,7 +251,7 @@ func TestDatIndexSharesOneDownloadAcrossConcurrentLookups(t *testing.T) {
 		waiting.Add(1)
 		go func() {
 			defer waiting.Done()
-			index, err := client.datIndex(context.Background(), libretroSystems["snes"])
+			index, err := client.datIndex(context.Background(), libretroSystems["snes"].database, false)
 			if err == nil && index == nil {
 				err = errors.New("nil index")
 			}
@@ -191,7 +260,7 @@ func TestDatIndexSharesOneDownloadAcrossConcurrentLookups(t *testing.T) {
 	}
 
 	// Another system is not blocked behind the in-flight SNES download.
-	if _, err := client.datIndex(context.Background(), libretroSystems["gba"]); err != nil {
+	if _, err := client.datIndex(context.Background(), libretroSystems["gba"].database, false); err != nil {
 		t.Fatalf("independent system lookup failed: %v", err)
 	}
 	close(release)
@@ -221,5 +290,45 @@ func TestScrapeUsesTheHashMatchsPlatformWhenTheExtensionDidNotTell(t *testing.T)
 	// The libretro lookup ran for the reported platform, supplying region and artwork.
 	if result.Region != "USA" || len(result.TitleScreen) == 0 || upstream.datRequests.Load() != 1 {
 		t.Fatalf("region=%q title screen=%d bytes dat requests=%d", result.Region, len(result.TitleScreen), upstream.datRequests.Load())
+	}
+}
+
+func TestScrapeFetchesImagesConcurrently(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.imageDelay = 100 * time.Millisecond
+	// Hasheous supplies the cover; libretro the title screen and screenshot.
+	result, err := upstream.client().Scrape(context.Background(), rom.ScrapeQuery{
+		Platform: "snes", SHA1: "6b47bb75d16514b6a476aa0c73a683a2a4c18765", CRC32: "b19ed489",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Cover) != jpeg || string(result.TitleScreen) != png || string(result.Screenshot) != png {
+		t.Fatalf("images missing: %+v", result)
+	}
+	if peak := upstream.maxInFlight.Load(); peak != 3 {
+		t.Fatalf("at most %d image requests overlapped, want all 3", peak)
+	}
+}
+
+func TestScrapeFallsBackToBoxArtWhenTheHasheousCoverIsMissing(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	server := upstream.server
+	upstream.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/hasheous/api/v1/images/") {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		server.Config.Handler.ServeHTTP(writer, request)
+	}))
+	t.Cleanup(upstream.server.Close)
+	result, err := upstream.client().Scrape(context.Background(), rom.ScrapeQuery{
+		Platform: "snes", SHA1: "6b47bb75d16514b6a476aa0c73a683a2a4c18765", CRC32: "b19ed489",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Cover) != png {
+		t.Fatalf("cover = %q, want the libretro box art", result.Cover)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"mime/multipart"
@@ -211,9 +212,10 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"POST /api/v1/session", "DELETE /api/v1/session", "POST /api/v1/session/refresh",
 		"GET /api/v1/i18n/:locale",
 		"POST /api/v1/upload", "GET /api/v1/upload/:upload_id",
+		"POST /api/v1/upload/session", "GET /api/v1/upload/session/:session_id", "PATCH /api/v1/upload/session/:session_id", "DELETE /api/v1/upload/session/:session_id", "POST /api/v1/upload/session/:session_id/check",
 		"GET /api/v1/platforms", "GET /api/v1/platforms/catalog",
 		"GET /api/v1/rom", "GET /api/v1/rom/:rom_id", "PATCH /api/v1/rom/:rom_id", "DELETE /api/v1/rom/:rom_id",
-		"GET /api/v1/rom/:rom_id/cover", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
+		"GET /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/cover/thumb", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
 		"POST /api/v1/rom/:rom_id/download-link", "GET /api/v1/download",
 		"POST /api/v1/rom/:rom_id/scrape", "GET /api/v1/rom/:rom_id/media/:kind",
 		"GET /api/v1/library", "POST /api/v1/library", "GET /api/v1/library/:library_id",
@@ -336,6 +338,29 @@ func (uploads routerTestUploads) Create(_ context.Context, _ identity.Requester,
 	return uploadfeature.UploadAcceptedDTO{UploadID: "upl_1", Status: "processing"}, nil
 }
 
+func (routerTestUploads) CreateSession(context.Context, identity.Requester, uploadfeature.CreateSessionInput) (uploadfeature.SessionDTO, error) {
+	return uploadfeature.SessionDTO{SessionID: "ups_1"}, nil
+}
+
+func (routerTestUploads) SessionStatus(context.Context, identity.Requester, string) (uploadfeature.SessionDTO, error) {
+	return uploadfeature.SessionDTO{SessionID: "ups_1"}, nil
+}
+
+func (uploads routerTestUploads) AppendToSession(_ context.Context, _ identity.Requester, sessionID string, offset int64, content io.Reader) (uploadfeature.SessionDTO, error) {
+	data, err := io.ReadAll(content)
+	if err != nil {
+		return uploadfeature.SessionDTO{}, err
+	}
+	*uploads.received = fmt.Sprintf("%s@%d:%s", sessionID, offset, data)
+	return uploadfeature.SessionDTO{SessionID: sessionID, Received: offset + int64(len(data))}, nil
+}
+
+func (routerTestUploads) CancelSession(context.Context, identity.Requester, string) error { return nil }
+
+func (routerTestUploads) CheckSessionDuplicate(context.Context, identity.Requester, string, string) error {
+	return nil
+}
+
 func (routerTestUploads) Status(context.Context, identity.Requester, string) (uploadfeature.UploadStatusDTO, error) {
 	return uploadfeature.UploadStatusDTO{}, nil
 }
@@ -386,6 +411,47 @@ func TestRouterStreamsMultipartUploads(t *testing.T) {
 	if response, _ := send(16, "file", oversized); !strings.Contains(response.Body.String(), `"code":"upload_too_large"`) {
 		t.Fatalf("oversized upload = %d %s, want upload_too_large", response.Code, response.Body.String())
 	}
+
+	// A body cut off mid-file (the client disconnected) is rejected, not stored truncated.
+	var received string
+	router := NewRouter(Dependencies{Uploads: routerTestUploads{received: &received}, Authenticator: authenticated}, Options{MaxUploadBytes: 1024})
+	body, contentType := multipartUpload(t, "file", "game.sfc", strings.Repeat("r", 512))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/upload", bytes.NewReader(body.Bytes()[:body.Len()/2]))
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", "Bearer token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || received != "" {
+		t.Fatalf("cut-off upload = %d %s, service received %q; want 400", response.Code, response.Body.String(), received)
+	}
+}
+
+func TestRouterTakesSessionUploadPartsWithTheirOffset(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var received string
+	router := NewRouter(Dependencies{
+		Uploads:       routerTestUploads{received: &received},
+		Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: "user-1", Role: identity.RoleUser}},
+	}, Options{MaxUploadBytes: 1024})
+	send := func(offset string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPatch, "/api/v1/upload/session/ups_1", strings.NewReader("part"))
+		request.Header.Set("Authorization", "Bearer token")
+		request.Header.Set("Content-Type", "application/offset+octet-stream")
+		if offset != "" {
+			request.Header.Set("Upload-Offset", offset)
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	if response := send("8"); response.Code != http.StatusOK || received != "ups_1@8:part" || !strings.Contains(response.Body.String(), `"received":12`) {
+		t.Fatalf("part = %d %s, service received %q", response.Code, response.Body.String(), received)
+	}
+	for _, offset := range []string{"", "-1", "eight"} {
+		if response := send(offset); response.Code != http.StatusBadRequest {
+			t.Fatalf("Upload-Offset %q = %d, want 400", offset, response.Code)
+		}
+	}
 }
 
 func TestServeImageCachesVersionedURLsAndRevalidatesOthers(t *testing.T) {
@@ -400,7 +466,7 @@ func TestServeImageCachesVersionedURLsAndRevalidatesOthers(t *testing.T) {
 		if ifNoneMatch != "" {
 			c.Request.Header.Set("If-None-Match", ifNoneMatch)
 		}
-		serveImage(c, png, nil)
+		serveImage(c, rom.Image{StoredContent: memoryContent(png), Version: contentHash}, nil)
 		c.Writer.WriteHeaderNow()
 		return recorder
 	}
@@ -415,6 +481,23 @@ func TestServeImageCachesVersionedURLsAndRevalidatesOthers(t *testing.T) {
 	if unchanged := serve("/cover", `"`+contentHash+`"`); unchanged.Code != http.StatusNotModified || unchanged.Body.Len() != 0 {
 		t.Fatalf("revalidation = %d with %d body bytes, want empty 304", unchanged.Code, unchanged.Body.Len())
 	}
+	if versioned.Body.String() != string(png) || versioned.Header().Get("Content-Type") != "image/png" || versioned.Header().Get("ETag") != `"`+contentHash+`"` {
+		t.Fatalf("versioned body %q type %q etag %q", versioned.Body.String(), versioned.Header().Get("Content-Type"), versioned.Header().Get("ETag"))
+	}
+
+	// Content that is not an image is treated as missing.
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/cover", nil)
+	serveImage(c, rom.Image{StoredContent: memoryContent([]byte("plain text"))}, nil)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("non-image = %d, want 404", recorder.Code)
+	}
+}
+
+// memoryContent is stored content held in memory, for tests.
+func memoryContent(content []byte) rom.StoredContent {
+	return rom.StoredContent{ReadSeekCloser: nopSeekCloser{strings.NewReader(string(content))}, Size: int64(len(content)), ModifiedAt: time.Unix(1, 0)}
 }
 
 // linkTestROMs implements only what the download-link flow uses; other rom.API methods panic.

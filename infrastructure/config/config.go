@@ -38,6 +38,8 @@ type Config struct {
 	WorkerCount             int
 	// ScrapeWorkerCount workers fetch metadata for new ROMs, separately from WorkerCount.
 	ScrapeWorkerCount int
+	// MetricsToken, when set, serves Prometheus metrics at /metrics to requests bearing it.
+	MetricsToken string
 	// UIFont is the interface font: pixel, ubuntu, or system.
 	UIFont        string
 	AdminEmail    string
@@ -118,6 +120,10 @@ func Load(lookup Lookup) (Config, error) {
 			return Config{}, invalid("RETROXIDE_TRUSTED_PROXIES", fmt.Sprintf("%q is not an IP address or CIDR range", proxy))
 		}
 	}
+	metricsToken := strings.TrimSpace(get(lookup, MetricsTokenKey, ""))
+	if metricsToken != "" && len(metricsToken) < minMetricsTokenLength {
+		return Config{}, invalid(MetricsTokenKey, fmt.Sprintf("must be at least %d characters long", minMetricsTokenLength))
+	}
 	adminEmail, hasEmail := lookup("RETROXIDE_ADMIN_EMAIL")
 	adminPassword, hasPassword := lookup("RETROXIDE_ADMIN_PASSWORD")
 	if hasEmail != hasPassword {
@@ -136,10 +142,16 @@ func Load(lookup Lookup) (Config, error) {
 		AllowedUploadExtensions: extensions, JWTSecret: secret,
 		JWTAccessExpirySecs: accessExpiry, JWTRefreshExpirySecs: refreshExpiry,
 		CORSAllowedOrigins: origins, TrustedProxies: trustedProxies, WorkerCount: int(workerCount),
-		ScrapeWorkerCount: int(scrapeWorkerCount), UIFont: uiFont,
+		ScrapeWorkerCount: int(scrapeWorkerCount), UIFont: uiFont, MetricsToken: metricsToken,
 		AdminEmail: adminEmail, AdminPassword: adminPassword,
 	}, nil
 }
+
+// MetricsTokenKey configures the bearer token that unlocks /metrics.
+const MetricsTokenKey = "RETROXIDE_METRICS_TOKEN"
+
+// minMetricsTokenLength keeps the token from being guessed.
+const minMetricsTokenLength = 16
 
 func ListenAddress(lookup Lookup) (string, uint16, error) {
 	port, err := unsigned(lookup, "RETROXIDE_PORT", 3000, 16)

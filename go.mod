@@ -36,7 +36,6 @@ require (
 	go.mongodb.org/mongo-driver/v2 v2.9.2 // indirect
 	golang.org/x/arch v0.32.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	modernc.org/libc v1.80.0 // indirect
@@ -50,6 +49,8 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-sql-driver/mysql v1.10.1
 	golang.org/x/crypto v0.58.0
+	golang.org/x/image v0.33.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/time v0.16.0
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.31.2

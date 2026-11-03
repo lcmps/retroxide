@@ -97,6 +97,26 @@ END;`},
 	// 19: an optional sign-in username, unique case-insensitively (it is stored lowercase).
 	{19, "add_user_username", `ALTER TABLE user ADD COLUMN username TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_username ON user(username);`},
+	// 20: a scraped or edited genre, and indexes that let the library be read in title, release,
+	// publisher, or genre order one page at a time, for everyone or one uploader. Text sorts are
+	// case-insensitive, so SQLite indexes them with NOCASE, matching the listing's ORDER BY.
+	{20, "add_rom_genre_and_sort_indexes", `ALTER TABLE rom ADD COLUMN genre TEXT;
+CREATE INDEX IF NOT EXISTS idx_rom_sort_title ON rom(title COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_sort_release ON rom(release_year COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_sort_publisher ON rom(publisher COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_sort_genre ON rom(genre COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_title ON rom(uploader_id, title COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_release ON rom(uploader_id, release_year COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_publisher ON rom(uploader_id, publisher COLLATE NOCASE, id);
+CREATE INDEX IF NOT EXISTS idx_rom_uploader_sort_genre ON rom(uploader_id, genre COLLATE NOCASE, id);`},
+	// 21: a small copy of the cover for library grids, indexed like the other image paths so
+	// deleting a ROM can check whether another still references it.
+	{21, "add_rom_cover_thumbnail", `ALTER TABLE rom ADD COLUMN cover_thumb_path TEXT;
+CREATE INDEX IF NOT EXISTS idx_rom_cover_thumb_path ON rom(cover_thumb_path);`},
+	// 22: uploads sent in parts, which resume after a dropped connection. updated_at is in Unix
+	// seconds and indexed, so idle sessions are found without reading the table.
+	{22, "add_upload_sessions", `CREATE TABLE IF NOT EXISTS upload_session (id TEXT PRIMARY KEY, uploader_id TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT, size INTEGER NOT NULL, received INTEGER NOT NULL, hash_state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_upload_session_updated_at ON upload_session(updated_at);`},
 }
 
 var mysqlMigrations = []migration{
@@ -170,6 +190,20 @@ CREATE FULLTEXT INDEX ft_rom_search ON rom(title, platform);
 SET SESSION innodb_ft_enable_stopword = ON;`},
 	{19, "add_user_username", `ALTER TABLE user ADD COLUMN username VARCHAR(32) NULL;
 CREATE UNIQUE INDEX idx_user_username ON user(username);`},
+	// 20: see the SQLite migration; MySQL's column collations already compare case-insensitively.
+	{20, "add_rom_genre_and_sort_indexes", `ALTER TABLE rom ADD COLUMN genre VARCHAR(64) NULL;
+CREATE INDEX idx_rom_sort_title ON rom(title, id);
+CREATE INDEX idx_rom_sort_release ON rom(release_year, id);
+CREATE INDEX idx_rom_sort_publisher ON rom(publisher, id);
+CREATE INDEX idx_rom_sort_genre ON rom(genre, id);
+CREATE INDEX idx_rom_uploader_sort_title ON rom(uploader_id, title, id);
+CREATE INDEX idx_rom_uploader_sort_release ON rom(uploader_id, release_year, id);
+CREATE INDEX idx_rom_uploader_sort_publisher ON rom(uploader_id, publisher, id);
+CREATE INDEX idx_rom_uploader_sort_genre ON rom(uploader_id, genre, id);`},
+	{21, "add_rom_cover_thumbnail", `ALTER TABLE rom ADD COLUMN cover_thumb_path TEXT NULL;
+CREATE INDEX idx_rom_cover_thumb_path ON rom(cover_thumb_path(512));`},
+	{22, "add_upload_sessions", `CREATE TABLE IF NOT EXISTS upload_session (id VARCHAR(64) PRIMARY KEY, uploader_id VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, mime_type VARCHAR(255) NULL, size BIGINT UNSIGNED NOT NULL, received BIGINT UNSIGNED NOT NULL, hash_state BLOB NOT NULL, updated_at BIGINT NOT NULL);
+CREATE INDEX idx_upload_session_updated_at ON upload_session(updated_at);`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {
