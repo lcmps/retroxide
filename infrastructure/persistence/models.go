@@ -20,21 +20,61 @@ type UploadSessionModel struct {
 	Received   int64   `gorm:"column:received;not null"`
 	HashState  []byte  `gorm:"column:hash_state;not null"`
 	UpdatedAt  int64   `gorm:"column:updated_at;not null;autoUpdateTime:false"`
+	Part       bool    `gorm:"column:part;not null"`
 }
+
+type UploadPartModel struct {
+	ID          string `gorm:"column:id;primaryKey;size:64"`
+	UploaderID  string `gorm:"column:uploader_id;not null;size:64"`
+	Filename    string `gorm:"column:filename;not null;size:255"`
+	StoragePath string `gorm:"column:storage_path;not null;type:text"`
+	Size        int64  `gorm:"column:size;not null"`
+	SHA256      string `gorm:"column:sha256;not null;size:64"`
+	SHA1        string `gorm:"column:sha1;not null;size:40"`
+	MD5         string `gorm:"column:md5;not null;size:32"`
+	CRC32       string `gorm:"column:crc32;not null;size:8"`
+	CreatedAt   int64  `gorm:"column:created_at;not null;autoCreateTime:false"`
+}
+
+func (UploadPartModel) TableName() string { return "upload_part" }
 
 func (UploadSessionModel) TableName() string { return "upload_session" }
 
 type ROMFileModel struct {
-	ID          string `gorm:"column:id;primaryKey;size:67"`
-	SHA256      string `gorm:"column:sha256;not null;uniqueIndex;size:64"`
-	SHA1        string `gorm:"column:sha1;not null;size:40"`
-	MD5         string `gorm:"column:md5;not null;size:32"`
-	CRC32       string `gorm:"column:crc32;not null;default:00000000;size:8"`
-	Size        uint64 `gorm:"column:size;not null"`
-	StoragePath string `gorm:"column:storage_path;not null;type:text"`
+	ID                string  `gorm:"column:id;primaryKey;size:67"`
+	SHA256            string  `gorm:"column:sha256;not null;uniqueIndex;size:64"`
+	SHA1              string  `gorm:"column:sha1;not null;size:40"`
+	MD5               string  `gorm:"column:md5;not null;size:32"`
+	CRC32             string  `gorm:"column:crc32;not null;default:00000000;size:8"`
+	Size              uint64  `gorm:"column:size;not null"`
+	StoragePath       string  `gorm:"column:storage_path;not null;type:text"`
+	Format            string  `gorm:"column:format;not null;size:16"`
+	DiscIdentity      *string `gorm:"column:disc_identity;size:64"`
+	SheetPath         *string `gorm:"column:sheet_path;type:text"`
+	CompressRequested bool    `gorm:"column:compress_requested;not null"`
 }
 
 func (ROMFileModel) TableName() string { return "rom_file" }
+
+type DiscTrackModel struct {
+	ROMFileID    string  `gorm:"column:rom_file_id;primaryKey;size:67"`
+	Number       int     `gorm:"column:number;primaryKey"`
+	Mode         string  `gorm:"column:mode;not null;size:16"`
+	SectorBytes  int     `gorm:"column:sector_bytes;not null"`
+	Frames       int     `gorm:"column:frames;not null"`
+	Pregap       int     `gorm:"column:pregap;not null"`
+	PregapStored bool    `gorm:"column:pregap_stored;not null"`
+	Postgap      int     `gorm:"column:postgap;not null"`
+	Size         int64   `gorm:"column:size;not null"`
+	SHA256       string  `gorm:"column:sha256;not null;size:64"`
+	SHA1         string  `gorm:"column:sha1;not null;size:40"`
+	MD5          string  `gorm:"column:md5;not null;size:32"`
+	CRC32        string  `gorm:"column:crc32;not null;size:8"`
+	Filename     string  `gorm:"column:filename;not null;size:255"`
+	StoragePath  *string `gorm:"column:storage_path;type:text"`
+}
+
+func (DiscTrackModel) TableName() string { return "disc_track" }
 
 type ROMModel struct {
 	ID              string  `gorm:"column:id;primaryKey;size:64"`

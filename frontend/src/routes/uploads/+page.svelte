@@ -3,23 +3,37 @@
 	import ActionButton from '#lib/components/ActionButton.svelte';
 	import UploadForm from '#lib/components/uploads/UploadForm.svelte';
 	import UploadQueueItem from '#lib/components/uploads/UploadQueueItem.svelte';
-	import { uploadStatus } from '#lib/api/client.js';
+	import { getUploadOptions, uploadStatus } from '#lib/api/client.js';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
 	import { UploadQueue } from '#lib/uploads/queue.svelte.js';
 	import { serverApi, uploadResumable } from '#lib/uploads/resumable.js';
+	import { discApi, groupDiscs, uploadDisc } from '#lib/uploads/disc.js';
 
 	const t = useTranslate(i18n);
 	// Large files go in parts that survive a dropped connection and resume when added again.
 	const queue = new UploadQueue(
 		(file, onProgress, onReconnecting) => uploadResumable(file, serverApi, { onProgress, onReconnecting }),
-		uploadStatus
+		uploadStatus,
+		{ sendDisc: (disc, onProgress, onReconnecting) => uploadDisc(disc, discApi, { onProgress, onReconnecting }) }
 	);
+
+	/** Picked discs (a sheet and its track files) upload as one; other files on their own. */
+	async function addFiles(files: File[], compressDiscs: boolean): Promise<void> {
+		const { discs, others } = await groupDiscs(files);
+		queue.add(others);
+		for (const disc of discs) queue.addDisc({ ...disc, compress: compressDiscs });
+	}
+
+	let compression = $state<{ available: boolean; byDefault: boolean }>();
 
 	const hasFinished = $derived(queue.items.some((item) => item.finished));
 
 	onMount(() => {
 		void i18n.initialize();
+		getUploadOptions()
+			.then((options) => (compression = { available: options.disc_compression, byDefault: options.disc_compression_default }))
+			.catch(() => undefined);
 		return () => queue.stop();
 	});
 </script>
@@ -34,7 +48,7 @@
 		<h1 id="uploads-title">{t('uploads.heading', 'Uploads')}</h1>
 
 		<div class="upload-workspace stack">
-			<UploadForm onupload={(files) => queue.add(files)} />
+			<UploadForm onupload={(files, compressDiscs) => void addFiles(files, compressDiscs)} {compression} />
 
 			{#if queue.items.length > 0}
 				<ul class="upload-queue stack" aria-label={t('uploads.queue.label', 'Upload queue')}>

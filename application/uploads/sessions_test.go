@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/lcmps/retroxide/application/discs"
 	"io"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 
 type memorySessions struct {
 	sessions map[string]uploadsdomain.Session
+	parts    map[string]uploadsdomain.Part
 }
 
 func (repository *memorySessions) SaveUploadSession(_ context.Context, session uploadsdomain.Session) error {
@@ -55,6 +57,31 @@ func (repository *memorySessions) ListIdleUploadSessions(_ context.Context, befo
 		}
 	}
 	return ids, nil
+}
+
+func (repository *memorySessions) SaveUploadPart(_ context.Context, part uploadsdomain.Part) error {
+	if repository.parts == nil {
+		repository.parts = map[string]uploadsdomain.Part{}
+	}
+	repository.parts[part.ID] = part
+	return nil
+}
+
+func (repository *memorySessions) FindUploadParts(_ context.Context, uploaderID string, ids []string) ([]uploadsdomain.Part, error) {
+	var parts []uploadsdomain.Part
+	for _, id := range ids {
+		if part, ok := repository.parts[id]; ok && part.UploaderID == uploaderID {
+			parts = append(parts, part)
+		}
+	}
+	return parts, nil
+}
+
+func (repository *memorySessions) DeleteUploadParts(_ context.Context, ids []string) error {
+	for _, id := range ids {
+		delete(repository.parts, id)
+	}
+	return nil
 }
 
 type memoryPartials struct {
@@ -310,5 +337,89 @@ func TestSessionDuplicateCheckStopsUploadingKnownROMs(t *testing.T) {
 	}
 	if len(fixture.sessions.sessions) != 0 || len(fixture.partials.files) != 0 {
 		t.Fatal("the duplicate's session or partial file was kept")
+	}
+}
+
+// fakeAssembler records what AssembleDisc hands it.
+type fakeAssembler struct {
+	compress  bool
+	sheetName string
+	parts     []discs.Part
+	err       error
+}
+
+func (assembler *fakeAssembler) CanCompress() bool { return true }
+
+func (assembler *fakeAssembler) Assemble(_ context.Context, sheetName, _ string, parts []discs.Part, compress bool) (romdomain.ROMFile, error) {
+	assembler.sheetName, assembler.parts, assembler.compress = sheetName, parts, compress
+	if assembler.err != nil {
+		return romdomain.ROMFile{}, assembler.err
+	}
+	return romdomain.ROMFile{ID: "rf_disc", Format: romdomain.FormatTracks}, nil
+}
+
+func TestDiscFilesUploadAsPartsAndAssemble(t *testing.T) {
+	ctx := context.Background()
+	fixture := newSessionFixture(&testStorage{})
+	assembler := &fakeAssembler{}
+	woken := 0
+	fixture.service.WithDiscAssembly(assembler, func() { woken++ }, false)
+	if options := fixture.service.Options(); !options.DiscCompression || options.DiscCompressionDefault {
+		t.Fatalf("options = %+v, want compression offered, off by default", options)
+	}
+
+	var partIDs []string
+	for _, name := range []string{"Game (Track 1).bin", "Game (Track 2).raw"} {
+		session, err := fixture.service.CreateSession(ctx, player, CreateSessionInput{Filename: name, Size: 4, Part: true})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err) // .raw is not an allowed upload type, but parts are checked later
+		}
+		done, err := fixture.service.AppendToSession(ctx, player, session.SessionID, 0, strings.NewReader("data"))
+		if err != nil || done.PartID == "" || done.Upload != nil {
+			t.Fatalf("finished part = %+v, %v", done, err)
+		}
+		partIDs = append(partIDs, done.PartID)
+	}
+	if len(fixture.roms.saved) != 0 {
+		t.Fatal("a part was accepted as a ROM of its own")
+	}
+
+	// Parts belong to whoever uploaded them.
+	stranger := identity.Requester{UserID: "stranger", Role: identity.RoleUser}
+	if _, err := fixture.service.AssembleDisc(ctx, stranger, AssembleDiscInput{SheetName: "Game.cue", Sheet: "x", Parts: partIDs}); !fault.IsCode(err, fault.CodeValidation) {
+		t.Fatalf("assembling someone else's parts = %v, want validation error", err)
+	}
+	accepted, err := fixture.service.AssembleDisc(ctx, player, AssembleDiscInput{SheetName: "Game.cue", Sheet: "FILE ...", Parts: partIDs, Compress: true})
+	if err != nil || accepted.UploadID == "" {
+		t.Fatalf("AssembleDisc() = %+v, %v", accepted, err)
+	}
+	if assembler.sheetName != "Game.cue" || len(assembler.parts) != 2 || assembler.parts[0].Hash.SHA256 == "" {
+		t.Fatalf("assembler got %s with %+v", assembler.sheetName, assembler.parts)
+	}
+	if len(fixture.uploads.jobs) != 1 || fixture.uploads.jobs[0].ROMFileID != "rf_disc" || fixture.uploads.saved[0].OriginalFilename != "Game.cue" {
+		t.Fatalf("queued = %+v, saved = %+v", fixture.uploads.jobs, fixture.uploads.saved)
+	}
+	if !assembler.compress || woken != 1 || len(fixture.sessions.parts) != 0 {
+		t.Fatalf("woken %d times, %d parts left; want the compressor woken and the parts consumed", woken, len(fixture.sessions.parts))
+	}
+
+	// A disc already in the library consumes its parts and reports the duplicate.
+	session, _ := fixture.service.CreateSession(ctx, player, CreateSessionInput{Filename: "Again.bin", Size: 1, Part: true})
+	done, _ := fixture.service.AppendToSession(ctx, player, session.SessionID, 0, strings.NewReader("a"))
+	assembler.err = fault.ROMAlreadyExists("rf_disc", "identity")
+	if _, err := fixture.service.AssembleDisc(ctx, player, AssembleDiscInput{SheetName: "Again.cue", Sheet: "x", Parts: []string{done.PartID}}); !fault.IsCode(err, fault.CodeROMAlreadyExists) {
+		t.Fatalf("duplicate disc = %v", err)
+	}
+	if len(fixture.sessions.parts) != 0 {
+		t.Fatal("a duplicate disc's parts were kept")
+	}
+	for _, input := range []AssembleDiscInput{
+		{SheetName: "../x.cue", Sheet: "x", Parts: []string{"p"}},
+		{SheetName: "x.cue", Sheet: "", Parts: []string{"p"}},
+		{SheetName: "x.cue", Sheet: "x"},
+	} {
+		if _, err := fixture.service.AssembleDisc(ctx, player, input); !fault.IsCode(err, fault.CodeValidation) {
+			t.Errorf("AssembleDisc(%+v) = %v, want validation error", input, err)
+		}
 	}
 }

@@ -263,8 +263,17 @@ func romFileModel(romFile romdomain.ROMFile) ROMFileModel {
 	return ROMFileModel{
 		ID: romFile.ID, SHA256: romFile.Hash.SHA256, SHA1: romFile.Hash.SHA1,
 		MD5: romFile.Hash.MD5, CRC32: romFile.Hash.CRC32, Size: romFile.Size,
-		StoragePath: romFile.StoragePath,
+		StoragePath: romFile.StoragePath, Format: string(fileFormat(romFile.Format)), DiscIdentity: romFile.DiscIdentity,
+		SheetPath: romFile.SheetPath, CompressRequested: romFile.CompressRequested,
 	}
+}
+
+// fileFormat defaults an unset format: files are single files unless found to be discs.
+func fileFormat(format romdomain.FileFormat) romdomain.FileFormat {
+	if format == "" {
+		return romdomain.FormatFile
+	}
+	return format
 }
 
 func romFileEntity(model ROMFileModel) (romdomain.ROMFile, error) {
@@ -272,7 +281,11 @@ func romFileEntity(model ROMFileModel) (romdomain.ROMFile, error) {
 	if err != nil {
 		return romdomain.ROMFile{}, fault.Internal(fmt.Errorf("invalid persisted rom hash: %w", err))
 	}
-	return romdomain.ROMFile{ID: model.ID, Hash: hash, Size: model.Size, StoragePath: model.StoragePath}, nil
+	return romdomain.ROMFile{
+		ID: model.ID, Hash: hash, Size: model.Size, StoragePath: model.StoragePath,
+		Format: fileFormat(romdomain.FileFormat(model.Format)), DiscIdentity: model.DiscIdentity,
+		SheetPath: model.SheetPath, CompressRequested: model.CompressRequested,
+	}, nil
 }
 
 // ListPlatforms groups by the indexed, case-folded platform_key so values differing only in case

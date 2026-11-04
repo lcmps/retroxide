@@ -13,6 +13,8 @@ import (
 type Repository interface {
 	UpsertROMFile(context.Context, romdomain.ROMFile) (romdomain.ROMFile, error)
 	SaveROM(context.Context, romdomain.ROM) error
+	// FindDiscTracks returns a disc's tracks in order; none for other files.
+	FindDiscTracks(ctx context.Context, romFileID string) ([]romdomain.DiscTrack, error)
 	// SetCoverThumbnail records a ROM's cover thumbnail, unless its cover has changed since.
 	SetCoverThumbnail(ctx context.Context, romID, coverPath, thumbnailPath string) error
 	// ListROMsWithFiles returns up to limit ROMs ordered by ID that match filter.
@@ -99,6 +101,28 @@ type ListRequest struct {
 	Order string
 }
 
+// Discs writes discs in their download formats and compresses them.
+type Discs interface {
+	Archive(ctx context.Context, romFile romdomain.ROMFile, base string, out io.Writer) error
+	ISO(ctx context.Context, romFile romdomain.ROMFile, out io.Writer) error
+	RequestCompression(ctx context.Context, romFile romdomain.ROMFile) error
+	CanCompress() bool
+}
+
+// DownloadFormat names a way to download a ROM.
+type DownloadFormat string
+
+const (
+	// DownloadFile is the stored file as it is: a cartridge ROM, an ISO, a CHD.
+	DownloadFile DownloadFormat = "file"
+	// DownloadCHD is a disc's CHD image.
+	DownloadCHD DownloadFormat = "chd"
+	// DownloadTracks is a zip of a disc's CUE (or GDI) sheet and track files.
+	DownloadTracks DownloadFormat = "tracks"
+	// DownloadISO is a single-track data disc as an ISO image.
+	DownloadISO DownloadFormat = "iso"
+)
+
 // Thumbnailer makes the small cover copies library grids show.
 type Thumbnailer interface {
 	// Thumbnail returns a small copy of an image, or ErrThumbnailNotSmaller when the image is
@@ -159,8 +183,12 @@ type API interface {
 	Update(context.Context, identity.Requester, string, UpdateROMRequest) (ROMDetailDTO, error)
 	Delete(context.Context, identity.Requester, string) error
 	Download(context.Context, identity.Requester, string) (DownloadOutput, error)
+	// DownloadAs downloads a ROM in one of the formats its details list.
+	DownloadAs(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat) (DownloadOutput, error)
+	// RequestCompression asks for a disc kept as tracks to be compressed to CHD.
+	RequestCompression(context.Context, identity.Requester, string) (ROMDetailDTO, error)
 	// DownloadFilename returns the name an accessible ROM is downloaded as.
-	DownloadFilename(context.Context, identity.Requester, string) (string, error)
+	DownloadFilename(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat) (string, error)
 	UploadCover(context.Context, identity.Requester, string, []byte) (ROMDetailDTO, error)
 	OpenCover(context.Context, identity.Requester, string) (Image, error)
 	// OpenCoverThumbnail opens the small copy of the cover that library grids show.

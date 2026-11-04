@@ -31,6 +31,8 @@ type CreateSessionInput struct {
 	MIMEType *string `json:"mime_type,omitempty"`
 	// Size is the whole file's size in bytes.
 	Size int64 `json:"size"`
+	// Part marks one file of a disc, to be assembled with AssembleDisc.
+	Part bool `json:"part,omitempty"`
 }
 
 // SessionDTO is the progress of an upload sent in parts.
@@ -43,4 +45,23 @@ type SessionDTO struct {
 	MaxChunkSize int64 `json:"max_chunk_size"`
 	// Upload is set once every byte has arrived and the upload was accepted.
 	Upload *UploadAcceptedDTO `json:"upload,omitempty"`
+	// PartID is set once every byte of a disc's file (a part) has arrived.
+	PartID string `json:"part_id,omitempty"`
+}
+
+// AssembleDiscInput names a disc's sheet and the uploaded parts holding its files.
+type AssembleDiscInput struct {
+	SheetName string   `json:"sheet_name"`
+	Sheet     string   `json:"sheet"`
+	Parts     []string `json:"parts"`
+	// Compress asks for the disc to be compressed to CHD once stored.
+	Compress bool `json:"compress,omitempty"`
+}
+
+// UploadOptionsDTO is what the upload page can offer.
+type UploadOptionsDTO struct {
+	// DiscCompression says discs can be compressed to CHD (chdman is installed).
+	DiscCompression bool `json:"disc_compression"`
+	// DiscCompressionDefault is the initial choice for compressing uploaded discs.
+	DiscCompressionDefault bool `json:"disc_compression_default"`
 }

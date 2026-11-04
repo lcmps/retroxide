@@ -22,7 +22,9 @@ import type {
   SetupStatus,
   UploadAcceptedResponse,
   UploadStatusResponse,
-  UpdateRomRequest
+  UpdateRomRequest,
+  DownloadFormat,
+  UploadOptions
 } from './types';
 
 import { parseTranslationCatalog, type Locale, type TranslationCatalog } from '#lib/i18n/catalog.js';
@@ -575,15 +577,38 @@ export type UploadSession = {
   max_chunk_size: number;
   /** Set once every byte has arrived and the upload was accepted. */
   upload?: UploadAcceptedResponse;
+  /** Set once every byte of a disc's file has arrived. */
+  part_id?: string;
 };
 
-export function createUploadSession(file: File): Promise<UploadSession> {
+/** Starts an upload sent in parts; with part, the file is one of a disc's files. */
+export function createUploadSession(file: File, part = false): Promise<UploadSession> {
   return requestJson<UploadSession>('/upload/session', {
     method: 'POST',
     withAuth: true,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filename: file.name, size: file.size, mime_type: file.type || undefined })
+    body: JSON.stringify({ filename: file.name, size: file.size, mime_type: file.type || undefined, part: part || undefined })
   });
+}
+
+/** Stores a disc from its sheet and the uploaded parts holding its track files. */
+export function assembleDisc(sheetName: string, sheet: string, parts: string[], compress = false): Promise<UploadAcceptedResponse> {
+  return requestJson<unknown>('/upload/disc', {
+    method: 'POST',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sheet_name: sheetName, sheet, parts, compress: compress || undefined })
+  }).then(parseUploadAcceptedResponse);
+}
+
+/** What the upload page can offer, such as compressing discs to CHD. */
+export function getUploadOptions(): Promise<UploadOptions> {
+  return requestJson<UploadOptions>('/upload/options', { withAuth: true });
+}
+
+/** Asks for a disc kept as tracks to be compressed to CHD in the background. */
+export function requestCompression(romId: string): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/compress`, { method: 'POST', withAuth: true });
 }
 
 export function getUploadSession(sessionId: string): Promise<UploadSession> {
@@ -659,17 +684,21 @@ export function uploadStatus(uploadId: string): Promise<UploadStatusResponse> {
  * Requests a signed, short-lived download link. Opening it lets the browser stream the file to
  * disk with its own download UI, instead of buffering the whole ROM in page memory.
  */
-export async function createDownloadLink(romId: string): Promise<DownloadLink> {
+export async function createDownloadLink(romId: string, format?: DownloadFormat): Promise<DownloadLink> {
+  const query = format ? `?format=${format}` : '';
   const link = await requestJson<{ url: string; filename: string; expires_in: number }>(
-    `/rom/${encodeURIComponent(romId)}/download-link`,
+    `/rom/${encodeURIComponent(romId)}/download-link${query}`,
     { method: 'POST', withAuth: true }
   );
   return { url: resolveApiLink(link.url), filename: link.filename, expiresIn: link.expires_in };
 }
 
-/** Starts a native browser download of a ROM and returns the link it opened. */
-export async function downloadRom(romId: string): Promise<DownloadLink> {
-  const link = await createDownloadLink(romId);
+/**
+ * Starts a native browser download of a ROM, in one of the formats its details list (its
+ * first when omitted), and returns the link it opened.
+ */
+export async function downloadRom(romId: string, format?: DownloadFormat): Promise<DownloadLink> {
+  const link = await createDownloadLink(romId, format);
   const anchor = document.createElement('a');
   anchor.href = link.url;
   anchor.download = link.filename;

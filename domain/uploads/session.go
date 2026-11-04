@@ -14,6 +14,22 @@ type Session struct {
 	Received   int64
 	HashState  []byte
 	UpdatedAt  time.Time
+	// Part marks one file of a disc: once complete it is kept as a Part, not accepted as a ROM.
+	Part bool
+}
+
+// Part is a finished file of a disc upload, waiting for the disc to be assembled.
+type Part struct {
+	ID          string
+	UploaderID  string
+	Filename    string
+	StoragePath string
+	Size        int64
+	SHA256      string
+	SHA1        string
+	MD5         string
+	CRC32       string
+	CreatedAt   time.Time
 }
 
 // Complete reports whether every byte has arrived.
