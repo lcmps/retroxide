@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lcmps/retroxide/application/discs"
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/id"
 	"github.com/lcmps/retroxide/domain/identity"
@@ -27,6 +28,9 @@ type SessionRepository interface {
 	AdvanceUploadSession(ctx context.Context, session uploadsdomain.Session, received int64) (bool, error)
 	DeleteUploadSession(context.Context, string) error
 	ListIdleUploadSessions(ctx context.Context, before time.Time) ([]string, error)
+	SaveUploadPart(context.Context, uploadsdomain.Part) error
+	FindUploadParts(ctx context.Context, uploaderID string, ids []string) ([]uploadsdomain.Part, error)
+	DeleteUploadParts(ctx context.Context, ids []string) error
 }
 
 // PartialStorage holds uploads sent in parts until they are complete.
@@ -66,7 +70,8 @@ func (service *UploadService) CreateSession(ctx context.Context, requester ident
 	if err := ValidateFilename(input.Filename); err != nil {
 		return SessionDTO{}, err
 	}
-	if !service.isAllowedUploadType(input.Filename, input.MIMEType) {
+	// A disc's track files are checked against its sheet when the disc is assembled.
+	if !input.Part && !service.isAllowedUploadType(input.Filename, input.MIMEType) {
 		return SessionDTO{}, fault.UnsupportedUploadType("mime type or extension is not allowed")
 	}
 	if input.Size <= 0 {
@@ -95,7 +100,7 @@ func (service *UploadService) CreateSession(ctx context.Context, requester ident
 	}
 	session := uploadsdomain.Session{
 		ID: sessionID, UploaderID: requester.UserID, Filename: input.Filename, MIMEType: input.MIMEType,
-		Size: input.Size, HashState: state, UpdatedAt: time.Now(),
+		Size: input.Size, HashState: state, UpdatedAt: time.Now(), Part: input.Part,
 	}
 	if err := sessions.repository.SaveUploadSession(ctx, session); err != nil {
 		_ = sessions.partials.DiscardPartial(sessionID)
@@ -179,6 +184,9 @@ func (service *UploadService) finishSession(ctx context.Context, requester ident
 	if err != nil {
 		return SessionDTO{}, fault.Internal(fmt.Errorf("hashing upload: %w", err))
 	}
+	if session.Part {
+		return service.finishPart(ctx, sessions, session, hash)
+	}
 	accepted, stored, err := service.accept(ctx, requester, session.Filename, hash, session.Size, func(ctx context.Context, address string) (string, error) {
 		return sessions.partials.CommitPartial(ctx, session.ID, address)
 	})
@@ -232,6 +240,113 @@ func isSHA256(value string) bool {
 		}
 	}
 	return true
+}
+
+// finishPart stores a complete disc file as a part, for AssembleDisc to use.
+func (service *UploadService) finishPart(ctx context.Context, sessions *sessionSupport, session uploadsdomain.Session, hash romdomain.ROMHash) (SessionDTO, error) {
+	key, err := sessions.partials.CommitPartial(ctx, session.ID, hash.SHA256)
+	if err != nil {
+		return SessionDTO{}, err
+	}
+	partID, err := id.New("upp")
+	if err != nil {
+		return SessionDTO{}, fault.Internal(err)
+	}
+	part := uploadsdomain.Part{
+		ID: partID, UploaderID: session.UploaderID, Filename: session.Filename, StoragePath: key, Size: session.Size,
+		SHA256: hash.SHA256, SHA1: hash.SHA1, MD5: hash.MD5, CRC32: hash.CRC32, CreatedAt: time.Now(),
+	}
+	if err := sessions.repository.SaveUploadPart(ctx, part); err != nil {
+		return SessionDTO{}, err
+	}
+	sessions.end(context.WithoutCancel(ctx), session.ID)
+	dto := sessionDTO(session, nil)
+	dto.PartID = partID
+	return dto, nil
+}
+
+// DiscAssembler turns a disc's sheet and uploaded files into a stored disc.
+type DiscAssembler interface {
+	// Assemble stores the disc, asking for it to be compressed to CHD when compress is set.
+	Assemble(ctx context.Context, sheetName, sheetText string, parts []discs.Part, compress bool) (romdomain.ROMFile, error)
+	// CanCompress reports whether discs can be compressed to CHD (chdman is installed).
+	CanCompress() bool
+}
+
+// maxSheetBytes bounds a CUE sheet or GDI file; real ones are a few kilobytes.
+const maxSheetBytes = 64 << 10
+
+// WithDiscAssembly lets the service accept discs uploaded as a sheet and track files. wake, if
+// set, is called once a disc asked to be compressed is stored; compressByDefault is the
+// upload page's initial choice.
+func (service *UploadService) WithDiscAssembly(assembler DiscAssembler, wake func(), compressByDefault bool) *UploadService {
+	service.discs, service.wakeCompressor, service.compressByDefault = assembler, wake, compressByDefault
+	return service
+}
+
+// Options tells the upload page what it can offer.
+func (service *UploadService) Options() UploadOptionsDTO {
+	canCompress := service.discs != nil && service.discs.CanCompress()
+	return UploadOptionsDTO{
+		DiscCompression:        canCompress,
+		DiscCompressionDefault: canCompress && service.compressByDefault,
+	}
+}
+
+// AssembleDisc stores a disc from its sheet and the parts holding its track files, and queues
+// it like any upload. The parts are consumed, whatever the outcome but a passing failure.
+func (service *UploadService) AssembleDisc(ctx context.Context, requester identity.Requester, input AssembleDiscInput) (UploadAcceptedDTO, error) {
+	sessions, err := service.sessionSupport()
+	if err != nil {
+		return UploadAcceptedDTO{}, err
+	}
+	if service.discs == nil {
+		return UploadAcceptedDTO{}, fault.Internal(errors.New("disc uploads are not configured"))
+	}
+	if err := ValidateFilename(input.SheetName); err != nil {
+		return UploadAcceptedDTO{}, err
+	}
+	if len(input.Sheet) == 0 || len(input.Sheet) > maxSheetBytes {
+		return UploadAcceptedDTO{}, fault.Validation("the sheet must be between 1 byte and 64 KB")
+	}
+	if len(input.Parts) == 0 || len(input.Parts) > 99 {
+		return UploadAcceptedDTO{}, fault.Validation("a disc has between 1 and 99 track files")
+	}
+	parts, err := sessions.repository.FindUploadParts(ctx, requester.UserID, input.Parts)
+	if err != nil {
+		return UploadAcceptedDTO{}, err
+	}
+	if len(parts) != len(input.Parts) {
+		return UploadAcceptedDTO{}, fault.Validation("some of the disc's files are missing or expired; upload them again")
+	}
+	discParts := make([]discs.Part, len(parts))
+	for index, part := range parts {
+		hash, err := romdomain.NewROMHash(part.SHA256, part.SHA1, part.MD5, part.CRC32)
+		if err != nil {
+			return UploadAcceptedDTO{}, fault.Internal(err)
+		}
+		discParts[index] = discs.Part{Name: part.Filename, StoragePath: part.StoragePath, Size: part.Size, Hash: hash}
+	}
+	romFile, err := service.discs.Assemble(ctx, input.SheetName, input.Sheet, discParts, input.Compress)
+	if err != nil {
+		if fault.IsCode(err, fault.CodeROMAlreadyExists) || fault.IsCode(err, fault.CodeValidation) {
+			// Nothing a retry with the same files could fix.
+			_ = sessions.repository.DeleteUploadParts(context.WithoutCancel(ctx), input.Parts)
+			if service.audit != nil && fault.IsCode(err, fault.CodeROMAlreadyExists) {
+				service.audit.DuplicateUpload(ctx, "", "")
+			}
+		}
+		return UploadAcceptedDTO{}, err
+	}
+	accepted, err := service.record(ctx, requester, input.SheetName, romFile)
+	if err != nil {
+		return UploadAcceptedDTO{}, err
+	}
+	_ = sessions.repository.DeleteUploadParts(context.WithoutCancel(ctx), input.Parts)
+	if input.Compress && service.wakeCompressor != nil {
+		service.wakeCompressor()
+	}
+	return accepted, nil
 }
 
 // CancelSession abandons an upload sent in parts and frees its space.
@@ -320,5 +435,8 @@ func (sessions *sessionSupport) end(ctx context.Context, sessionID string) {
 }
 
 func sessionDTO(session uploadsdomain.Session, accepted *UploadAcceptedDTO) SessionDTO {
+	if session.Part {
+		accepted = nil
+	}
 	return SessionDTO{SessionID: session.ID, Size: session.Size, Received: session.Received, MaxChunkSize: MaxChunkBytes, Upload: accepted}
 }

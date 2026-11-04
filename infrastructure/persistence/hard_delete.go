@@ -60,7 +60,15 @@ func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID strin
 		if err := tx.Delete(&rom).Error; err != nil {
 			return err
 		}
+		var trackPaths []string
 		if remaining == 0 {
+			// A disc's tracks go with its file, along with any track files stored separately.
+			if err := tx.Model(&DiscTrackModel{}).Where("rom_file_id = ? AND storage_path IS NOT NULL", file.ID).Pluck("storage_path", &trackPaths).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("rom_file_id = ?", file.ID).Delete(&DiscTrackModel{}).Error; err != nil {
+				return err
+			}
 			if err := tx.Delete(&file).Error; err != nil {
 				return err
 			}
@@ -73,6 +81,10 @@ func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID strin
 		}
 		if remaining == 0 {
 			paths = append(paths, file.StoragePath)
+			paths = append(paths, trackPaths...)
+			if file.SheetPath != nil {
+				paths = append(paths, *file.SheetPath)
+			}
 		}
 		seen := make(map[string]bool)
 		for _, path := range paths {
@@ -87,8 +99,13 @@ func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID strin
 			if references != 0 {
 				continue
 			}
-			if err := tx.Model(&ROMFileModel{}).Where("storage_path = ?", path).Count(&references).Error; err != nil {
+			if err := tx.Model(&ROMFileModel{}).Where("storage_path = ? OR sheet_path = ?", path, path).Count(&references).Error; err != nil {
 				return err
+			}
+			if references == 0 {
+				if err := tx.Model(&DiscTrackModel{}).Where("storage_path = ?", path).Count(&references).Error; err != nil {
+					return err
+				}
 			}
 			if references == 0 {
 				orphanPaths = append(orphanPaths, path)

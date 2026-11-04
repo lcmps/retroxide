@@ -73,6 +73,45 @@ export type RomDetail = {
   title_screen_url?: string | null;
   screenshot_url?: string | null;
   hash: RomHash;
+  /** A CD or GD-ROM image's storage and tracks. */
+  disc?: RomDisc | null;
+  /** The formats the ROM downloads in, the one it was uploaded in first. */
+  downloads?: DownloadOption[];
+};
+
+export type DownloadFormat = 'file' | 'chd' | 'tracks' | 'iso';
+
+export type DownloadOption = {
+  format: DownloadFormat;
+  /** The downloaded file's extension, such as .chd, .iso, .zip, or .sfc. */
+  extension: string;
+  /** What a .zip of tracks holds: cue or gdi. */
+  sheet?: 'cue' | 'gdi';
+};
+
+export type UploadOptions = {
+  /** Whether discs can be compressed to CHD (chdman is installed). */
+  disc_compression: boolean;
+  disc_compression_default: boolean;
+};
+
+export type RomDisc = {
+  /** chd for a CHD image; tracks for a sheet with its track files. */
+  format: 'chd' | 'tracks';
+  tracks: RomDiscTrack[];
+  /** Whether the disc can be compressed to CHD now. */
+  can_compress: boolean;
+  /** Whether the disc is waiting to be, or being, compressed. */
+  compression_requested: boolean;
+};
+
+export type RomDiscTrack = {
+  number: number;
+  mode: string;
+  size: number;
+  sha1: string;
+  md5: string;
+  crc32: string;
 };
 
 /**

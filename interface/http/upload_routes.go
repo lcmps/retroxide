@@ -40,6 +40,18 @@ func registerUploadRoutes(api *gin.RouterGroup, service uploads.Service, maxByte
 	group.PATCH("/session/:session_id", handler.appendToSession)
 	group.DELETE("/session/:session_id", handler.cancelSession)
 	group.POST("/session/:session_id/check", handler.checkSessionDuplicate)
+	// A disc uploaded as its sheet and track files (each uploaded as a part).
+	group.POST("/disc", handler.assembleDisc)
+	group.GET("/options", func(c *gin.Context) { c.JSON(http.StatusOK, handler.uploads.Options()) })
+}
+
+func (handler uploadHandler) assembleDisc(c *gin.Context) {
+	var input uploads.AssembleDiscInput
+	if !bindJSON(c, &input) {
+		return
+	}
+	accepted, err := handler.uploads.AssembleDisc(c.Request.Context(), requesterFromContext(c), input)
+	respondJSON(c, http.StatusAccepted, accepted, err)
 }
 
 // checkSessionDuplicate takes the file's SHA-256, computed by the client while it uploads.

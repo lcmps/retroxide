@@ -75,8 +75,17 @@ type ROM struct {
 }
 
 type ROMFile struct {
-	ID          string
+	ID string
+	// Hash and Size describe the stored file: the CHD for a CHD image. For a disc kept as
+	// separate tracks they describe its manifest, and the tracks carry their own hashes.
 	Hash        ROMHash
 	Size        uint64
 	StoragePath string
+	Format      FileFormat
+	// DiscIdentity fingerprints a disc's tracks (see DiscIdentity); nil for other files.
+	DiscIdentity *string
+	// SheetPath keeps the CUE or GDI sheet a disc was uploaded with, also once compressed.
+	SheetPath *string
+	// CompressRequested asks for a disc kept as tracks to be compressed to CHD.
+	CompressRequested bool
 }

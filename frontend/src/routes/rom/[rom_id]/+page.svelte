@@ -8,6 +8,9 @@
   import { platforms } from '#lib/platforms/catalog.svelte.js';
   import { tick } from 'svelte';
   import { deleteRom, downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '#lib';
+  import DiscTracks from '#lib/components/rom/DiscTracks.svelte';
+  import { requestCompression } from '#lib/api/client.js';
+  import type { DownloadFormat, DownloadOption } from '#lib/api/types.js';
   import { ApiClientError } from '#lib/api/errors.js';
   import { getErrorMessage } from '#lib/helpers/error.js';
   import { useTranslate } from '#lib/i18n/helpers.js';
@@ -69,7 +72,72 @@
     if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl);
   });
 
-  async function downloadCurrentRom(): Promise<void> {
+  /** The formats this ROM downloads in, the one it was uploaded in first. */
+  const downloads = $derived<DownloadOption[]>(rom?.downloads?.length ? rom.downloads : [{ format: 'file', extension: '' }]);
+  let downloadFormat = $state<DownloadFormat>('file');
+  let compressing = $state(false);
+  let compressionPoll: ReturnType<typeof setTimeout> | undefined;
+
+  // Start on the first format whenever the ROM, and so its formats, change.
+  $effect(() => {
+    if (!downloads.some((option) => option.format === downloadFormat)) downloadFormat = downloads[0].format;
+  });
+
+  function formatLabel(option: DownloadOption): string {
+    switch (option.format) {
+      case 'chd':
+        return t('rom.download.chd', 'CHD (.chd)');
+      case 'iso':
+        return t('rom.download.iso', 'ISO (.iso)');
+      case 'tracks':
+        return option.sheet === 'gdi' ? t('rom.download.gdi', 'GDI and tracks (.zip)') : t('rom.download.cue', 'CUE/BIN (.zip)');
+      default:
+        return t('rom.download.file', 'Original ({extension})', { extension: option.extension });
+    }
+  }
+
+  /** While a disc is being compressed, refresh until it is done, so the page shows the result. */
+  function watchCompression(): void {
+    clearTimeout(compressionPoll);
+    if (!rom?.disc?.compression_requested) return;
+    compressionPoll = setTimeout(async () => {
+      if (!rom) return;
+      try {
+        const updated = await getRom(rom.rom_id);
+        const finished = !updated.disc?.compression_requested;
+        rom = updated;
+        if (finished) {
+          message = updated.disc?.format === 'chd'
+            ? t('rom.messages.compressed', 'Compressed to CHD.')
+            : t('rom.messages.compressFailed', 'The disc could not be compressed; it is kept as it was.');
+        }
+      } catch {
+        // Try again on the next round.
+      }
+      watchCompression();
+    }, 3000);
+  }
+
+  $effect(() => {
+    if (rom?.disc?.compression_requested) watchCompression();
+    return () => clearTimeout(compressionPoll);
+  });
+
+  async function compressCurrentRom(): Promise<void> {
+    if (!rom) return;
+    compressing = true;
+    message = '';
+    try {
+      rom = await requestCompression(rom.rom_id);
+      message = t('rom.messages.compressQueued', 'Compressing to CHD in the background.');
+    } catch (error) {
+      message = getErrorMessage(error, 'rom.errors.compress', 'Failed to start compressing the disc', t);
+    } finally {
+      compressing = false;
+    }
+  }
+
+  async function downloadCurrentRom(format?: DownloadFormat): Promise<void> {
     if (!rom) {
       return;
     }
@@ -78,7 +146,7 @@
     message = '';
     try {
       // The browser streams the file to disk through a signed link.
-      await downloadRom(rom.rom_id);
+      await downloadRom(rom.rom_id, format);
     } catch (error) {
       message = getErrorMessage(error, 'common.errors.download', 'Failed to download ROM', t);
     } finally {
@@ -158,9 +226,26 @@
   {:else if rom}
     <article class="rom-card">
       <div class="rom-actions" role="group" aria-label={t('rom.actions.label', 'ROM actions')}>
-        <ActionButton type="button" onclick={downloadCurrentRom} disabled={downloading || deleting} aria-busy={downloading} title={t('rom.actions.downloadHint', 'Save this ROM to your device')}>
-          {downloading ? t('common.status.downloading', 'Downloading...') : t('rom.actions.download', 'Download')}
-        </ActionButton>
+        <div class="rom-download">
+          {#if downloads.length > 1}
+            <label class="rom-download__format">
+              <span class="visually-hidden">{t('rom.download.format', 'Download format')}</span>
+              <select bind:value={downloadFormat} disabled={downloading || deleting} title={t('rom.download.format', 'Download format')}>
+                {#each downloads as option (option.format)}
+                  <option value={option.format}>{formatLabel(option)}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+          <ActionButton type="button" onclick={() => downloadCurrentRom(downloadFormat)} disabled={downloading || deleting} aria-busy={downloading} title={t('rom.actions.downloadHint', 'Save this ROM to your device')}>
+            {downloading ? t('common.status.downloading', 'Downloading...') : t('rom.actions.download', 'Download')}
+          </ActionButton>
+        </div>
+        {#if rom.disc?.can_compress || rom.disc?.compression_requested}
+          <ActionButton type="button" onclick={compressCurrentRom} disabled={compressing || deleting || rom.disc.compression_requested} aria-busy={rom.disc.compression_requested} title={t('rom.actions.compressHint', 'Compress the disc to CHD in the background; its uploaded files can still be downloaded exactly as they are')}>
+            {rom.disc.compression_requested ? t('rom.actions.compressing', 'Compressing to CHD...') : t('rom.actions.compress', 'Compress to CHD')}
+          </ActionButton>
+        {/if}
         <ActionButton type="button" onclick={scrapeCurrentRom} disabled={scraping || deleting} aria-busy={scraping} title={t('rom.actions.scrapeHint', 'Fetch the title, details, and artwork from online game databases')}>
           {scraping ? t('rom.actions.scraping', 'Scraping...') : t('rom.actions.scrape', 'Scrape')}
         </ActionButton>
@@ -218,6 +303,7 @@
             {/each}
           </dl>
           {#if rom.description}<p class="rom-description">{rom.description}</p>{/if}
+          {#if rom.disc}<DiscTracks disc={rom.disc} />{/if}
         {/if}
       </div>
     </article>
@@ -231,6 +317,39 @@
 </section>
 
 <style>
+  .rom-download {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: stretch;
+  }
+
+  .rom-download__format select {
+    height: 100%;
+    min-height: 2.4rem;
+    padding: 0.4rem 0.6rem;
+    border: 2px solid var(--pixel-border-strong);
+    border-radius: 0.4rem;
+    background: var(--pixel-panel);
+    color: var(--pixel-text);
+    font: inherit;
+    font-size: 0.55rem;
+  }
+
+  .rom-download__format select:focus-visible {
+    outline: 2px solid var(--pixel-focus);
+    outline-offset: 2px;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
   :global(.rom-delete-overlay) { position: fixed; inset: 0; z-index: 50; background: rgb(0 0 0 / 75%); }
   :global(.rom-delete-dialog) { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); z-index: 51; width: min(32rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow-y: auto; padding: 1.5rem; border-radius: 0.4rem; background: var(--pixel-panel); color: var(--pixel-text); }
   :global(.rom-delete-title) { margin: 0; font-size: 0.85rem; line-height: 1.6; }

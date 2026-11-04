@@ -72,7 +72,8 @@ func TestMySQLMigrationAndAtomicRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	platform := "snes"
-	romRows, err := repositories.ListROMsWithFiles(ctx, 10, rom.ROMFilter{Platform: &platform})
+	// Scoped to this run's uploader: the shared test database keeps ROMs from earlier runs.
+	romRows, err := repositories.ListROMsWithFiles(ctx, 10, rom.ROMFilter{Platform: &platform, UploaderID: &userID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,10 +176,11 @@ func TestMySQLROMFileIdentifierUpgrade(t *testing.T) {
 	}
 	repositories := NewRepositories(db)
 	legacy := validROMFile("legacy-file", "legacy content")
-	if _, err := repositories.UpsertROMFile(context.Background(), legacy); err != nil {
+	// Inserted directly: the repository writes columns that later migrations add.
+	if err := db.Exec("INSERT INTO rom_file (id, sha256, sha1, md5, size, storage_path) VALUES (?, ?, ?, ?, ?, ?)",
+		legacy.ID, legacy.Hash.SHA256, legacy.Hash.SHA1, legacy.Hash.MD5, legacy.Size, legacy.StoragePath).Error; err != nil {
 		t.Fatal(err)
 	}
-	// Inserted directly: the repository writes columns that later migrations add.
 	if err := db.Exec("INSERT INTO rom (id, rom_file_id, uploader_id, title, platform, identified_by, confidence) VALUES ('legacy-rom', ?, 'system', 'Legacy', 'snes', '', 0)", legacy.ID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -285,6 +287,7 @@ func TestMySQLUploadSessionsAndStoragePaths(t *testing.T) {
 	defer sqlDB.Close()
 	repositories := NewRepositories(db)
 	exerciseUploadSessions(t, ctx, repositories, fmt.Sprintf("ups_%x", time.Now().UnixNano()))
+	exerciseDiscs(t, ctx, repositories, fmt.Sprintf("my%x", time.Now().UnixNano()))
 	if counts, err := repositories.CountForMetrics(ctx); err != nil || counts.ROMFiles < 0 || counts.JobsQueued == nil {
 		t.Fatalf("CountForMetrics() = %+v, %v", counts, err)
 	}

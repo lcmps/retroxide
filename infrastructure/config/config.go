@@ -40,6 +40,11 @@ type Config struct {
 	ScrapeWorkerCount int
 	// MetricsToken, when set, serves Prometheus metrics at /metrics to requests bearing it.
 	MetricsToken string
+	// ChdmanPath locates MAME's chdman (a path, or a name looked up in PATH; default chdman).
+	ChdmanPath string
+	// CompressDiscs is the initial choice, on the upload page, to compress discs uploaded as
+	// CUE/BIN or GDI to CHD.
+	CompressDiscs bool
 	// UIFont is the interface font: pixel, ubuntu, or system.
 	UIFont        string
 	AdminEmail    string
@@ -124,6 +129,10 @@ func Load(lookup Lookup) (Config, error) {
 	if metricsToken != "" && len(metricsToken) < minMetricsTokenLength {
 		return Config{}, invalid(MetricsTokenKey, fmt.Sprintf("must be at least %d characters long", minMetricsTokenLength))
 	}
+	compressDiscs, err := boolean(lookup, CompressDiscsKey, false)
+	if err != nil {
+		return Config{}, err
+	}
 	adminEmail, hasEmail := lookup("RETROXIDE_ADMIN_EMAIL")
 	adminPassword, hasPassword := lookup("RETROXIDE_ADMIN_PASSWORD")
 	if hasEmail != hasPassword {
@@ -143,8 +152,28 @@ func Load(lookup Lookup) (Config, error) {
 		JWTAccessExpirySecs: accessExpiry, JWTRefreshExpirySecs: refreshExpiry,
 		CORSAllowedOrigins: origins, TrustedProxies: trustedProxies, WorkerCount: int(workerCount),
 		ScrapeWorkerCount: int(scrapeWorkerCount), UIFont: uiFont, MetricsToken: metricsToken,
+		ChdmanPath: strings.TrimSpace(get(lookup, ChdmanPathKey, "")), CompressDiscs: compressDiscs,
 		AdminEmail: adminEmail, AdminPassword: adminPassword,
 	}, nil
+}
+
+// Keys of the disc settings.
+const (
+	ChdmanPathKey    = "RETROXIDE_CHDMAN_PATH"
+	CompressDiscsKey = "RETROXIDE_COMPRESS_DISCS"
+)
+
+// boolean reads a true/false setting.
+func boolean(lookup Lookup, key string, fallback bool) (bool, error) {
+	raw, ok := lookup(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return false, invalid(key, "must be true or false")
+	}
+	return value, nil
 }
 
 // MetricsTokenKey configures the bearer token that unlocks /metrics.

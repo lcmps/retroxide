@@ -65,14 +65,17 @@ type UploadPolicy struct {
 }
 
 type UploadService struct {
-	romRepository    uploadROMRepository
-	uploadRepository uploadRecordRepository
-	storage          uploadStorage
-	hasher           uploadHasher
-	workers          workerWaker
-	audit            uploadAudit
-	policy           UploadPolicy
-	sessions         *sessionSupport
+	romRepository     uploadROMRepository
+	uploadRepository  uploadRecordRepository
+	storage           uploadStorage
+	hasher            uploadHasher
+	workers           workerWaker
+	audit             uploadAudit
+	policy            UploadPolicy
+	sessions          *sessionSupport
+	discs             DiscAssembler
+	wakeCompressor    func()
+	compressByDefault bool
 }
 
 func NewUploadService(
@@ -196,11 +199,19 @@ func (service *UploadService) accept(
 		removeStoredContent()
 		return UploadAcceptedDTO{}, true, err
 	}
-
-	uploadID, err := id.New("upl")
+	accepted, err = service.record(ctx, requester, filename, savedROMFile)
 	if err != nil {
 		removeStoredContent()
-		return UploadAcceptedDTO{}, true, fault.Internal(fmt.Errorf("generating upload id: %w", err))
+		return UploadAcceptedDTO{}, true, err
+	}
+	return accepted, true, nil
+}
+
+// record saves the upload of a stored ROM file and queues its identification.
+func (service *UploadService) record(ctx context.Context, requester identity.Requester, filename string, romFile romdomain.ROMFile) (UploadAcceptedDTO, error) {
+	uploadID, err := id.New("upl")
+	if err != nil {
+		return UploadAcceptedDTO{}, fault.Internal(fmt.Errorf("generating upload id: %w", err))
 	}
 	upload := uploadsdomain.Upload{
 		ID:               uploadID,
@@ -211,19 +222,17 @@ func (service *UploadService) accept(
 	if err := service.uploadRepository.SaveUploadWithJob(ctx, upload, jobsdomain.Payload{
 		Kind:      jobsdomain.KindIdentifyROM,
 		UploadID:  uploadID,
-		ROMFileID: savedROMFile.ID,
+		ROMFileID: romFile.ID,
 	}); err != nil {
-		removeStoredContent()
-		return UploadAcceptedDTO{}, true, err
+		return UploadAcceptedDTO{}, err
 	}
 	if service.workers != nil {
 		service.workers.Notify()
 	}
-
 	if service.audit != nil {
-		service.audit.UploadAccepted(ctx, uploadID, savedROMFile.ID, savedROMFile.Hash.SHA256, savedROMFile.Size)
+		service.audit.UploadAccepted(ctx, uploadID, romFile.ID, romFile.Hash.SHA256, romFile.Size)
 	}
-	return UploadAcceptedDTO{UploadID: uploadID, Status: string(uploadsdomain.UploadStatusProcessing)}, true, nil
+	return UploadAcceptedDTO{UploadID: uploadID, Status: string(uploadsdomain.UploadStatusProcessing)}, nil
 }
 
 func (service *UploadService) Status(ctx context.Context, requester identity.Requester, uploadID string) (UploadStatusDTO, error) {

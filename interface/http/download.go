@@ -2,6 +2,7 @@ package http
 
 import (
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -24,7 +25,29 @@ func writeDownload(c *gin.Context, output rom.DownloadOutput) int64 {
 	header.Set("Cache-Control", "private, max-age=0, must-revalidate")
 	header.Set("Content-Disposition", attachmentDisposition(output.Filename))
 	header.Set("Content-Type", output.MIMEType)
+	if output.Archive != nil {
+		return writeArchive(c, output)
+	}
 	return serveFile(c, output.Filename, output.Content)
+}
+
+// writeArchive streams a download built as it is sent (a disc's zip), which has no length and
+// no byte ranges. An error midway leaves a truncated download the client sees as failed.
+func writeArchive(c *gin.Context, output rom.DownloadOutput) int64 {
+	header := c.Writer.Header()
+	header.Del("ETag")
+	header.Set("Cache-Control", "no-store")
+	header.Set("Accept-Ranges", "none")
+	if c.Request.Method == http.MethodHead {
+		c.Status(http.StatusOK)
+		return 0
+	}
+	c.Status(http.StatusOK)
+	writer := &fileResponseWriter{ResponseWriter: c.Writer}
+	if err := output.Archive(writer); err != nil {
+		slog.ErrorContext(c.Request.Context(), "disc download failed midway", "error", err)
+	}
+	return writer.sent
 }
 
 // serveFile serves stored content through http.ServeContent and returns the body bytes sent.

@@ -13,6 +13,9 @@
 
 <li class="queue-item stack">
 	<p class="file-name" title={item.file.name}>{item.file.name}</p>
+	{#if item.disc}
+		<p class="muted">{t('uploads.disc.tracks', 'Disc with {count} track files', { count: item.disc.tracks.length })}</p>
+	{/if}
 
 	{#if item.phase === 'queued'}
 		<p class="muted">{t('uploads.queue.waiting', 'Waiting to upload...')}</p>
@@ -21,6 +24,10 @@
 		{#if item.reconnecting}
 			<p class="muted" role="status">{t('uploads.queue.reconnecting', 'Connection lost. Retrying where the upload stopped...')}</p>
 		{/if}
+	{:else if item.phase === 'rejected' && item.disc && item.disc.missing.length > 0}
+		<p class="message message--error" role="alert">
+			{t('uploads.disc.missing', 'Pick these files too, then add the sheet again: {files}', { files: item.disc.missing.join(', ') })}
+		</p>
 	{:else if item.phase === 'rejected'}
 		<p class="message message--error" role="alert">
 			{getErrorMessage(item.error, 'common.errors.upload', 'Failed to upload ROM', t)}
