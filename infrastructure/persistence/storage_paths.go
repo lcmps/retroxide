@@ -10,10 +10,13 @@ import (
 // storagePathColumns are the columns that hold storage keys, as table and column.
 var storagePathColumns = [][2]string{
 	{"rom_file", "storage_path"},
+	{"rom_file", "sheet_path"},
 	{"rom", "cover_art_path"},
 	{"rom", "cover_thumb_path"},
 	{"rom", "title_screen_path"},
 	{"rom", "screenshot_path"},
+	{"disc_track", "storage_path"},
+	{"upload_part", "storage_path"},
 }
 
 // notAKey matches values that are not storage keys ("ab/" and a 64-digit address, 67

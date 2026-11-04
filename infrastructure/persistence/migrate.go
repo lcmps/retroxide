@@ -117,6 +117,28 @@ CREATE INDEX IF NOT EXISTS idx_rom_cover_thumb_path ON rom(cover_thumb_path);`},
 	// seconds and indexed, so idle sessions are found without reading the table.
 	{22, "add_upload_sessions", `CREATE TABLE IF NOT EXISTS upload_session (id TEXT PRIMARY KEY, uploader_id TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT, size INTEGER NOT NULL, received INTEGER NOT NULL, hash_state BLOB NOT NULL, updated_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_upload_session_updated_at ON upload_session(updated_at);`},
+	// 23: discs. rom_file.format says how a file is stored (files already stored are marked
+	// pending, to be inspected for CHD images); disc_identity fingerprints a disc's tracks, so the
+	// same disc is recognized as a CUE/BIN set or a CHD; disc_track lists each track's layout and
+	// hashes, and its file while the disc is kept as separate tracks. sheet_path keeps the sheet a
+	// disc was uploaded with, also once compressed; compress_requested asks for compression to CHD.
+	// Upload sessions can carry
+	// one file of a disc (a part), kept in upload_part until the disc is assembled.
+	{23, "add_discs", `ALTER TABLE rom_file ADD COLUMN format TEXT NOT NULL DEFAULT 'file';
+UPDATE rom_file SET format = 'pending';
+ALTER TABLE rom_file ADD COLUMN disc_identity TEXT;
+ALTER TABLE rom_file ADD COLUMN sheet_path TEXT;
+ALTER TABLE rom_file ADD COLUMN compress_requested INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rom_file_disc_identity ON rom_file(disc_identity);
+CREATE INDEX IF NOT EXISTS idx_rom_file_sheet_path ON rom_file(sheet_path);
+CREATE INDEX IF NOT EXISTS idx_rom_file_format ON rom_file(format);
+CREATE TABLE IF NOT EXISTS disc_track (rom_file_id TEXT NOT NULL, number INTEGER NOT NULL, mode TEXT NOT NULL, sector_bytes INTEGER NOT NULL, frames INTEGER NOT NULL, pregap INTEGER NOT NULL, pregap_stored INTEGER NOT NULL, postgap INTEGER NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, sha1 TEXT NOT NULL, md5 TEXT NOT NULL, crc32 TEXT NOT NULL, filename TEXT NOT NULL, storage_path TEXT, PRIMARY KEY (rom_file_id, number), FOREIGN KEY (rom_file_id) REFERENCES rom_file(id));
+CREATE INDEX IF NOT EXISTS idx_disc_track_sha1 ON disc_track(sha1);
+CREATE INDEX IF NOT EXISTS idx_disc_track_storage_path ON disc_track(storage_path);
+ALTER TABLE upload_session ADD COLUMN part INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS upload_part (id TEXT PRIMARY KEY, uploader_id TEXT NOT NULL, filename TEXT NOT NULL, storage_path TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, sha1 TEXT NOT NULL, md5 TEXT NOT NULL, crc32 TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_upload_part_created_at ON upload_part(created_at);
+CREATE INDEX IF NOT EXISTS idx_upload_part_storage_path ON upload_part(storage_path);`},
 }
 
 var mysqlMigrations = []migration{
@@ -204,6 +226,21 @@ CREATE INDEX idx_rom_uploader_sort_genre ON rom(uploader_id, genre, id);`},
 CREATE INDEX idx_rom_cover_thumb_path ON rom(cover_thumb_path(512));`},
 	{22, "add_upload_sessions", `CREATE TABLE IF NOT EXISTS upload_session (id VARCHAR(64) PRIMARY KEY, uploader_id VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, mime_type VARCHAR(255) NULL, size BIGINT UNSIGNED NOT NULL, received BIGINT UNSIGNED NOT NULL, hash_state BLOB NOT NULL, updated_at BIGINT NOT NULL);
 CREATE INDEX idx_upload_session_updated_at ON upload_session(updated_at);`},
+	{23, "add_discs", `ALTER TABLE rom_file ADD COLUMN format VARCHAR(16) NOT NULL DEFAULT 'file';
+UPDATE rom_file SET format = 'pending';
+ALTER TABLE rom_file ADD COLUMN disc_identity CHAR(64) NULL;
+ALTER TABLE rom_file ADD COLUMN sheet_path TEXT NULL;
+ALTER TABLE rom_file ADD COLUMN compress_requested BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE UNIQUE INDEX idx_rom_file_disc_identity ON rom_file(disc_identity);
+CREATE INDEX idx_rom_file_sheet_path ON rom_file(sheet_path(512));
+CREATE INDEX idx_rom_file_format ON rom_file(format);
+CREATE TABLE IF NOT EXISTS disc_track (rom_file_id VARCHAR(67) NOT NULL, number SMALLINT UNSIGNED NOT NULL, mode VARCHAR(16) NOT NULL, sector_bytes SMALLINT UNSIGNED NOT NULL, frames INT UNSIGNED NOT NULL, pregap INT UNSIGNED NOT NULL, pregap_stored BOOLEAN NOT NULL, postgap INT UNSIGNED NOT NULL, size BIGINT UNSIGNED NOT NULL, sha256 CHAR(64) NOT NULL, sha1 CHAR(40) NOT NULL, md5 CHAR(32) NOT NULL, crc32 CHAR(8) NOT NULL, filename VARCHAR(255) NOT NULL, storage_path TEXT NULL, PRIMARY KEY (rom_file_id, number), CONSTRAINT fk_disc_track_rom_file FOREIGN KEY (rom_file_id) REFERENCES rom_file(id));
+CREATE INDEX idx_disc_track_sha1 ON disc_track(sha1);
+CREATE INDEX idx_disc_track_storage_path ON disc_track(storage_path(512));
+ALTER TABLE upload_session ADD COLUMN part BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE TABLE IF NOT EXISTS upload_part (id VARCHAR(64) PRIMARY KEY, uploader_id VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, storage_path TEXT NOT NULL, size BIGINT UNSIGNED NOT NULL, sha256 CHAR(64) NOT NULL, sha1 CHAR(40) NOT NULL, md5 CHAR(32) NOT NULL, crc32 CHAR(8) NOT NULL, created_at BIGINT NOT NULL);
+CREATE INDEX idx_upload_part_created_at ON upload_part(created_at);
+CREATE INDEX idx_upload_part_storage_path ON upload_part(storage_path(512));`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {

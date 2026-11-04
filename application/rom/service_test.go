@@ -3,6 +3,7 @@ package rom
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ type romTestRepository struct {
 	uploadedFilenames map[string]string
 	// uploadROMs maps upload IDs to the ROM each created.
 	uploadROMs map[string]string
+	discTracks map[string][]romdomain.DiscTrack
 }
 
 func (repository *romTestRepository) FindROMIDByUploadID(_ context.Context, uploadID string) (*string, error) {
@@ -62,6 +64,10 @@ func (repository *romTestRepository) SaveROM(_ context.Context, rom romdomain.RO
 
 func (*romTestRepository) ListROMsWithFiles(context.Context, int, ROMFilter) ([]romdomain.ROMWithFile, error) {
 	return nil, nil
+}
+
+func (repository *romTestRepository) FindDiscTracks(_ context.Context, romFileID string) ([]romdomain.DiscTrack, error) {
+	return repository.discTracks[romFileID], nil
 }
 
 func (repository *romTestRepository) SetCoverThumbnail(_ context.Context, romID, coverPath, thumbnailPath string) error {
@@ -235,10 +241,10 @@ func TestROMServiceDownloadsUnderTheTitleWithTheUploadedExtension(t *testing.T) 
 	if output.Filename != "Super Mario Bros. 3.nes" {
 		t.Fatalf("Download().Filename = %q", output.Filename)
 	}
-	if name, err := service.DownloadFilename(context.Background(), owner, "rom-1"); err != nil || name != output.Filename {
+	if name, err := service.DownloadFilename(context.Background(), owner, "rom-1", ""); err != nil || name != output.Filename {
 		t.Fatalf("DownloadFilename() = %q, %v; want %q", name, err, output.Filename)
 	}
-	if _, err := service.DownloadFilename(context.Background(), identity.Requester{UserID: "other", Role: identity.RoleUser}, "rom-1"); !fault.IsCode(err, fault.CodeNotFound) {
+	if _, err := service.DownloadFilename(context.Background(), identity.Requester{UserID: "other", Role: identity.RoleUser}, "rom-1", ""); !fault.IsCode(err, fault.CodeNotFound) {
 		t.Fatalf("DownloadFilename() for another user error = %v, want not found", err)
 	}
 }
@@ -301,5 +307,109 @@ func TestPlatformCatalogListsEveryKnownPlatformByName(t *testing.T) {
 		if strings.ToLower(catalog[index-1].Name) > strings.ToLower(catalog[index].Name) {
 			t.Fatalf("catalog not sorted by name at %q, %q", catalog[index-1].Name, catalog[index].Name)
 		}
+	}
+}
+
+// fakeDiscs writes discs as fixed bytes.
+type fakeDiscs struct {
+	canCompress bool
+	requested   []string
+}
+
+func (fakeDiscs) Archive(_ context.Context, _ romdomain.ROMFile, base string, out io.Writer) error {
+	_, err := io.WriteString(out, "zip of "+base)
+	return err
+}
+
+func (fakeDiscs) ISO(_ context.Context, _ romdomain.ROMFile, out io.Writer) error {
+	_, err := io.WriteString(out, "iso")
+	return err
+}
+
+func (discs *fakeDiscs) RequestCompression(_ context.Context, romFile romdomain.ROMFile) error {
+	if romFile.Format != romdomain.FormatTracks {
+		return fault.Validation("not tracks")
+	}
+	discs.requested = append(discs.requested, romFile.ID)
+	return nil
+}
+
+func (discs *fakeDiscs) CanCompress() bool { return discs.canCompress }
+
+func TestROMsOfferEveryFormatTheyDownloadIn(t *testing.T) {
+	sheet := "/stored/sheet"
+	repository := &romTestRepository{
+		roms:              map[string]romdomain.ROM{"rom-1": {ID: "rom-1", ROMFileID: "file-1", UploaderID: "owner", Identity: romdomain.ROMIdentity{Title: "Other", Platform: "psx"}}},
+		uploadedFilenames: map[string]string{"rom-1": "Other.cue"},
+		discTracks:        map[string][]romdomain.DiscTrack{"file-1": {{Number: 1, Mode: "MODE2/2352"}, {Number: 2, Mode: "AUDIO"}}},
+	}
+	storage := &romTestStorage{files: map[string][]byte{"/stored/chd": []byte("MComprHD")}}
+	discs := &fakeDiscs{canCompress: true}
+	woken := 0
+	service := NewService(repository, storage, romTestAudit{}, nil).WithDiscs(discs, func() { woken++ })
+	owner := identity.Requester{UserID: "owner", Role: identity.RoleUser}
+	formats := func() []string {
+		detail, err := service.Get(context.Background(), owner, "rom-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, option := range detail.Downloads {
+			names = append(names, string(option.Format)+option.Extension)
+		}
+		return names
+	}
+	set := func(file romdomain.ROMFile) {
+		file.ID = "file-1"
+		repository.romFiles = map[string]romdomain.ROMFile{"file-1": file}
+	}
+
+	// Uploaded as CUE/BIN and kept as tracks: the zip, which compression can turn into a CHD.
+	set(romdomain.ROMFile{StoragePath: sheet, SheetPath: &sheet, Format: romdomain.FormatTracks})
+	if got := formats(); strings.Join(got, " ") != "tracks.zip" {
+		t.Fatalf("tracks disc formats = %v", got)
+	}
+	detail, err := service.RequestCompression(context.Background(), owner, "rom-1")
+	if err != nil || !detail.Disc.CanCompress || len(discs.requested) != 1 || woken != 1 {
+		t.Fatalf("RequestCompression() = %+v, %v; requested %v, woken %d", detail.Disc, err, discs.requested, woken)
+	}
+
+	// Compressed since: its upload format first, then the CHD.
+	set(romdomain.ROMFile{StoragePath: "/stored/chd", SheetPath: &sheet, Format: romdomain.FormatCHD})
+	if got := formats(); strings.Join(got, " ") != "tracks.zip chd.chd" {
+		t.Fatalf("compressed disc formats = %v", got)
+	}
+	output, err := service.DownloadAs(context.Background(), owner, "rom-1", DownloadCHD)
+	if err != nil || output.Filename != "Other.chd" || output.Content.ReadSeekCloser == nil {
+		t.Fatalf("CHD download = %+v, %v", output, err)
+	}
+	output.Content.Close()
+	if output, err := service.Download(context.Background(), owner, "rom-1"); err != nil || output.Filename != "Other.zip" || output.Archive == nil {
+		t.Fatalf("default download = %+v, %v; want the zip it was uploaded as", output, err)
+	}
+	if _, err := service.DownloadAs(context.Background(), owner, "rom-1", DownloadISO); !fault.IsCode(err, fault.CodeValidation) {
+		t.Fatalf("ISO of a mixed-mode disc = %v, want refused", err)
+	}
+
+	// Uploaded as a CHD with a single MODE1 track: CHD first, then the zip and an ISO.
+	repository.uploadedFilenames["rom-1"] = "Other.chd"
+	repository.discTracks["file-1"] = []romdomain.DiscTrack{{Number: 1, Mode: "MODE1/2352"}}
+	set(romdomain.ROMFile{StoragePath: "/stored/chd", Format: romdomain.FormatCHD})
+	if got := formats(); strings.Join(got, " ") != "chd.chd tracks.zip iso.iso" {
+		t.Fatalf("single-track CHD formats = %v", got)
+	}
+	if name, _ := service.DownloadFilename(context.Background(), owner, "rom-1", DownloadISO); name != "Other.iso" {
+		t.Fatalf("ISO link name = %q", name)
+	}
+	if _, err := service.RequestCompression(context.Background(), owner, "rom-1"); !fault.IsCode(err, fault.CodeValidation) {
+		t.Fatalf("compressing a CHD = %v, want refused", err)
+	}
+
+	// Anything else downloads as it was uploaded.
+	repository.uploadedFilenames["rom-1"] = "Other.sfc"
+	repository.discTracks["file-1"] = nil
+	set(romdomain.ROMFile{StoragePath: "/stored/chd", Format: romdomain.FormatFile})
+	if got := formats(); strings.Join(got, " ") != "file.sfc" {
+		t.Fatalf("cartridge formats = %v", got)
 	}
 }

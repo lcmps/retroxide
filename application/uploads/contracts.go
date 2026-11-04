@@ -51,6 +51,10 @@ type Service interface {
 	CancelSession(context.Context, identity.Requester, string) error
 	// CheckSessionDuplicate ends the session if the library already has the file with sha256.
 	CheckSessionDuplicate(ctx context.Context, requester identity.Requester, sessionID, sha256 string) error
+	// AssembleDisc stores a disc uploaded as its sheet and track files.
+	AssembleDisc(context.Context, identity.Requester, AssembleDiscInput) (UploadAcceptedDTO, error)
+	// Options tells the upload page what it can offer.
+	Options() UploadOptionsDTO
 }
 
 var _ jobs.Identifier = (*IdentifyService)(nil)

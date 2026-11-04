@@ -893,3 +893,72 @@ func TestRepositoriesCountForMetrics(t *testing.T) {
 		t.Fatalf("counts = %+v", counts)
 	}
 }
+
+func TestRepositoriesStoreDiscs(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	exerciseDiscs(t, ctx, repositories, "sqlite")
+}
+
+// exerciseDiscs checks disc storage on any dialect; IDs carry prefix.
+func exerciseDiscs(t *testing.T, ctx context.Context, repositories *Repositories, prefix string) {
+	t.Helper()
+	file := validROMFile("rf-disc-"+prefix, "disc "+prefix)
+	if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	other := validROMFile("rf-disc2-"+prefix, "disc two "+prefix)
+	if _, err := repositories.UpsertROMFile(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = repositories.DeleteUnusedROMFile(ctx, file.ID)
+		_ = repositories.DeleteUnusedROMFile(ctx, other.ID)
+	})
+	trackKey := "ab/" + strings.Repeat("ab", 32)
+	tracks := []romdomain.DiscTrack{
+		{Number: 1, Mode: "MODE2/2352", SectorBytes: 2352, Frames: 10, Size: 23520, Hash: file.Hash, Filename: "Game (Track 1).bin", StoragePath: &trackKey},
+		{Number: 2, Mode: "AUDIO", SectorBytes: 2352, Frames: 180, Pregap: 150, PregapStored: true, Size: 423360, Hash: other.Hash, Filename: "Game (Track 2).bin"},
+	}
+	identitySum := sha256.Sum256([]byte("identity " + prefix))
+	identity := hex.EncodeToString(identitySum[:])
+	if err := repositories.SaveDisc(ctx, file.ID, romdomain.FormatTracks, &identity, tracks); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repositories.FindDiscTracks(ctx, file.ID)
+	if err != nil || len(stored) != 2 || stored[1].Pregap != 150 || !stored[1].PregapStored || *stored[0].StoragePath != trackKey || stored[0].Hash.SHA1 != file.Hash.SHA1 {
+		t.Fatalf("tracks = %+v, %v", stored, err)
+	}
+	if found, err := repositories.FindROMFileByDiscIdentity(ctx, identity); err != nil || found == nil || found.ID != file.ID || found.Format != romdomain.FormatTracks {
+		t.Fatalf("by identity = %+v, %v", found, err)
+	}
+	// One disc identity, one file.
+	if err := repositories.SaveDisc(ctx, other.ID, romdomain.FormatCHD, &identity, nil); !fault.IsCode(err, fault.CodeConflict) {
+		t.Fatalf("a second file with the same disc = %v, want conflict", err)
+	}
+	if referenced, err := repositories.ReferencedStoragePaths(ctx, []string{trackKey}); err != nil || !referenced[trackKey] {
+		t.Fatalf("a track's file is not counted as referenced: %v, %v", referenced, err)
+	}
+	if files, err := repositories.ListROMFilesByFormat(ctx, romdomain.FormatTracks, 100); err != nil || !slices.ContainsFunc(files, func(f romdomain.ROMFile) bool { return f.ID == file.ID }) {
+		t.Fatalf("listing discs kept as tracks = %v, %v", files, err)
+	}
+
+	chdHash := other.Hash
+	chdSum := sha256.Sum256([]byte("chd " + prefix))
+	chdHash.SHA256 = hex.EncodeToString(chdSum[:])
+	if err := repositories.ReplaceROMFileContent(ctx, file.ID, chdHash, 1234, "cc/"+chdHash.SHA256, romdomain.FormatCHD); err != nil {
+		t.Fatal(err)
+	}
+	replaced, _ := repositories.FindROMFileByID(ctx, file.ID)
+	if replaced.Format != romdomain.FormatCHD || replaced.Hash.SHA256 != chdHash.SHA256 || replaced.Size != 1234 || *replaced.DiscIdentity != identity {
+		t.Fatalf("replaced = %+v", replaced)
+	}
+	if after, _ := repositories.FindDiscTracks(ctx, file.ID); after[0].StoragePath != nil {
+		t.Fatal("tracks kept their separate files after compression")
+	}
+	if err := repositories.DeleteUnusedROMFile(ctx, file.ID); err != nil {
+		t.Fatal(err)
+	}
+	if gone, _ := repositories.FindROMFileByID(ctx, file.ID); gone != nil {
+		t.Fatal("an unused disc was kept")
+	}
+}

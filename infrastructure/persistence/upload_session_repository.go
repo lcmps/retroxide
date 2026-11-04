@@ -53,6 +53,7 @@ func uploadSessionModel(session uploadsdomain.Session) UploadSessionModel {
 	return UploadSessionModel{
 		ID: session.ID, UploaderID: session.UploaderID, Filename: session.Filename, MIMEType: session.MIMEType,
 		Size: session.Size, Received: session.Received, HashState: session.HashState, UpdatedAt: session.UpdatedAt.Unix(),
+		Part: session.Part,
 	}
 }
 
@@ -60,5 +61,53 @@ func uploadSessionEntity(model UploadSessionModel) uploadsdomain.Session {
 	return uploadsdomain.Session{
 		ID: model.ID, UploaderID: model.UploaderID, Filename: model.Filename, MIMEType: model.MIMEType,
 		Size: model.Size, Received: model.Received, HashState: model.HashState, UpdatedAt: time.Unix(model.UpdatedAt, 0),
+		Part: model.Part,
 	}
+}
+
+func (repositories *Repositories) SaveUploadPart(ctx context.Context, part uploadsdomain.Part) error {
+	model := UploadPartModel{
+		ID: part.ID, UploaderID: part.UploaderID, Filename: part.Filename, StoragePath: part.StoragePath, Size: part.Size,
+		SHA256: part.SHA256, SHA1: part.SHA1, MD5: part.MD5, CRC32: part.CRC32, CreatedAt: part.CreatedAt.Unix(),
+	}
+	if err := repositories.DB.WithContext(ctx).Create(&model).Error; err != nil {
+		return databaseError("saving upload part", err)
+	}
+	return nil
+}
+
+// FindUploadParts returns the parts with ids that belong to uploaderID.
+func (repositories *Repositories) FindUploadParts(ctx context.Context, uploaderID string, ids []string) ([]uploadsdomain.Part, error) {
+	var models []UploadPartModel
+	if err := repositories.DB.WithContext(ctx).Where("uploader_id = ? AND id IN ?", uploaderID, ids).Find(&models).Error; err != nil {
+		return nil, databaseError("finding upload parts", err)
+	}
+	parts := make([]uploadsdomain.Part, len(models))
+	for index, model := range models {
+		parts[index] = uploadsdomain.Part{
+			ID: model.ID, UploaderID: model.UploaderID, Filename: model.Filename, StoragePath: model.StoragePath, Size: model.Size,
+			SHA256: model.SHA256, SHA1: model.SHA1, MD5: model.MD5, CRC32: model.CRC32, CreatedAt: time.Unix(model.CreatedAt, 0),
+		}
+	}
+	return parts, nil
+}
+
+// DeleteUploadParts forgets parts; their files are left for the storage sweep when unused.
+func (repositories *Repositories) DeleteUploadParts(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := repositories.DB.WithContext(ctx).Where("id IN ?", ids).Delete(&UploadPartModel{}).Error; err != nil {
+		return databaseError("deleting upload parts", err)
+	}
+	return nil
+}
+
+// DeleteUploadPartsBefore forgets parts created before cutoff and returns how many.
+func (repositories *Repositories) DeleteUploadPartsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	result := repositories.DB.WithContext(ctx).Where("created_at < ?", cutoff.Unix()).Delete(&UploadPartModel{})
+	if result.Error != nil {
+		return 0, databaseError("deleting old upload parts", result.Error)
+	}
+	return result.RowsAffected, nil
 }

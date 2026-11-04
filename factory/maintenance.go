@@ -46,6 +46,62 @@ func runMaintenance(ctx context.Context, logger *slog.Logger, tasks ...maintenan
 	}
 }
 
+// discMaintainer indexes and compresses discs.
+type discMaintainer interface {
+	IndexPending(ctx context.Context) (int, error)
+	CompressPending(ctx context.Context) (int, error)
+}
+
+// indexPendingFiles returns a task inspecting files stored before discs were recognized, so
+// CHD images already in the library get their tracks indexed.
+func indexPendingFiles(discs discMaintainer) maintenanceTask {
+	return func(ctx context.Context, logger *slog.Logger) {
+		indexed, err := discs.IndexPending(ctx)
+		if err != nil {
+			logger.Warn("could not inspect stored files for discs", "error", err, "inspected", indexed)
+		} else if indexed > 0 {
+			logger.Info("inspected stored files for discs", "files", indexed)
+		}
+	}
+}
+
+// partExpirer forgets disc files uploaded but never assembled.
+type partExpirer interface {
+	DeleteUploadPartsBefore(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+func expireUploadParts(parts partExpirer) maintenanceTask {
+	return func(ctx context.Context, logger *slog.Logger) {
+		if expired, err := parts.DeleteUploadPartsBefore(ctx, time.Now().Add(-idleSessionAge)); err != nil {
+			logger.Warn("could not expire unassembled disc files", "error", err)
+		} else if expired > 0 {
+			logger.Info("expired unassembled disc files", "files", expired)
+		}
+	}
+}
+
+// runDiscCompression compresses discs kept as tracks: after startup, whenever a disc is
+// uploaded, and with the other maintenance. One disc at a time, so it never takes over a
+// small server.
+func runDiscCompression(ctx context.Context, logger *slog.Logger, discs discMaintainer, uploaded <-chan struct{}) {
+	timer := time.NewTimer(maintenanceDelay)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			timer.Reset(maintenanceInterval)
+		case <-uploaded:
+		}
+		if compressed, err := discs.CompressPending(ctx); err != nil && ctx.Err() == nil {
+			logger.Warn("could not compress discs", "error", err)
+		} else if compressed > 0 {
+			logger.Info("compressed discs to CHD", "discs", compressed)
+		}
+	}
+}
+
 // sessionExpirer ends idle uploads sent in parts.
 type sessionExpirer interface {
 	ExpireSessions(ctx context.Context, before time.Time) (int, error)

@@ -45,6 +45,7 @@ func registerROMRoutes(api *gin.RouterGroup, roms rom.API, links DownloadLinks) 
 	group.GET("/:rom_id/cover/thumb", handler.coverThumbnail)
 	group.POST("/:rom_id/cover", handler.uploadCover)
 	group.POST("/:rom_id/scrape", handler.scrape)
+	group.POST("/:rom_id/compress", handler.compress)
 	group.GET("/:rom_id/media/:kind", handler.media)
 	group.GET("/:rom_id/download", handler.download)
 	group.POST("/:rom_id/download-link", requireService(links != nil), handler.createDownloadLink)
@@ -142,6 +143,12 @@ func (handler romHandler) scrape(c *gin.Context) {
 	respondJSON(c, http.StatusOK, scraped, err)
 }
 
+// compress asks for a disc kept as tracks to be compressed to CHD in the background.
+func (handler romHandler) compress(c *gin.Context) {
+	detail, err := handler.roms.RequestCompression(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"))
+	respondJSON(c, http.StatusAccepted, detail, err)
+}
+
 func (handler romHandler) media(c *gin.Context) {
 	image, err := handler.roms.OpenMedia(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), c.Param("kind"))
 	serveImage(c, image, err)
@@ -161,7 +168,8 @@ type downloadLinkResponse struct {
 func (handler romHandler) createDownloadLink(c *gin.Context) {
 	requester, romID := requesterFromContext(c), c.Param("rom_id")
 	// Only sign links for ROMs the requester can access; inaccessible ROMs stay not found.
-	filename, err := handler.roms.DownloadFilename(c.Request.Context(), requester, romID)
+	format := rom.DownloadFormat(c.Query("format"))
+	filename, err := handler.roms.DownloadFilename(c.Request.Context(), requester, romID, format)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -171,8 +179,13 @@ func (handler romHandler) createDownloadLink(c *gin.Context) {
 		writeError(c, fault.Internal(err))
 		return
 	}
+	query := url.Values{"token": {token}}
+	if format != "" {
+		// The format only picks between downloads the token already allows.
+		query.Set("format", string(format))
+	}
 	c.JSON(http.StatusCreated, downloadLinkResponse{
-		URL:       downloadLinkPath + "?" + url.Values{"token": {token}}.Encode(),
+		URL:       downloadLinkPath + "?" + query.Encode(),
 		Filename:  filename,
 		ExpiresIn: int64(time.Until(expiresAt).Round(time.Second).Seconds()),
 	})
@@ -189,12 +202,14 @@ func (handler romHandler) downloadWithLink(c *gin.Context) {
 }
 
 func (handler romHandler) streamDownload(c *gin.Context, requester identity.Requester, romID string) {
-	output, err := handler.roms.Download(c.Request.Context(), requester, romID)
+	output, err := handler.roms.DownloadAs(c.Request.Context(), requester, romID, rom.DownloadFormat(c.Query("format")))
 	if err != nil {
 		writeError(c, err)
 		return
 	}
-	defer output.Content.Close()
+	if output.Content.ReadSeekCloser != nil {
+		defer output.Content.Close()
+	}
 	sent := writeDownload(c, output)
 	if bodyWasServed(c) && output.Served != nil {
 		output.Served(c.Request.Context(), sent)

@@ -212,7 +212,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"POST /api/v1/session", "DELETE /api/v1/session", "POST /api/v1/session/refresh",
 		"GET /api/v1/i18n/:locale",
 		"POST /api/v1/upload", "GET /api/v1/upload/:upload_id",
-		"POST /api/v1/upload/session", "GET /api/v1/upload/session/:session_id", "PATCH /api/v1/upload/session/:session_id", "DELETE /api/v1/upload/session/:session_id", "POST /api/v1/upload/session/:session_id/check",
+		"POST /api/v1/upload/session", "GET /api/v1/upload/session/:session_id", "PATCH /api/v1/upload/session/:session_id", "DELETE /api/v1/upload/session/:session_id", "POST /api/v1/upload/session/:session_id/check", "POST /api/v1/upload/disc", "GET /api/v1/upload/options", "POST /api/v1/rom/:rom_id/compress",
 		"GET /api/v1/platforms", "GET /api/v1/platforms/catalog",
 		"GET /api/v1/rom", "GET /api/v1/rom/:rom_id", "PATCH /api/v1/rom/:rom_id", "DELETE /api/v1/rom/:rom_id",
 		"GET /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/cover/thumb", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
@@ -356,6 +356,14 @@ func (uploads routerTestUploads) AppendToSession(_ context.Context, _ identity.R
 }
 
 func (routerTestUploads) CancelSession(context.Context, identity.Requester, string) error { return nil }
+
+func (routerTestUploads) Options() uploadfeature.UploadOptionsDTO {
+	return uploadfeature.UploadOptionsDTO{}
+}
+
+func (routerTestUploads) AssembleDisc(context.Context, identity.Requester, uploadfeature.AssembleDiscInput) (uploadfeature.UploadAcceptedDTO, error) {
+	return uploadfeature.UploadAcceptedDTO{UploadID: "upl_disc", Status: "processing"}, nil
+}
 
 func (routerTestUploads) CheckSessionDuplicate(context.Context, identity.Requester, string, string) error {
 	return nil
@@ -513,11 +521,15 @@ func (roms linkTestROMs) Get(_ context.Context, requester identity.Requester, ro
 	return rom.ROMDetailDTO{ROMID: romID}, nil
 }
 
-func (roms linkTestROMs) DownloadFilename(ctx context.Context, requester identity.Requester, romID string) (string, error) {
+func (roms linkTestROMs) DownloadFilename(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat) (string, error) {
 	if _, err := roms.Get(ctx, requester, romID); err != nil {
 		return "", err
 	}
 	return "Title of " + romID + ".nes", nil
+}
+
+func (roms linkTestROMs) DownloadAs(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat) (rom.DownloadOutput, error) {
+	return roms.Download(ctx, requester, romID)
 }
 
 func (roms linkTestROMs) Download(ctx context.Context, requester identity.Requester, romID string) (rom.DownloadOutput, error) {

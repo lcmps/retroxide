@@ -30,6 +30,7 @@ const (
 	stagedSuffix  = ".tmp"
 	partialPrefix = ".upload."
 	partialSuffix = ".part"
+	workPrefix    = ".work-"
 	// writeBufferSize is how much content is gathered before each write to disk. Uploads arrive
 	// in pieces of a few KiB; writing them one by one costs a system call each.
 	writeBufferSize = 1 << 20
@@ -308,6 +309,9 @@ func (filesystem *Filesystem) SweepStaged(olderThan, partialOlderThan time.Durat
 		name := entry.Name()
 		var cutoff time.Time
 		switch {
+		case entry.IsDir() && strings.HasPrefix(name, workPrefix):
+			// A work folder left by a crash; RemoveAll below handles folders.
+			cutoff = partialCutoff
 		case entry.IsDir():
 			continue
 		case strings.HasPrefix(name, stagedPrefix) && strings.HasSuffix(name, stagedSuffix):
@@ -321,7 +325,7 @@ func (filesystem *Filesystem) SweepStaged(olderThan, partialOlderThan time.Durat
 		if err != nil || info.ModTime().After(cutoff) {
 			continue
 		}
-		if os.Remove(filepath.Join(filesystem.root, name)) == nil {
+		if os.RemoveAll(filepath.Join(filesystem.root, name)) == nil {
 			removed++
 		}
 	}
@@ -503,6 +507,43 @@ func (filesystem *Filesystem) partialPath(sessionID string) (string, error) {
 		return "", errors.New("storage: invalid upload session id")
 	}
 	return filepath.Join(filesystem.root, partialPrefix+sessionID+partialSuffix), nil
+}
+
+// LocalPath returns where a stored file lives on disk, for tools that need a path.
+func (filesystem *Filesystem) LocalPath(storagePath string) (string, error) {
+	return filesystem.resolve(storagePath)
+}
+
+// WorkDir creates an empty folder for temporary work beside the stored files (on the same
+// filesystem, so results can be adopted by renaming). The caller removes it.
+func (filesystem *Filesystem) WorkDir() (string, error) {
+	if err := os.MkdirAll(filesystem.root, 0o755); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(filesystem.root, workPrefix+"*")
+}
+
+// Adopt moves a finished file from a work folder to its content address and returns its key.
+func (filesystem *Filesystem) Adopt(ctx context.Context, path, contentAddress string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if !isContentAddress(contentAddress) {
+		return "", errors.New("storage: invalid content address")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	syncErr := file.Sync()
+	if err := errors.Join(syncErr, file.Close()); err != nil {
+		return "", err
+	}
+	key := keyFor(contentAddress)
+	if err := filesystem.moveInto(path, filesystem.pathForKey(key)); err != nil {
+		return "", fmt.Errorf("adopting %s: %w", path, err)
+	}
+	return key, nil
 }
 
 // StoredKey is a stored file and when it was last written.

@@ -2,6 +2,8 @@ package factory
 
 import (
 	"context"
+	"github.com/lcmps/retroxide/application/discs"
+	"github.com/lcmps/retroxide/infrastructure/discimage"
 	"github.com/lcmps/retroxide/infrastructure/imaging"
 	"github.com/lcmps/retroxide/infrastructure/metrics"
 	"log/slog"
@@ -46,6 +48,10 @@ type Services struct {
 	Identifier    *persistence.Identifier
 	// Metrics counts the server's activity for monitoring.
 	Metrics *metrics.Registry
+	// Discs indexes, assembles, compresses, and archives disc images.
+	Discs *discs.Service
+	// DiscsUploaded is signalled when a disc is stored as tracks, to start compressing it.
+	DiscsUploaded chan struct{}
 }
 
 func NewServices(settings config.Config, repositories *persistence.Repositories, queue *jobs.NotifyingQueue, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
@@ -55,7 +61,17 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 	}, storage.FreeSpace)
 	audit := metrics.NewCountingAudit(observability.NewAuditLogger(logger), registry)
 	sessions := auth.NewSessionService(repositories, hasher, tokens, repositories)
+	discService := discs.NewService(repositories, storage, hashadapter.New(), discimage.NewImages(hashadapter.New()), newCompressor(settings, logger))
+	discsUploaded := make(chan struct{}, 1)
+	wakeCompressor := func() {
+		select {
+		case discsUploaded <- struct{}{}:
+		default: // a wake-up is already pending
+		}
+	}
 	return &Services{
+		Discs:         discService,
+		DiscsUploaded: discsUploaded,
 		Uploads: uploads.NewUploadService(
 			repositories, repositories, storage, hashadapter.New(), queue, audit,
 			uploads.UploadPolicy{
@@ -63,14 +79,25 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 				AllowedMIMETypes:  settings.AllowedUploadMIMETypes,
 				AllowedExtensions: settings.AllowedUploadExtensions,
 			},
-		).WithSessions(repositories, storage, hashadapter.New()),
-		ROMs:          rom.NewService(repositories, storage, audit, metrics.NewCountingScraper(NewScraper(settings), registry)).WithThumbnails(imaging.NewThumbnailer()),
+		).WithSessions(repositories, storage, hashadapter.New()).WithDiscAssembly(discService, wakeCompressor, settings.CompressDiscs),
+		ROMs:          rom.NewService(repositories, storage, audit, metrics.NewCountingScraper(NewScraper(settings), registry)).WithThumbnails(imaging.NewThumbnailer()).WithDiscs(discService, wakeCompressor),
 		Libraries:     libraries.NewService(repositories, repositories),
 		Sessions:      sessions,
 		Metrics:       registry,
 		Users:         users.NewService(repositories, hasher, sessions),
 		Clients:       auth.NewClientService(repositories),
 		Authenticator: auth.NewAuthenticator(tokens, repositories, repositories),
-		Identifier:    persistence.NewIdentifier(repositories.DB),
+		Identifier:    persistence.NewIdentifier(repositories.DB).WithDiscs(discService),
 	}
+}
+
+// newCompressor finds chdman, which discs need to be compressed to CHD when someone asks.
+func newCompressor(settings config.Config, logger *slog.Logger) discs.Compressor {
+	chdman, found := discimage.FindChdman(settings.ChdmanPath)
+	if !found {
+		logger.Info("chdman not found; discs cannot be compressed to CHD", "path", settings.ChdmanPath)
+		return nil
+	}
+	logger.Info("discs can be compressed to CHD", "chdman", chdman.Path())
+	return chdman
 }

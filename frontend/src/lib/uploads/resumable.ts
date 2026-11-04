@@ -20,11 +20,13 @@ type Session = {
 	received: number;
 	max_chunk_size: number;
 	upload?: UploadAcceptedResponse;
+	part_id?: string;
 };
 
 /** The server calls a resumable upload needs, injectable for tests. */
 export type ResumableApi = {
-	createSession(file: File): Promise<Session>;
+	/** Starts a session; with part, for one of a disc's files. */
+	createSession(file: File, part?: boolean): Promise<Session>;
 	getSession(sessionId: string): Promise<Session>;
 	sendPart(sessionId: string, offset: number, part: Blob, onProgress: (loadedBytes: number) => void): Promise<Session>;
 	/** Uploads a small file in one request. */
@@ -49,8 +51,8 @@ export type ResumableCallbacks = {
 };
 
 /** Identifies a file across page loads, so adding it again resumes its upload. */
-function fingerprint(file: File): string {
-	return `${STORAGE_PREFIX}${file.name}:${file.size}:${file.lastModified}`;
+function fingerprint(file: File, part = false): string {
+	return `${STORAGE_PREFIX}${part ? 'part:' : ''}${file.name}:${file.size}:${file.lastModified}`;
 }
 
 function defaultStorage(): ResumableEnvironment['storage'] {
@@ -87,13 +89,38 @@ function isStatus(error: unknown, status: number): boolean {
 export async function uploadResumable(
 	file: File,
 	api: ResumableApi,
-	{ onProgress, onReconnecting }: ResumableCallbacks,
-	{ storage = defaultStorage(), sleep = defaultSleep, waitUntilOnline = defaultWaitUntilOnline, hash = hashFile }: ResumableEnvironment = {}
+	callbacks: ResumableCallbacks,
+	environment: ResumableEnvironment = {}
 ): Promise<UploadAcceptedResponse> {
 	if (file.size < RESUMABLE_FROM_BYTES) {
-		return api.uploadWhole(file, onProgress);
+		return api.uploadWhole(file, callbacks.onProgress);
 	}
-	const key = fingerprint(file);
+	const session = await transfer(file, api, false, callbacks, environment);
+	return session.upload as UploadAcceptedResponse;
+}
+
+/**
+ * Uploads one of a disc's files as a part, whatever its size, and returns the part's ID for
+ * assembling the disc. Parts resume and retry like large uploads.
+ */
+export async function uploadPart(
+	file: File,
+	api: ResumableApi,
+	callbacks: ResumableCallbacks,
+	environment: ResumableEnvironment = {}
+): Promise<string> {
+	const session = await transfer(file, api, true, callbacks, environment);
+	return session.part_id as string;
+}
+
+async function transfer(
+	file: File,
+	api: ResumableApi,
+	part: boolean,
+	{ onProgress, onReconnecting }: ResumableCallbacks,
+	{ storage = defaultStorage(), sleep = defaultSleep, waitUntilOnline = defaultWaitUntilOnline, hash = hashFile }: ResumableEnvironment
+): Promise<Session> {
+	const key = fingerprint(file, part);
 	const remember = (sessionId: string | null) => {
 		try {
 			if (sessionId) storage?.setItem(key, sessionId);
@@ -102,22 +129,27 @@ export async function uploadResumable(
 			// Without storage the upload still works; it just cannot resume after a reload.
 		}
 	};
+	const done = (current: Session) => Boolean(current.upload || current.part_id);
+	const create = () => api.createSession(file, part);
 
-	let session = await resumeOrCreate(file, api, storage?.getItem(key) ?? null);
+	let session = await resumeOrCreate(file, api, storage?.getItem(key) ?? null, create);
 	remember(session.session_id);
 	onProgress(session.received, file.size);
 
-	// The file is hashed while it uploads; hashing is far faster than any home connection, so a
-	// ROM the library already has is caught within the first parts instead of after the last.
+	// A whole file is hashed while it uploads; hashing is far faster than any home connection, so
+	// a ROM the library already has is caught within the first parts instead of after the last.
+	// A disc's files are checked as a disc, once assembled.
 	const hashing = new AbortController();
 	let sha256: string | null = null;
-	let checked = false;
-	hash(file, hashing.signal).then(
-		(digest) => (sha256 = digest),
-		() => (checked = true)
-	);
+	let checked = part;
+	if (!part) {
+		hash(file, hashing.signal).then(
+			(digest) => (sha256 = digest),
+			() => (checked = true)
+		);
+	}
 	const checkForDuplicate = async () => {
-		if (checked || !sha256 || session.upload) return;
+		if (checked || !sha256 || done(session)) return;
 		checked = true;
 		try {
 			await api.checkDuplicate(session.session_id, sha256);
@@ -136,22 +168,22 @@ export async function uploadResumable(
 		hashing.abort();
 	}
 
-	async function sendParts(): Promise<UploadAcceptedResponse> {
+	async function sendParts(): Promise<Session> {
 		let failures = 0;
-		while (!session.upload) {
+		while (!done(session)) {
 			await checkForDuplicate();
 			const partSize = Math.min(PART_BYTES, session.max_chunk_size || PART_BYTES);
 			const offset = session.received;
-			const part = file.slice(offset, Math.min(offset + partSize, file.size));
+			const piece = file.slice(offset, Math.min(offset + partSize, file.size));
 			try {
-				session = await api.sendPart(session.session_id, offset, part, (loaded) => onProgress(offset + loaded, file.size));
+				session = await api.sendPart(session.session_id, offset, piece, (loaded) => onProgress(offset + loaded, file.size));
 				failures = 0;
 				onReconnecting?.(false);
 				onProgress(session.received, file.size);
 			} catch (error) {
 				if (isStatus(error, 404)) {
 					// The session expired or was removed: start over.
-					session = await api.createSession(file);
+					session = await create();
 					remember(session.session_id);
 					continue;
 				}
@@ -174,7 +206,7 @@ export async function uploadResumable(
 					session = await api.getSession(session.session_id);
 				} catch (statusError) {
 					if (isStatus(statusError, 404)) {
-						session = await api.createSession(file);
+						session = await create();
 						remember(session.session_id);
 					}
 				}
@@ -183,11 +215,11 @@ export async function uploadResumable(
 		remember(null);
 		onReconnecting?.(false);
 		onProgress(file.size, file.size);
-		return session.upload;
+		return session;
 	}
 }
 
-async function resumeOrCreate(file: File, api: ResumableApi, sessionId: string | null): Promise<Session> {
+async function resumeOrCreate(file: File, api: ResumableApi, sessionId: string | null, create: () => Promise<Session>): Promise<Session> {
 	if (sessionId) {
 		try {
 			const session = await api.getSession(sessionId);
@@ -196,7 +228,7 @@ async function resumeOrCreate(file: File, api: ResumableApi, sessionId: string |
 			if (!isStatus(error, 404) && !isStatus(error, 400)) throw error;
 		}
 	}
-	return api.createSession(file);
+	return create();
 }
 
 /** The server API, as the upload page uses it. */

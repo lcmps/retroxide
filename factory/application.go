@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	authfeature "github.com/lcmps/retroxide/application/auth"
 	"github.com/lcmps/retroxide/application/fault"
@@ -75,7 +76,15 @@ func assembleApplication(ctx context.Context, settings config.Config, logger *sl
 		Config: settings, Database: database, Router: router, Logger: logger,
 		JobQueue: queue, JobPools: pools, Identifier: services.Identifier,
 		Maintenance: func(ctx context.Context) {
-			runMaintenance(ctx, logger, expireUploadSessions(services.Uploads), sweepUnreferencedFiles(repositories, storage))
+			var chores sync.WaitGroup
+			chores.Go(func() { runDiscCompression(ctx, logger, services.Discs, services.DiscsUploaded) })
+			runMaintenance(ctx, logger,
+				indexPendingFiles(services.Discs),
+				expireUploadSessions(services.Uploads),
+				expireUploadParts(repositories),
+				sweepUnreferencedFiles(repositories, storage),
+			)
+			chores.Wait()
 		},
 	}, nil
 }
