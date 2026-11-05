@@ -32,12 +32,28 @@ func NewIdentifyService(uploadRepository identifyUploadRepository, romRepository
 }
 
 func (service *IdentifyService) Identify(ctx context.Context, uploadID, romFileID string) error {
+	return service.identify(ctx, uploadID, romFileID, false)
+}
+
+func (service *IdentifyService) CompleteWithFilename(ctx context.Context, uploadID, romFileID string) error {
+	return service.identify(ctx, uploadID, romFileID, true)
+}
+
+func (service *IdentifyService) identify(ctx context.Context, uploadID, romFileID string, filenameOnly bool) error {
 	upload, err := service.uploadRepository.FindUpload(ctx, uploadID)
 	if err != nil {
 		return err
 	}
 	if upload == nil {
 		return fault.NotFound()
+	}
+	if upload.Status == uploadsdomain.UploadStatusCompleted {
+		return nil
+	}
+	if upload.Status == uploadsdomain.UploadStatusFailed {
+		if err := upload.TransitionTo(uploadsdomain.UploadStatusProcessing); err != nil {
+			return fault.Internal(err)
+		}
 	}
 	romFile, err := service.romRepository.FindROMFileByID(ctx, romFileID)
 	if err != nil {
@@ -56,6 +72,9 @@ func (service *IdentifyService) Identify(ctx context.Context, uploadID, romFileI
 	}
 
 	identity := InferIdentityFromFilename(upload.OriginalFilename)
+	if filenameOnly {
+		identity.Title = upload.OriginalFilename
+	}
 	romID, err := id.New("rom")
 	if err != nil {
 		return fault.Internal(fmt.Errorf("generating rom id: %w", err))
@@ -67,11 +86,13 @@ func (service *IdentifyService) Identify(ctx context.Context, uploadID, romFileI
 		Identity:   identity,
 	}
 	if err := service.romRepository.SaveROM(ctx, rom); err != nil {
-		if transitionErr := upload.TransitionTo(uploadsdomain.UploadStatusFailed); transitionErr == nil {
-			message := err.Error()
-			upload.ErrorMessage = &message
-			if saveErr := service.uploadRepository.SaveUpload(ctx, *upload); saveErr != nil {
-				slog.ErrorContext(ctx, "failed to persist failed upload status", "upload_id", uploadID, "error", saveErr)
+		if filenameOnly {
+			if transitionErr := upload.TransitionTo(uploadsdomain.UploadStatusFailed); transitionErr == nil {
+				message := err.Error()
+				upload.ErrorMessage = &message
+				if saveErr := service.uploadRepository.SaveUpload(ctx, *upload); saveErr != nil {
+					slog.ErrorContext(ctx, "failed to persist failed upload status", "upload_id", uploadID, "error", saveErr)
+				}
 			}
 		}
 		return err
