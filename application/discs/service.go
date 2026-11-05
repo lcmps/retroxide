@@ -603,7 +603,24 @@ func zipMethod(name string) uint16 {
 	return zip.Deflate
 }
 
+// safeEntryName reports whether name is a relative zip path with forward slashes and no empty,
+// "." or ".." segment, so extracting it cannot leave the folder it is extracted into.
+func safeEntryName(name string) bool {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
+		return false
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 func (writer *zipWriter) add(name string, size int64, write func(io.Writer) error) error {
+	if !safeEntryName(name) {
+		return fault.Validation(fmt.Sprintf("cannot put %q in a zip", name))
+	}
 	header := &zip.FileHeader{Name: name, Method: zipMethod(name), Modified: writer.modified}
 	header.SetMode(0o644)
 	if size >= 0 {

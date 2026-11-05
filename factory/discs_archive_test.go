@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/lcmps/retroxide/application/discs"
+	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/domain/identity"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
@@ -393,5 +394,94 @@ func TestCompressingOneDiscLeavesTheOthers(t *testing.T) {
 	detail, err := roms.Get(ctx, owner, game.ID)
 	if err != nil || len(detail.Discs) != 2 || detail.Discs[0].Disc.Format != "chd" || detail.Discs[1].Disc.Format != "tracks" {
 		t.Fatalf("detail = %+v, %v", detail.Discs, err)
+	}
+}
+
+// safeEntryName is the rule for zip entry names: segments are never empty, ".", or "..", and
+// there is no backslash or leading slash.
+func safeEntryName(name string) bool {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) {
+		return false
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func TestDownloadAllWithAHostileTitleStaysSafe(t *testing.T) {
+	name := func(number int) string { return "A...B (Disc " + string(rune('0'+number)) + ")" }
+	service, _, files := compressionFixture(t, nil)
+	tracks, _ := discTracks(t)
+	data := tracks["Game (Track 1).bin"]
+	hash, _ := romhash.New().Hash(data)
+	key, err := files.Write(context.Background(), hash.SHA256, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Assemble(context.Background(), "A...B.cue", "FILE \"a..b.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n",
+		[]discs.Part{{Name: "a..b.bin", StoragePath: key, Size: int64(len(data)), Hash: hash}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iso := storedFile(t, files, bytes.Repeat([]byte("iso"), 2048), romdomain.FormatFile)
+	var out bytes.Buffer
+	err = service.ArchiveDiscs(context.Background(), "A...B", []romdomain.ArchiveDisc{
+		{ROMFile: first, Name: name(1), Filename: name(1) + ".cue", AsTracks: true},
+		{ROMFile: iso, Name: name(2), Filename: name(2) + ".iso"},
+	}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := openZip(t, out.Bytes())
+	entries := map[string]bool{}
+	var playlist string
+	for _, file := range reader.File {
+		entries[file.Name] = true
+		if !safeEntryName(file.Name) {
+			t.Errorf("unsafe entry name %q", file.Name)
+		}
+		if file.Name == "A...B.m3u" {
+			playlist = string(zipEntry(t, file))
+		}
+	}
+	if !entries["A...B (Disc 1)/a..b.bin"] {
+		t.Errorf("entries = %v, want the track named a..b.bin", entries)
+	}
+	lines := strings.Split(strings.TrimSuffix(playlist, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("playlist = %q", playlist)
+	}
+	for _, line := range lines {
+		if !entries[line] {
+			t.Errorf("playlist line %q names no entry", line)
+		}
+	}
+}
+
+func TestAssemblingADiscWithADotDotTrackIsRefused(t *testing.T) {
+	ctx := context.Background()
+	service, repositories, files := compressionFixture(t, nil)
+	data := []byte(strings.Repeat("x", 2352*4))
+	hash, _ := romhash.New().Hash(data)
+	key, err := files.Write(ctx, hash.SHA256, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, track := range []string{"..", "."} {
+		sheet := "FILE \"" + track + "\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n"
+		_, err = service.Assemble(ctx, "Evil.cue", sheet, []discs.Part{{Name: track, StoragePath: key, Size: int64(len(data)), Hash: hash}}, false)
+		if !fault.IsCode(err, fault.CodeValidation) {
+			t.Fatalf("assembling a track named %q = %v, want a validation error", track, err)
+		}
+	}
+	stored, err := repositories.ListROMFilesByFormat(ctx, romdomain.FormatTracks, 10)
+	if err != nil || len(stored) != 0 {
+		t.Fatalf("stored discs = %+v, %v; want none", stored, err)
+	}
+	if file, _ := repositories.FindROMFileBySHA256(ctx, hash.SHA256); file != nil {
+		t.Fatalf("a rom_file was stored: %+v", file)
 	}
 }
