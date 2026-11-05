@@ -113,6 +113,15 @@ textarea {
 		color 120ms ease;
 }
 
+/* The reset above would remove the mark that shows whether these are on, so they stay native. */
+input[type='checkbox'],
+input[type='radio'] {
+	min-height: 0;
+	padding: 0;
+	appearance: auto;
+	-webkit-appearance: auto;
+}
+
 button:disabled,
 input:disabled,
 select:disabled,
