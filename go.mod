@@ -50,7 +50,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/klauspost/compress v1.20.3
-	github.com/lcmps/chdman-go v0.0.1
+	github.com/lcmps/chdman-go v0.0.2
 	github.com/ulikunitz/xz v0.5.17
 	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.33.0
