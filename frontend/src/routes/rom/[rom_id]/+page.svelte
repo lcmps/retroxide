@@ -11,7 +11,9 @@
   import CompressionProgress from '#lib/components/rom/CompressionProgress.svelte';
   import DiscTracks from '#lib/components/rom/DiscTracks.svelte';
   import { requestCompression, uploadRomCover } from '#lib/api/client.js';
-  import type { DownloadFormat, DownloadOption } from '#lib/api/types.js';
+  import DiscSwitcher from '#lib/components/rom/DiscSwitcher.svelte';
+  import { compressionOutcome, pickDisc } from '#lib/rom/discs.js';
+  import type { DownloadFormat, DownloadOption, RomDiscEntry } from '#lib/api/types.js';
   import { ApiClientError } from '#lib/api/errors.js';
   import { getErrorMessage, getValidationAwareErrorMessage } from '#lib/helpers/error.js';
   import { useTranslate } from '#lib/i18n/helpers.js';
@@ -115,8 +117,26 @@
     if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl);
   });
 
+  /** The discs as a list; an old response without them gets the one disc the ROM itself shows. */
+  function discEntries(detail: RomDetail | null): RomDiscEntry[] {
+    if (!detail) return [];
+    if (detail.discs?.length) return detail.discs;
+    return detail.disc ? [{ number: 1, rom_file_id: '', filename: '', size: 0, hash: detail.hash, disc: detail.disc }] : [];
+  }
+
+  let selectedDisc = $state<number | null>(null);
+  const discs = $derived(discEntries(rom));
+  const multiDisc = $derived((rom?.discs?.length ?? 0) > 1);
+  const current = $derived(pickDisc(rom?.discs ?? [], selectedDisc));
+  /** The disc the page shows and acts on; a single disc is just the ROM's own, as before. */
+  const currentDisc = $derived(multiDisc ? (current?.disc ?? null) : (rom?.disc ?? null));
+  const currentDownloads = $derived(multiDisc ? current?.downloads : rom?.downloads);
+  /** Sent only with several discs, so a single disc makes the requests it always did. */
+  const discParam = $derived(multiDisc ? current?.number : undefined);
+  const anyRequested = $derived(discs.some((entry) => entry.disc?.compression_requested));
+
   /** The formats this ROM downloads in, the one it was uploaded in first. */
-  const downloads = $derived<DownloadOption[]>(rom?.downloads?.length ? rom.downloads : [{ format: 'file', extension: '' }]);
+  const downloads = $derived<DownloadOption[]>(currentDownloads?.length ? currentDownloads : [{ format: 'file', extension: '' }]);
   let downloadFormat = $state<DownloadFormat>('file');
   let compressing = $state(false);
   let compressionPoll: ReturnType<typeof setTimeout> | undefined;
@@ -142,15 +162,16 @@
   /** While a disc is being compressed, refresh until it is done, so the page shows the result. */
   function watchCompression(): void {
     clearTimeout(compressionPoll);
-    if (!rom?.disc?.compression_requested) return;
+    if (!anyRequested) return;
     compressionPoll = setTimeout(async () => {
       if (!rom) return;
       try {
+        const waiting = discs.filter((entry) => entry.disc?.compression_requested).map((entry) => entry.rom_file_id);
         const updated = await getRom(rom.rom_id);
-        const finished = !updated.disc?.compression_requested;
+        const outcome = compressionOutcome(waiting, discEntries(updated));
         rom = updated;
-        if (finished) {
-          message = updated.disc?.format === 'chd'
+        if (outcome !== 'running') {
+          message = outcome === 'compressed'
             ? t('rom.messages.compressed', 'Compressed to CHD.')
             : t('rom.messages.compressFailed', 'The disc could not be compressed; it is kept as it was.');
         }
@@ -162,7 +183,7 @@
   }
 
   $effect(() => {
-    if (rom?.disc?.compression_requested) watchCompression();
+    if (anyRequested) watchCompression();
     return () => clearTimeout(compressionPoll);
   });
 
@@ -171,7 +192,7 @@
     compressing = true;
     message = '';
     try {
-      rom = await requestCompression(rom.rom_id);
+      rom = await requestCompression(rom.rom_id, discParam);
       message = t('rom.messages.compressQueued', 'Compressing to CHD in the background.');
     } catch (error) {
       message = getErrorMessage(error, 'rom.errors.compress', 'Failed to start compressing the disc', t);
@@ -180,7 +201,7 @@
     }
   }
 
-  async function downloadCurrentRom(format?: DownloadFormat): Promise<void> {
+  async function downloadCurrentRom(format?: DownloadFormat, disc?: number): Promise<void> {
     if (!rom) {
       return;
     }
@@ -189,7 +210,7 @@
     message = '';
     try {
       // The browser streams the file to disk through a signed link.
-      await downloadRom(rom.rom_id, format);
+      await downloadRom(rom.rom_id, format, disc);
     } catch (error) {
       message = getErrorMessage(error, 'common.errors.download', 'Failed to download ROM', t);
     } finally {
@@ -312,6 +333,9 @@
         {#if editing}
           <RomEditForm {rom} onsaved={(updated) => void saveEdits(updated)} oncancel={() => void closeEditor()} />
         {:else}
+          {#if multiDisc && rom.discs && current}
+            <DiscSwitcher discs={rom.discs} selected={current.number} onselect={(number) => (selectedDisc = number)} />
+          {/if}
           <dl class="rom-fields">
             {#each fields as field (field.key)}
               <div class="rom-field">
@@ -321,12 +345,12 @@
             {/each}
           </dl>
           {#if rom.description}<p class="rom-description">{rom.description}</p>{/if}
-          {#if rom.disc}<DiscTracks disc={rom.disc} />{/if}
+          {#if currentDisc}<DiscTracks disc={currentDisc} />{/if}
         {/if}
       </div>
       <div class="rom-actions" role="group" aria-label={t('rom.actions.label', 'ROM actions')}>
-        {#if rom.disc?.compression_requested}
-          <CompressionProgress percent={rom.disc.compression_percent ?? null} />
+        {#if currentDisc?.compression_requested}
+          <CompressionProgress percent={currentDisc.compression_percent ?? null} />
         {/if}
         <div class="rom-download">
           {#if downloads.length > 1}
@@ -339,13 +363,18 @@
               </select>
             </label>
           {/if}
-          <ActionButton type="button" onclick={() => downloadCurrentRom(downloadFormat)} disabled={downloading || deleting} aria-busy={downloading} title={t('rom.actions.downloadHint', 'Save this ROM to your device')}>
+          <ActionButton type="button" onclick={() => downloadCurrentRom(downloadFormat, discParam)} disabled={downloading || deleting} aria-busy={downloading} title={t('rom.actions.downloadHint', 'Save this ROM to your device')}>
             {downloading ? t('common.status.downloading', 'Downloading...') : t('rom.actions.download', 'Download')}
           </ActionButton>
+          {#if multiDisc}
+            <ActionButton type="button" onclick={() => downloadCurrentRom('all')} disabled={downloading || deleting} title={t('rom.actions.downloadAllHint', 'Save every disc in one .zip file')}>
+              {t('rom.actions.downloadAll', 'Download all discs')}
+            </ActionButton>
+          {/if}
         </div>
-        {#if rom.disc?.can_compress || rom.disc?.compression_requested}
-          <ActionButton type="button" onclick={compressCurrentRom} disabled={compressing || deleting || rom.disc.compression_requested} aria-busy={rom.disc.compression_requested} title={t('rom.actions.compressHint', 'Compress the disc to CHD in the background; its uploaded files can still be downloaded exactly as they are')}>
-            {rom.disc.compression_requested ? t('rom.actions.compressing', 'Compressing to CHD...') : t('rom.actions.compress', 'Compress to CHD')}
+        {#if currentDisc?.can_compress || currentDisc?.compression_requested}
+          <ActionButton type="button" onclick={compressCurrentRom} disabled={compressing || deleting || currentDisc.compression_requested} aria-busy={currentDisc.compression_requested} title={t('rom.actions.compressHint', 'Compress the disc to CHD in the background; its uploaded files can still be downloaded exactly as they are')}>
+            {currentDisc.compression_requested ? t('rom.actions.compressing', 'Compressing to CHD...') : t('rom.actions.compress', 'Compress to CHD')}
           </ActionButton>
         {/if}
         <ActionButton type="button" onclick={scrapeCurrentRom} disabled={scraping || deleting || uploadingCover} aria-busy={scraping} title={t('rom.actions.scrapeHint', 'Fetch the title, details, and artwork from online game databases')}>

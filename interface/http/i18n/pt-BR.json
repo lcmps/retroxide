@@ -451,5 +451,9 @@
   "rom.messages.compressQueued": "Compactando em CHD em segundo plano.",
   "rom.messages.compressed": "Compactado em CHD.",
   "rom.messages.compressFailed": "Não foi possível compactar o disco; ele foi mantido como estava.",
-  "rom.errors.compress": "Falha ao iniciar a compactação do disco"
+  "rom.errors.compress": "Falha ao iniciar a compactação do disco",
+  "rom.discs.label": "Discos",
+  "rom.discs.item": "Disco {number}",
+  "rom.actions.downloadAll": "Baixar todos os discos",
+  "rom.actions.downloadAllHint": "Salvar todos os discos em um arquivo .zip"
 }

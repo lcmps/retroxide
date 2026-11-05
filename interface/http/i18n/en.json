@@ -408,5 +408,9 @@
   "rom.messages.compressQueued": "Compressing to CHD in the background.",
   "rom.messages.compressed": "Compressed to CHD.",
   "rom.messages.compressFailed": "The disc could not be compressed; it is kept as it was.",
-  "rom.errors.compress": "Failed to start compressing the disc"
+  "rom.errors.compress": "Failed to start compressing the disc",
+  "rom.discs.label": "Discs",
+  "rom.discs.item": "Disc {number}",
+  "rom.actions.downloadAll": "Download all discs",
+  "rom.actions.downloadAllHint": "Save every disc in one .zip file"
 }

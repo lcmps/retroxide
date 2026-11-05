@@ -77,9 +77,22 @@ export type RomDetail = {
   disc?: RomDisc | null;
   /** The formats the ROM downloads in, the one it was uploaded in first. */
   downloads?: DownloadOption[];
+  /** Each disc of the title, in order; a single-disc ROM has one, and an old cached response none. */
+  discs?: RomDiscEntry[];
 };
 
-export type DownloadFormat = 'file' | 'chd' | 'tracks' | 'iso';
+/** One disc of a title, with its own file, tracks and download formats. */
+export type RomDiscEntry = {
+  number: number;
+  rom_file_id: string;
+  filename: string;
+  size: number;
+  hash: RomHash;
+  disc?: RomDisc | null;
+  downloads?: DownloadOption[];
+};
+
+export type DownloadFormat = 'file' | 'chd' | 'tracks' | 'iso' | 'all';
 
 export type DownloadOption = {
   format: DownloadFormat;

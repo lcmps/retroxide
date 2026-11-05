@@ -623,8 +623,9 @@ export function getUploadOptions(): Promise<UploadOptions> {
 }
 
 /** Asks for a disc kept as tracks to be compressed to CHD in the background. */
-export function requestCompression(romId: string): Promise<RomDetail> {
-  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/compress`, { method: 'POST', withAuth: true });
+export function requestCompression(romId: string, disc?: number): Promise<RomDetail> {
+  const query = disc ? `?disc=${disc}` : '';
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/compress${query}`, { method: 'POST', withAuth: true });
 }
 
 export function getUploadSession(sessionId: string): Promise<UploadSession> {
@@ -702,8 +703,11 @@ export function uploadStatus(uploadId: string): Promise<UploadStatusResponse> {
  * Requests a signed, short-lived download link. Opening it lets the browser stream the file to
  * disk with its own download UI, instead of buffering the whole ROM in page memory.
  */
-export async function createDownloadLink(romId: string, format?: DownloadFormat): Promise<DownloadLink> {
-  const query = format ? `?format=${format}` : '';
+export async function createDownloadLink(romId: string, format?: DownloadFormat, disc?: number): Promise<DownloadLink> {
+  const params = new URLSearchParams();
+  if (format) params.set('format', format);
+  if (disc) params.set('disc', String(disc));
+  const query = params.size ? `?${params}` : '';
   const link = await requestJson<{ url: string; filename: string; expires_in: number }>(
     `/rom/${encodeURIComponent(romId)}/download-link${query}`,
     { method: 'POST', withAuth: true }
@@ -715,8 +719,8 @@ export async function createDownloadLink(romId: string, format?: DownloadFormat)
  * Starts a native browser download of a ROM, in one of the formats its details list (its
  * first when omitted), and returns the link it opened.
  */
-export async function downloadRom(romId: string, format?: DownloadFormat): Promise<DownloadLink> {
-  const link = await createDownloadLink(romId, format);
+export async function downloadRom(romId: string, format?: DownloadFormat, disc?: number): Promise<DownloadLink> {
+  const link = await createDownloadLink(romId, format, disc);
   const anchor = document.createElement('a');
   anchor.href = link.url;
   anchor.download = link.filename;

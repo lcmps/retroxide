@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$app/env', () => ({ browser: true }));
 
-import { createDownloadLink, fetchRomCover, getRom, hasStoredSession, logoutSession, persistStoredSession, uploadRom } from './client';
+import { createDownloadLink, fetchRomCover, getRom, hasStoredSession, logoutSession, persistStoredSession, requestCompression, uploadRom } from './client';
 
 function jsonResponse(payload: unknown, status = 200): Response {
 	return new Response(JSON.stringify(payload), {
@@ -191,5 +191,32 @@ describe('proactive session refresh', () => {
 		await getRom('rom-1');
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('adds disc to the download link only when given', async () => {
+		persistStoredSession({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 });
+		const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ url: '/api/v1/download?token=t', filename: 'a.chd', expires_in: 60 }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await createDownloadLink('rom-1', 'chd');
+		await createDownloadLink('rom-1', 'chd', 2);
+		await createDownloadLink('rom-1', 'all');
+
+		expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+			'/api/v1/rom/rom-1/download-link?format=chd',
+			'/api/v1/rom/rom-1/download-link?format=chd&disc=2',
+			'/api/v1/rom/rom-1/download-link?format=all'
+		]);
+	});
+
+	it('adds disc to the compress request only when given', async () => {
+		persistStoredSession({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 });
+		const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({}));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await requestCompression('rom-1');
+		await requestCompression('rom-1', 3);
+
+		expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(['/api/v1/rom/rom-1/compress', '/api/v1/rom/rom-1/compress?disc=3']);
 	});
 });
