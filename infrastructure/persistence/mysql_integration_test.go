@@ -200,6 +200,42 @@ func TestMySQLROMFileIdentifierUpgrade(t *testing.T) {
 	if err := repositories.SaveROM(context.Background(), romdomain.ROM{ID: "new-rom", ROMFileID: file.ID, UploaderID: "system", Identity: romdomain.ROMIdentity{Title: "New", Platform: "snes"}}); err != nil {
 		t.Fatal(err)
 	}
+	ctx := context.Background()
+	if discs, err := repositories.FindROMDiscs(ctx, "legacy-rom"); err != nil || len(discs) != 1 || discs[0].Number != 1 || discs[0].ROMFileID != legacy.ID {
+		t.Fatalf("legacy ROM discs after upgrade = %+v, %v", discs, err)
+	}
+	if discs, err := repositories.FindROMDiscs(ctx, "new-rom"); err != nil || len(discs) != 1 || discs[0].ROMFileID != file.ID {
+		t.Fatalf("new ROM discs = %+v, %v", discs, err)
+	}
+	if err := repositories.RecordDisc(ctx, romdomain.ROMDisc{ROMID: "new-rom", ROMFileID: "missing", Number: 2}); err == nil {
+		t.Fatal("rom_disc foreign key to rom_file was not enforced")
+	}
+	if err := db.Exec("INSERT INTO rom_disc (rom_id, rom_file_id, number) VALUES ('missing', ?, 1)", file.ID).Error; err == nil {
+		t.Fatal("rom_disc foreign key to rom was not enforced")
+	}
+	group := "disc-group"
+	second := validROMFile("group-file", "group content")
+	second.ID = "rf_" + second.Hash.SHA256
+	if _, err := repositories.UpsertROMFile(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	first := romdomain.ROM{ID: "group-a", ROMFileID: file.ID, UploaderID: "grouper", DiscGroup: &group, Identity: romdomain.ROMIdentity{Title: "First", Platform: "psx"}}
+	if err := repositories.SaveROM(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	clash := romdomain.ROM{ID: "group-b", ROMFileID: second.ID, UploaderID: "grouper", DiscGroup: &group, Identity: romdomain.ROMIdentity{Title: "Clash", Platform: "psx"}}
+	if err := repositories.SaveROM(ctx, clash); err == nil {
+		t.Fatal("second ROM with the same uploader and disc group was accepted")
+	}
+	if kept, err := repositories.FindROMByID(ctx, "group-a"); err != nil || kept == nil || kept.Identity.Title != "First" || kept.ROMFileID != file.ID {
+		t.Fatalf("first ROM after clash = %+v, %v", kept, err)
+	}
+	if absent, err := repositories.FindROMByID(ctx, "group-b"); err != nil || absent != nil {
+		t.Fatalf("clashing ROM = %+v, %v", absent, err)
+	}
+	if discs, err := repositories.FindROMDiscs(ctx, "group-b"); err != nil || len(discs) != 0 {
+		t.Fatalf("clashing ROM discs = %+v, %v", discs, err)
+	}
 	job := jobsdomain.Payload{Kind: "identify_rom", UploadID: "new-upload", ROMFileID: file.ID}
 	if err := repositories.Enqueue(context.Background(), job); err != nil {
 		t.Fatal(err)

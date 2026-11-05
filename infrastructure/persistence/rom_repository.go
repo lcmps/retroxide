@@ -12,7 +12,6 @@ import (
 	"github.com/lcmps/retroxide/application/rom"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // UpsertROMFile inserts romFile, reporting an already-exists conflict when identical content is stored.
@@ -48,15 +47,21 @@ func classifyROMFileConflict(existingID string, existingHash, incomingHash romdo
 func (repositories *Repositories) SaveROM(ctx context.Context, rom romdomain.ROM) error {
 	model := romModel(rom)
 	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{
-				"title", "platform", "region", "version", "identified_by", "confidence",
-				"cover_art_path", "cover_thumb_path", "publisher", "release_year", "genre",
-				"description", "title_screen_path", "screenshot_path",
-			}),
-		}).Create(&model).Error
-		if err != nil {
+		// Find then create or update, rather than an upsert: on MySQL ON DUPLICATE KEY UPDATE
+		// also fires on the (uploader_id, disc_group) key and would overwrite another ROM.
+		var existing int64
+		if err := tx.Model(&ROMModel{}).Where("id = ?", model.ID).Count(&existing).Error; err != nil {
+			return err
+		}
+		if existing == 0 {
+			if err := tx.Create(&model).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Model(&ROMModel{}).Where("id = ?", model.ID).Select(
+			"title", "platform", "region", "version", "identified_by", "confidence",
+			"cover_art_path", "cover_thumb_path", "publisher", "release_year", "genre",
+			"description", "title_screen_path", "screenshot_path",
+		).Updates(&model).Error; err != nil {
 			return err
 		}
 		var discs int64
