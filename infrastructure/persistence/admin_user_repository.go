@@ -61,7 +61,7 @@ func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]
 		UploaderID string
 		Bytes      uint64
 	}
-	if err := db.Table("rom AS r").Joins("JOIN rom_file AS f ON f.id = r.rom_file_id").
+	if err := db.Table("rom AS r").Joins("JOIN rom_disc AS d ON d.rom_id = r.id").Joins("JOIN rom_file AS f ON f.id = d.rom_file_id").
 		Select("r.uploader_id AS uploader_id, COALESCE(SUM(f.size), 0) AS bytes").Group("r.uploader_id").Scan(&storage).Error; err != nil {
 		return nil, databaseError("summing storage per user", err)
 	}

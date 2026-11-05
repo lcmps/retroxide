@@ -139,6 +139,12 @@ ALTER TABLE upload_session ADD COLUMN part INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS upload_part (id TEXT PRIMARY KEY, uploader_id TEXT NOT NULL, filename TEXT NOT NULL, storage_path TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, sha1 TEXT NOT NULL, md5 TEXT NOT NULL, crc32 TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_upload_part_created_at ON upload_part(created_at);
 CREATE INDEX IF NOT EXISTS idx_upload_part_storage_path ON upload_part(storage_path);`},
+	{24, "add_rom_discs", `ALTER TABLE rom ADD COLUMN disc_group TEXT;
+CREATE UNIQUE INDEX idx_rom_uploader_disc_group ON rom(uploader_id, disc_group);
+CREATE TABLE rom_disc (rom_id TEXT NOT NULL, rom_file_id TEXT NOT NULL, number INTEGER NOT NULL, filename TEXT NOT NULL DEFAULT '', PRIMARY KEY (rom_id, number), UNIQUE (rom_id, rom_file_id));
+CREATE INDEX idx_rom_disc_rom_file_id ON rom_disc(rom_file_id);
+INSERT INTO rom_disc (rom_id, rom_file_id, number, filename)
+  SELECT r.id, r.rom_file_id, 1, COALESCE((SELECT u.original_filename FROM upload u WHERE u.rom_id = r.id ORDER BY u.id LIMIT 1), '') FROM rom r;`},
 }
 
 var mysqlMigrations = []migration{
@@ -241,6 +247,12 @@ ALTER TABLE upload_session ADD COLUMN part BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS upload_part (id VARCHAR(64) PRIMARY KEY, uploader_id VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, storage_path TEXT NOT NULL, size BIGINT UNSIGNED NOT NULL, sha256 CHAR(64) NOT NULL, sha1 CHAR(40) NOT NULL, md5 CHAR(32) NOT NULL, crc32 CHAR(8) NOT NULL, created_at BIGINT NOT NULL);
 CREATE INDEX idx_upload_part_created_at ON upload_part(created_at);
 CREATE INDEX idx_upload_part_storage_path ON upload_part(storage_path(512));`},
+	{24, "add_rom_discs", `ALTER TABLE rom ADD COLUMN disc_group CHAR(64) NULL;
+CREATE UNIQUE INDEX idx_rom_uploader_disc_group ON rom(uploader_id, disc_group);
+CREATE TABLE rom_disc (rom_id VARCHAR(64) NOT NULL, rom_file_id VARCHAR(67) NOT NULL, number INT UNSIGNED NOT NULL, filename VARCHAR(255) NOT NULL DEFAULT '', PRIMARY KEY (rom_id, number), UNIQUE KEY uq_rom_disc_file (rom_id, rom_file_id), CONSTRAINT fk_rom_disc_rom FOREIGN KEY (rom_id) REFERENCES rom(id), CONSTRAINT fk_rom_disc_rom_file FOREIGN KEY (rom_file_id) REFERENCES rom_file(id));
+CREATE INDEX idx_rom_disc_rom_file_id ON rom_disc(rom_file_id);
+INSERT INTO rom_disc (rom_id, rom_file_id, number, filename)
+  SELECT r.id, r.rom_file_id, 1, COALESCE((SELECT u.original_filename FROM upload u WHERE u.rom_id = r.id ORDER BY u.id LIMIT 1), '') FROM rom r;`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {

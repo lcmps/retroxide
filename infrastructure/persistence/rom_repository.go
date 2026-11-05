@@ -12,6 +12,7 @@ import (
 	"github.com/lcmps/retroxide/application/rom"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // UpsertROMFile inserts romFile, reporting an already-exists conflict when identical content is stored.
@@ -41,9 +42,30 @@ func classifyROMFileConflict(existingID string, existingHash, incomingHash romdo
 	return fault.ROMAlreadyExists(existingID, incomingHash.SHA256)
 }
 
+// SaveROM creates or updates a ROM's metadata. An update never writes rom_file_id, uploader_id
+// or disc_group, so a stale copy cannot undo a disc attached meanwhile. A ROM with no discs gets
+// disc 1 for its file.
 func (repositories *Repositories) SaveROM(ctx context.Context, rom romdomain.ROM) error {
 	model := romModel(rom)
-	if err := repositories.DB.WithContext(ctx).Save(&model).Error; err != nil {
+	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"title", "platform", "region", "version", "identified_by", "confidence",
+				"cover_art_path", "cover_thumb_path", "publisher", "release_year", "genre",
+				"description", "title_screen_path", "screenshot_path",
+			}),
+		}).Create(&model).Error
+		if err != nil {
+			return err
+		}
+		var discs int64
+		if err := tx.Model(&ROMDiscModel{}).Where("rom_id = ?", model.ID).Count(&discs).Error; err != nil || discs > 0 {
+			return err
+		}
+		return tx.Create(&ROMDiscModel{ROMID: model.ID, ROMFileID: model.ROMFileID, Number: 1}).Error
+	})
+	if err != nil {
 		return databaseError("saving rom", err)
 	}
 	return nil
@@ -182,17 +204,18 @@ func escapeLike(value string) string {
 func scanROMsWithFiles(query *gorm.DB, operation string) ([]romdomain.ROMWithFile, error) {
 	var rows []struct {
 		ROMModel
-		SHA256 string `gorm:"column:sha256"`
+		SHA256    string `gorm:"column:sha256"`
+		DiscCount int    `gorm:"column:disc_count"`
 	}
 	err := query.
-		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, r.cover_thumb_path, r.publisher, r.release_year, r.genre, f.sha256").
+		Select("r.id, r.rom_file_id, r.uploader_id, r.title, r.platform, r.region, r.version, r.identified_by, r.confidence, r.cover_art_path, r.cover_thumb_path, r.publisher, r.release_year, r.genre, r.disc_group, f.sha256, (SELECT COUNT(*) FROM rom_disc d WHERE d.rom_id = r.id) AS disc_count").
 		Scan(&rows).Error
 	if err != nil {
 		return nil, databaseError(operation, err)
 	}
 	result := make([]romdomain.ROMWithFile, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, romdomain.ROMWithFile{ROM: romEntity(row.ROMModel), SHA256: row.SHA256})
+		result = append(result, romdomain.ROMWithFile{ROM: romEntity(row.ROMModel), SHA256: row.SHA256, DiscCount: row.DiscCount})
 	}
 	return result, nil
 }
@@ -222,14 +245,19 @@ func (repositories *Repositories) FindROMFileByROMID(ctx context.Context, romID 
 
 func (repositories *Repositories) CountROMsByROMFileID(ctx context.Context, romFileID string) (uint64, error) {
 	var count int64
-	if err := repositories.DB.WithContext(ctx).Model(&ROMModel{}).Where("rom_file_id = ?", romFileID).Count(&count).Error; err != nil {
+	if err := repositories.DB.WithContext(ctx).Model(&ROMDiscModel{}).Where("rom_file_id = ?", romFileID).Count(&count).Error; err != nil {
 		return 0, databaseError("counting rom references", err)
 	}
 	return uint64(count), nil
 }
 
 func (repositories *Repositories) DeleteROM(ctx context.Context, romID string) error {
-	return expectDeleted(repositories.DB.WithContext(ctx).Where("id = ?", romID).Delete(&ROMModel{}), "deleting rom")
+	return repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("rom_id = ?", romID).Delete(&ROMDiscModel{}).Error; err != nil {
+			return databaseError("deleting rom discs", err)
+		}
+		return expectDeleted(tx.Where("id = ?", romID).Delete(&ROMModel{}), "deleting rom")
+	})
 }
 
 func (repositories *Repositories) DeleteROMFile(ctx context.Context, romFileID string) error {
@@ -238,7 +266,7 @@ func (repositories *Repositories) DeleteROMFile(ctx context.Context, romFileID s
 
 func romModel(rom romdomain.ROM) ROMModel {
 	return ROMModel{
-		ID: rom.ID, ROMFileID: rom.ROMFileID, UploaderID: rom.UploaderID,
+		ID: rom.ID, ROMFileID: rom.ROMFileID, UploaderID: rom.UploaderID, DiscGroup: rom.DiscGroup,
 		Title: rom.Identity.Title, Platform: rom.Identity.Platform, Region: rom.Identity.Region,
 		Version: rom.Identity.Version, IdentifiedBy: rom.Identity.IdentifiedBy,
 		Confidence: rom.Identity.Confidence, CoverArtPath: rom.Identity.CoverArtPath, CoverThumbPath: rom.Identity.CoverThumbPath,
@@ -249,7 +277,7 @@ func romModel(rom romdomain.ROM) ROMModel {
 
 func romEntity(model ROMModel) romdomain.ROM {
 	return romdomain.ROM{
-		ID: model.ID, ROMFileID: model.ROMFileID, UploaderID: model.UploaderID,
+		ID: model.ID, ROMFileID: model.ROMFileID, UploaderID: model.UploaderID, DiscGroup: model.DiscGroup,
 		Identity: romdomain.ROMIdentity{
 			Title: model.Title, Platform: model.Platform, Region: model.Region, Version: model.Version,
 			CoverArtPath: model.CoverArtPath, CoverThumbPath: model.CoverThumbPath, IdentifiedBy: model.IdentifiedBy, Confidence: model.Confidence,

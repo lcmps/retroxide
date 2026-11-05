@@ -71,7 +71,17 @@ type ROM struct {
 	ID         string
 	ROMFileID  string
 	UploaderID string
-	Identity   ROMIdentity
+	// DiscGroup is the filename key that groups a ROM's discs; nil when never grouped.
+	DiscGroup *string
+	Identity  ROMIdentity
+}
+
+// ROMDisc is one disc of a ROM. An empty Filename means the upload's name is unknown.
+type ROMDisc struct {
+	ROMID     string
+	ROMFileID string
+	Number    int
+	Filename  string
 }
 
 type ROMFile struct {

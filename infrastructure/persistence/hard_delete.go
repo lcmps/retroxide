@@ -57,6 +57,9 @@ func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID strin
 		if err := tx.Where("rom_id = ?", romID).Delete(&LibraryItemModel{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("rom_id = ?", romID).Delete(&ROMDiscModel{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Delete(&rom).Error; err != nil {
 			return err
 		}
