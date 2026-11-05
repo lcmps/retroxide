@@ -40,8 +40,6 @@ type Config struct {
 	ScrapeWorkerCount int
 	// MetricsToken, when set, serves Prometheus metrics at /metrics to requests bearing it.
 	MetricsToken string
-	// ChdmanPath locates MAME's chdman (a path, or a name looked up in PATH; default chdman).
-	ChdmanPath string
 	// CompressDiscs is the initial choice, on the upload page, to compress discs uploaded as
 	// CUE/BIN or GDI to CHD.
 	CompressDiscs bool
@@ -152,14 +150,13 @@ func Load(lookup Lookup) (Config, error) {
 		JWTAccessExpirySecs: accessExpiry, JWTRefreshExpirySecs: refreshExpiry,
 		CORSAllowedOrigins: origins, TrustedProxies: trustedProxies, WorkerCount: int(workerCount),
 		ScrapeWorkerCount: int(scrapeWorkerCount), UIFont: uiFont, MetricsToken: metricsToken,
-		ChdmanPath: strings.TrimSpace(get(lookup, ChdmanPathKey, "")), CompressDiscs: compressDiscs,
-		AdminEmail: adminEmail, AdminPassword: adminPassword,
+		CompressDiscs: compressDiscs,
+		AdminEmail:    adminEmail, AdminPassword: adminPassword,
 	}, nil
 }
 
 // Keys of the disc settings.
 const (
-	ChdmanPathKey    = "RETROXIDE_CHDMAN_PATH"
 	CompressDiscsKey = "RETROXIDE_COMPRESS_DISCS"
 )
 
