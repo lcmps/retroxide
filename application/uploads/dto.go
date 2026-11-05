@@ -60,7 +60,7 @@ type AssembleDiscInput struct {
 
 // UploadOptionsDTO is what the upload page can offer.
 type UploadOptionsDTO struct {
-	// DiscCompression says discs can be compressed to CHD (chdman is installed).
+	// DiscCompression says discs can be compressed to CHD.
 	DiscCompression bool `json:"disc_compression"`
 	// DiscCompressionDefault is the initial choice for compressing uploaded discs.
 	DiscCompressionDefault bool `json:"disc_compression_default"`
