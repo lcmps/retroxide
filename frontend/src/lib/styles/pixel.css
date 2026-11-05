@@ -54,12 +54,22 @@ body {
 	font-synthesis: none;
 }
 
-body {
-	min-width: 320px;
+/* Phones otherwise enlarge some text on their own, most visibly when rotated. */
+html {
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+	/* Reserves the scrollbar's space, so a page growing past the screen does not shift sideways. */
+	scrollbar-gutter: stable;
 }
 
 * {
 	box-sizing: border-box;
+}
+
+/* A fieldset defaults to its content's minimum width, so one long value would widen the whole page. */
+fieldset {
+	min-width: 0;
+	min-inline-size: 0;
 }
 
 a,
@@ -141,7 +151,10 @@ input::placeholder {
 }
 
 .app-shell {
+	/* 100vh includes the phone's collapsing address bar, which makes short pages scroll; dvh changes
+	   while that bar moves. svh is the height with the bar showing, and holds still during a scroll. */
 	min-height: 100vh;
+	min-height: 100svh;
 	padding: 1.25rem 1.5rem;
 }
 
@@ -262,7 +275,7 @@ input::placeholder {
 
 
 
-/* The profile button: the pixel-art user icon, always the rightmost header item. */
+/* The profile menu's button: the pixel-art user icon, always the rightmost header item. */
 .app-shell__nav .app-shell__profile {
 	width: 2.25rem;
 	min-width: 2.25rem;
@@ -281,9 +294,52 @@ input::placeholder {
 }
 
 .app-shell__nav .app-shell__profile:hover,
-.app-shell__nav .app-shell__profile.current {
+.app-shell__nav .app-shell__profile.current,
+.app-shell__nav .app-shell__profile[data-state='open'] {
 	opacity: 1;
 	background: var(--pixel-panel);
+}
+
+/* Rendered at the end of the page, outside the header, so it inherits none of the nav's styles. */
+.app-shell__menu {
+	z-index: 40;
+	display: grid;
+	min-width: 11rem;
+	max-width: calc(100vw - 1rem);
+	padding: 0.35rem;
+	border: 2px solid var(--pixel-border-strong);
+	border-radius: 0.4rem;
+	background: var(--pixel-panel);
+	outline: none;
+}
+
+.app-shell__menu [role='menuitem'] {
+	display: flex;
+	align-items: center;
+	/* A comfortable touch target, whatever the label's size. */
+	min-height: 2.75rem;
+	padding: 0.5rem 0.75rem;
+	border-radius: 0.25rem;
+	color: var(--pixel-text);
+	font-size: 0.6rem;
+	line-height: 1.5;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+	outline: none;
+}
+
+.app-shell__menu [role='menuitem'][data-highlighted] {
+	background: var(--pixel-panel-strong);
+	color: var(--pixel-focus);
+}
+
+/* The current page is underlined as well as brighter, like the links in the nav. */
+.app-shell__menu [role='menuitem'][aria-current='page'] {
+	text-decoration: underline;
+	text-decoration-thickness: 2px;
+	text-underline-offset: 0.35em;
 }
 
 .app-shell__nav a:hover,
@@ -404,9 +460,10 @@ input::placeholder {
 	}
 
 	.app-shell__nav {
-		justify-content: center;
+		/* The links and the profile icon share one row on every phone, the icon at its end. */
+		justify-content: space-between;
 		flex-wrap: wrap;
-		gap: 0.5rem 1.25rem;
+		gap: 0.5rem 0.6rem;
 		margin-top: 0.85rem;
 	}
 
@@ -436,6 +493,8 @@ input::placeholder {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;
 		align-items: center;
+		/* Rows would otherwise share the spare height, moving the header as the content loads. */
+		align-content: start;
 		column-gap: 1rem;
 		padding: 0.6rem 1rem 1rem;
 	}

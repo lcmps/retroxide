@@ -263,6 +263,8 @@
 		border-radius: 0.35rem;
 		background: #262626;
 		font-size: 0.5rem;
+		line-height: 1.6;
+		overflow-wrap: anywhere;
 	}
 
 	.count {
@@ -314,5 +316,11 @@
 
 	.message--error {
 		color: #e18a78;
+	}
+
+	@media (max-width: 40rem) {
+		.stats {
+			grid-template-columns: minmax(0, 1fr);
+		}
 	}
 </style>

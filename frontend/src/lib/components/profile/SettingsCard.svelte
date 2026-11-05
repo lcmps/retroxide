@@ -299,6 +299,7 @@
 		font-size: 0.45rem;
 		line-height: 1.7;
 		color: var(--pixel-muted);
+		overflow-wrap: anywhere;
 	}
 
 	.setting__note--pending {

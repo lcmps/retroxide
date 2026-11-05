@@ -89,14 +89,15 @@
 </svelte:head>
 
 <main class="setup-page">
-	<section class="setup-card" aria-labelledby="setup-title">
-		<img class="setup-logo" src="/components/main-logo.png" alt="Retroxide" />
-		<h1 id="setup-title">{t('setup.title', 'Setup')}</h1>
-		<p class="setup-intro">{t('setup.intro', 'Configure the server to finish installing Retroxide.')}</p>
+	<!-- The card is centred, so it would jump as it grows; it is drawn once its form is known. -->
+	{#if loading}
+		<p class="status">{t('setup.loading', 'Loading...')}</p>
+	{:else}
+		<section class="setup-card" aria-labelledby="setup-title">
+			<img class="setup-logo" src="/components/main-logo.png" alt="Retroxide" width="726" height="160" />
+			<h1 id="setup-title">{t('setup.title', 'Setup')}</h1>
+			<p class="setup-intro">{t('setup.intro', 'Configure the server to finish installing Retroxide.')}</p>
 
-		{#if loading}
-			<p class="status">{t('setup.loading', 'Loading...')}</p>
-		{:else}
 			<form class="setup-form" onsubmit={submit}>
 				<DatabaseSettings
 					bind:driver
@@ -126,17 +127,18 @@
 					{saving ? t('setup.saving', 'Saving...') : t('setup.save', 'Save and continue')}
 				</ActionButton>
 			</form>
-		{/if}
 
-		{#if errorMessage}
-			<p class="status status--error" role="alert">{errorMessage}</p>
-		{/if}
-	</section>
+			{#if errorMessage}
+				<p class="status status--error" role="alert">{errorMessage}</p>
+			{/if}
+		</section>
+	{/if}
 </main>
 
 <style>
 	.setup-page {
 		min-height: 100vh;
+		min-height: 100svh;
 		display: grid;
 		place-items: center;
 		padding: 2rem 1.5rem;
