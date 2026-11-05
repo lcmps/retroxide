@@ -46,6 +46,10 @@ func registerROMRoutes(api *gin.RouterGroup, roms rom.API, links DownloadLinks) 
 	group.POST("/:rom_id/cover", handler.uploadCover)
 	group.POST("/:rom_id/scrape", handler.scrape)
 	group.POST("/:rom_id/compress", handler.compress)
+	group.POST("/:rom_id/merge", handler.mergeROM)
+	group.PUT("/:rom_id/discs/order", handler.reorderDiscs)
+	group.POST("/:rom_id/discs/:number/split", handler.splitDisc)
+	group.DELETE("/:rom_id/discs/:number", handler.removeDisc)
 	group.GET("/:rom_id/media/:kind", handler.media)
 	group.GET("/:rom_id/download", handler.download)
 	group.POST("/:rom_id/download-link", requireService(links != nil), handler.createDownloadLink)
@@ -147,6 +151,62 @@ func (handler romHandler) scrape(c *gin.Context) {
 func (handler romHandler) compress(c *gin.Context) {
 	detail, err := handler.roms.RequestCompression(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"))
 	respondJSON(c, http.StatusAccepted, detail, err)
+}
+
+// mergeRequest names the ROM whose discs move onto the one in the path.
+type mergeRequest struct {
+	SourceROMID string `json:"source_rom_id"`
+}
+
+func (handler romHandler) mergeROM(c *gin.Context) {
+	var input mergeRequest
+	if !bindJSON(c, &input) {
+		return
+	}
+	merged, err := handler.roms.MergeROM(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), input.SourceROMID)
+	respondJSON(c, http.StatusOK, merged, err)
+}
+
+// reorderRequest lists every disc's ROM file ID in the order they are to be numbered.
+type reorderRequest struct {
+	ROMFileIDs []string `json:"rom_file_ids"`
+}
+
+func (handler romHandler) reorderDiscs(c *gin.Context) {
+	var input reorderRequest
+	if !bindJSON(c, &input) {
+		return
+	}
+	reordered, err := handler.roms.ReorderDiscs(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), input.ROMFileIDs)
+	respondJSON(c, http.StatusOK, reordered, err)
+}
+
+func (handler romHandler) splitDisc(c *gin.Context) {
+	number, err := discNumber(c)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	split, err := handler.roms.SplitDisc(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), number)
+	respondJSON(c, http.StatusOK, split, err)
+}
+
+func (handler romHandler) removeDisc(c *gin.Context) {
+	number, err := discNumber(c)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	remaining, err := handler.roms.RemoveDisc(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), number)
+	respondJSON(c, http.StatusOK, remaining, err)
+}
+
+func discNumber(c *gin.Context) (int, error) {
+	number, err := strconv.Atoi(c.Param("number"))
+	if err != nil {
+		return 0, fault.Validation("disc number must be an integer")
+	}
+	return number, nil
 }
 
 func (handler romHandler) media(c *gin.Context) {

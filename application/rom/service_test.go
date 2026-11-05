@@ -20,6 +20,37 @@ type romTestRepository struct {
 	// uploadROMs maps upload IDs to the ROM each created.
 	uploadROMs map[string]string
 	discTracks map[string][]romdomain.DiscTrack
+	// discs maps ROM IDs to their discs; calls records the disc operations asked for.
+	discs map[string][]romdomain.ROMDisc
+	calls []string
+}
+
+func (repository *romTestRepository) FindROMDiscs(_ context.Context, romID string) ([]romdomain.ROMDisc, error) {
+	return repository.discs[romID], nil
+}
+
+func (repository *romTestRepository) MergeROMs(_ context.Context, targetID, sourceID string, _ func(string) error) error {
+	repository.calls = append(repository.calls, "merge "+targetID+" "+sourceID)
+	delete(repository.roms, sourceID)
+	return nil
+}
+
+func (repository *romTestRepository) SplitROMDisc(_ context.Context, romID, romFileID, newROMID string) error {
+	repository.calls = append(repository.calls, "split "+romID+" "+romFileID)
+	rom := repository.roms[romID]
+	rom.ID, rom.ROMFileID = newROMID, romFileID
+	repository.roms[newROMID] = rom
+	return nil
+}
+
+func (repository *romTestRepository) ReorderROMDiscs(_ context.Context, romID string, romFileIDs []string) error {
+	repository.calls = append(repository.calls, "reorder "+romID+" "+strings.Join(romFileIDs, ","))
+	return nil
+}
+
+func (repository *romTestRepository) HardDeleteROMDisc(_ context.Context, romID, romFileID string, _ func(string) error) error {
+	repository.calls = append(repository.calls, "remove "+romID+" "+romFileID)
+	return nil
 }
 
 func (repository *romTestRepository) FindROMIDByUploadID(_ context.Context, uploadID string) (*string, error) {

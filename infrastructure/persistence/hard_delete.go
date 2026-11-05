@@ -124,10 +124,7 @@ func (repositories *Repositories) HardDeleteROMDisc(ctx context.Context, romID, 
 			return fmt.Errorf("finding ROM file for hard delete: %w", err)
 		}
 		// Only the upload that brought this disc: the others brought the ROM's other discs.
-		uploads := tx.Model(&UploadModel{}).Where("rom_id = ? AND original_filename = ?", romID, disc.Filename)
-		if disc.Filename == "" {
-			uploads = tx.Model(&UploadModel{}).Where("1 = 0")
-		}
+		uploads := uploadNamedForDisc(tx, romID, *disc, discs)
 		unshared, err := unsharedFileIDs(tx, romID, []ROMFileModel{file})
 		if err != nil {
 			return err

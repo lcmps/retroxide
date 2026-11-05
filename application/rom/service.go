@@ -96,13 +96,18 @@ func (service *Service) Delete(ctx context.Context, requester identity.Requester
 	if _, err := service.findAccessibleROM(ctx, requester, romID); err != nil {
 		return err
 	}
-	return service.repository.HardDeleteROM(ctx, romID, func(path string) error {
-		// The deletion has committed; a file left behind is reclaimed by the storage sweep.
+	return service.repository.HardDeleteROM(ctx, romID, service.deleteStoredFile(ctx))
+}
+
+// deleteStoredFile returns the callback a deletion runs, once committed, for each file nothing
+// references any more. A file left behind is reclaimed by the storage sweep.
+func (service *Service) deleteStoredFile(ctx context.Context) func(string) error {
+	return func(path string) error {
 		if err := service.storage.Delete(context.WithoutCancel(ctx), path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			slog.WarnContext(ctx, "could not delete stored file; the storage sweep will reclaim it", "path", path, "error", err)
 		}
 		return nil
-	})
+	}
 }
 
 // Download downloads a ROM in its first format: the one it was uploaded in.

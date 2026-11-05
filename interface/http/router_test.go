@@ -217,6 +217,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"GET /api/v1/rom", "GET /api/v1/rom/:rom_id", "PATCH /api/v1/rom/:rom_id", "DELETE /api/v1/rom/:rom_id",
 		"GET /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/cover/thumb", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
 		"POST /api/v1/rom/:rom_id/download-link", "GET /api/v1/download",
+		"POST /api/v1/rom/:rom_id/merge", "PUT /api/v1/rom/:rom_id/discs/order", "POST /api/v1/rom/:rom_id/discs/:number/split", "DELETE /api/v1/rom/:rom_id/discs/:number",
 		"POST /api/v1/rom/:rom_id/scrape", "GET /api/v1/rom/:rom_id/media/:kind",
 		"GET /api/v1/library", "POST /api/v1/library", "GET /api/v1/library/:library_id",
 		"POST /api/v1/library/:library_id/item", "DELETE /api/v1/library/:library_id/item/:rom_id",
@@ -651,5 +652,73 @@ func TestRouterAcceptsOnlyLocalesWithACatalog(t *testing.T) {
 	}
 	if code := patch(`{"locale":""}`); code != http.StatusOK {
 		t.Fatalf("clearing the locale = %d, want 200", code)
+	}
+}
+
+// discTestROMs records the disc operation each route asked for.
+type discTestROMs struct {
+	rom.API
+	calls *[]string
+}
+
+func (roms discTestROMs) record(call string, romID string) (rom.ROMDetailDTO, error) {
+	*roms.calls = append(*roms.calls, call)
+	return rom.ROMDetailDTO{ROMID: romID}, nil
+}
+
+func (roms discTestROMs) MergeROM(_ context.Context, _ identity.Requester, targetID, sourceID string) (rom.ROMDetailDTO, error) {
+	return roms.record("merge "+targetID+" "+sourceID, targetID)
+}
+
+func (roms discTestROMs) SplitDisc(_ context.Context, _ identity.Requester, romID string, number int) (rom.ROMDetailDTO, error) {
+	return roms.record(fmt.Sprintf("split %s %d", romID, number), "new-rom")
+}
+
+func (roms discTestROMs) ReorderDiscs(_ context.Context, _ identity.Requester, romID string, ids []string) (rom.ROMDetailDTO, error) {
+	return roms.record("reorder "+romID+" "+strings.Join(ids, ","), romID)
+}
+
+func (roms discTestROMs) RemoveDisc(_ context.Context, _ identity.Requester, romID string, number int) (rom.ROMDetailDTO, error) {
+	return roms.record(fmt.Sprintf("remove %s %d", romID, number), romID)
+}
+
+func TestDiscRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var calls []string
+	router := NewRouter(Dependencies{
+		ROMs:          discTestROMs{calls: &calls},
+		Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: "user-1", Role: identity.RoleUser}},
+	}, Options{})
+	send := func(method, path, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer token")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	for _, test := range []struct{ method, path, body, call, romID string }{
+		{http.MethodPost, "/api/v1/rom/a/merge", `{"source_rom_id":"b"}`, "merge a b", "a"},
+		{http.MethodPost, "/api/v1/rom/a/discs/2/split", ``, "split a 2", "new-rom"},
+		{http.MethodPut, "/api/v1/rom/a/discs/order", `{"rom_file_ids":["f2","f1"]}`, "reorder a f2,f1", "a"},
+		{http.MethodDelete, "/api/v1/rom/a/discs/2", ``, "remove a 2", "a"},
+	} {
+		calls = nil
+		response := send(test.method, test.path, test.body)
+		if response.Code != http.StatusOK || len(calls) != 1 || calls[0] != test.call || !strings.Contains(response.Body.String(), `"`+test.romID+`"`) {
+			t.Errorf("%s %s = %d %s; calls %v, want %q", test.method, test.path, response.Code, response.Body.String(), calls, test.call)
+		}
+	}
+	calls = nil
+	for _, test := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/rom/a/discs/two/split"},
+		{http.MethodDelete, "/api/v1/rom/a/discs/two"},
+	} {
+		if response := send(test.method, test.path, ""); response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "validation") {
+			t.Errorf("%s %s = %d %s, want a validation error", test.method, test.path, response.Code, response.Body.String())
+		}
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %v, want none", calls)
 	}
 }

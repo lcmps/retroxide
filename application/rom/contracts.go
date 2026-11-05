@@ -34,6 +34,17 @@ type Repository interface {
 	DeleteROM(context.Context, string) error
 	DeleteROMFile(context.Context, string) error
 	HardDeleteROM(context.Context, string, func(string) error) error
+	// FindROMDiscs returns a ROM's discs ordered by number.
+	FindROMDiscs(ctx context.Context, romID string) ([]romdomain.ROMDisc, error)
+	// MergeROMs moves the source's discs, uploads and library entries onto the target and deletes
+	// the source; deletePath removes files nothing references afterwards.
+	MergeROMs(ctx context.Context, targetID, sourceID string, deletePath func(string) error) error
+	// SplitROMDisc moves one disc of a ROM with several onto a new ROM, newROMID.
+	SplitROMDisc(ctx context.Context, romID, romFileID, newROMID string) error
+	// ReorderROMDiscs numbers the discs in the order of romFileIDs, which must name each once.
+	ReorderROMDiscs(ctx context.Context, romID string, romFileIDs []string) error
+	// HardDeleteROMDisc removes one disc, and its file unless another ROM has it.
+	HardDeleteROMDisc(ctx context.Context, romID, romFileID string, deletePath func(string) error) error
 }
 
 // PlatformCount is how many ROMs carry a platform. Platform is the stored value as first seen;
@@ -200,6 +211,14 @@ type API interface {
 	OpenMedia(context.Context, identity.Requester, string, string) (Image, error)
 	// Platforms lists the platforms of the ROMs the requester can see.
 	Platforms(context.Context, identity.Requester) ([]PlatformDTO, error)
+	// MergeROM moves the source ROM's discs onto the target and deletes the source.
+	MergeROM(ctx context.Context, requester identity.Requester, targetID, sourceID string) (ROMDetailDTO, error)
+	// SplitDisc turns a disc into a ROM of its own and returns that ROM.
+	SplitDisc(ctx context.Context, requester identity.Requester, romID string, number int) (ROMDetailDTO, error)
+	// ReorderDiscs numbers the discs in the order of romFileIDs, which must name each once.
+	ReorderDiscs(ctx context.Context, requester identity.Requester, romID string, romFileIDs []string) (ROMDetailDTO, error)
+	// RemoveDisc deletes one disc of a ROM that has several.
+	RemoveDisc(ctx context.Context, requester identity.Requester, romID string, number int) (ROMDetailDTO, error)
 	// PlatformCatalog lists every known platform, for choosing one when editing a ROM.
 	PlatformCatalog() []PlatformDTO
 }

@@ -2,8 +2,11 @@ package persistence
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 
+	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
 	librariesdomain "github.com/lcmps/retroxide/domain/libraries"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
@@ -236,5 +239,307 @@ func TestAFileUsedAsALaterDiscIsNotUnused(t *testing.T) {
 	}
 	if kept, err := repositories.FindROMFileByID(ctx, later.ID); err != nil || kept == nil {
 		t.Fatalf("file was deleted: %v", err)
+	}
+}
+
+// numbers returns a ROM's disc numbers keyed by file ID.
+func (d *discDeletion) numbers(romID string) map[string]int {
+	d.t.Helper()
+	discs, err := d.repositories.FindROMDiscs(d.ctx, romID)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	numbers := map[string]int{}
+	for _, disc := range discs {
+		numbers[disc.ROMFileID] = disc.Number
+	}
+	return numbers
+}
+
+// library creates a library holding the ROMs.
+func (d *discDeletion) library(name string, romIDs ...string) string {
+	d.t.Helper()
+	id := d.id("lib-" + name)
+	if err := d.repositories.DB.Create(&LibraryModel{ID: id, UserID: "owner", Name: name, CreatedAt: "2000-01-01 00:00:00"}).Error; err != nil {
+		d.t.Fatal(err)
+	}
+	for _, romID := range romIDs {
+		if err := d.repositories.DB.Create(&LibraryItemModel{LibraryID: id, ROMID: romID}).Error; err != nil {
+			d.t.Fatal(err)
+		}
+	}
+	return id
+}
+
+func (d *discDeletion) assertValidation(err error) {
+	d.t.Helper()
+	var appError *fault.Error
+	if !errors.As(err, &appError) || appError.Code != fault.CodeValidation {
+		d.t.Fatalf("error = %v, want a validation error", err)
+	}
+}
+
+func TestMergeMovesDiscsAndRemovesTheSource(t *testing.T) {
+	d := openDiscDeletion(t)
+	target := d.rom("target", "owner", 1)
+	source := d.rom("source", "owner", 1)
+	both := d.library("both", target.ID, source.ID)
+	sourceOnly := d.library("source-only", source.ID)
+	var deleted deletedPaths
+	if err := d.repositories.MergeROMs(d.ctx, target.ID, source.ID, deleted.delete); err != nil {
+		t.Fatal(err)
+	}
+	numbers := d.numbers(target.ID)
+	if len(numbers) != 2 || numbers[target.ROMFileID] != 1 || numbers[source.ROMFileID] != 2 {
+		t.Errorf("target discs = %v", numbers)
+	}
+	if d.count(&ROMModel{}, "id = ?", source.ID)+d.count(&ROMDiscModel{}, "rom_id = ?", source.ID) != 0 {
+		t.Error("the source remains")
+	}
+	merged, err := d.repositories.FindROMByID(d.ctx, target.ID)
+	if err != nil || merged == nil || merged.ROMFileID != target.ROMFileID || merged.Identity.Title != target.Identity.Title {
+		t.Fatalf("target = %+v, %v", merged, err)
+	}
+	if d.count(&UploadModel{}, "rom_id = ?", target.ID) != 2 || d.count(&UploadModel{}, "rom_id = ?", source.ID) != 0 {
+		t.Error("the source's upload did not move to the target")
+	}
+	if d.count(&LibraryItemModel{}, "library_id = ? AND rom_id = ?", both, target.ID) != 1 || d.count(&LibraryItemModel{}, "library_id = ? AND rom_id = ?", sourceOnly, target.ID) != 1 {
+		t.Error("library entries were not merged onto the target")
+	}
+	if d.count(&LibraryItemModel{}, "rom_id = ?", source.ID) != 0 {
+		t.Error("the source still has library entries")
+	}
+	d.assertFile(source.ROMFileID, 1)
+	if !deleted.has("/covers/"+source.ID) || deleted.has("/covers/"+target.ID) || len(deleted) != 1 {
+		t.Errorf("deleted = %v, want only the source's cover", deleted)
+	}
+}
+
+func TestMergeRenumbersOnlyOnConflict(t *testing.T) {
+	d := openDiscDeletion(t)
+	target := d.rom("target", "owner", 1)
+	source := d.rom("source", "owner", 3)
+	// The source's disc 2 goes, leaving 1 and 3.
+	if err := d.repositories.HardDeleteROMDisc(d.ctx, source.ID, d.id("source-disc2"), func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.repositories.MergeROMs(d.ctx, target.ID, source.ID, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	numbers := d.numbers(target.ID)
+	if len(numbers) != 3 || numbers[target.ROMFileID] != 1 || numbers[source.ROMFileID] != 2 || numbers[d.id("source-disc3")] != 3 {
+		t.Errorf("discs = %v, want target 1, source's 1 as 2, source's 3 as 3", numbers)
+	}
+}
+
+func TestMergeDropsADiscBothHave(t *testing.T) {
+	d := openDiscDeletion(t)
+	target := d.rom("target", "owner", 1)
+	source := d.rom("source", "owner", 1)
+	if err := d.repositories.RecordDisc(d.ctx, romdomain.ROMDisc{ROMID: source.ID, ROMFileID: target.ROMFileID, Number: 2, Filename: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.repositories.MergeROMs(d.ctx, target.ID, source.ID, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	numbers := d.numbers(target.ID)
+	if len(numbers) != 2 || numbers[target.ROMFileID] != 1 || numbers[source.ROMFileID] != 2 {
+		t.Errorf("discs = %v", numbers)
+	}
+	d.assertFile(target.ROMFileID, 1)
+}
+
+func TestMergeAdoptsTheSourcesGroupOnlyIfTheTargetHasNone(t *testing.T) {
+	d := openDiscDeletion(t)
+	setGroup := func(romID string, group string) {
+		if err := d.repositories.DB.Model(&ROMModel{}).Where("id = ?", romID).Update("disc_group", group).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	groupOf := func(romID string) *string {
+		found, err := d.repositories.FindROMByID(d.ctx, romID)
+		if err != nil || found == nil {
+			t.Fatalf("finding %s: %v", romID, err)
+		}
+		return found.DiscGroup
+	}
+	target, source := d.rom("target", "owner", 1), d.rom("source", "owner", 1)
+	setGroup(source.ID, d.id("group-a"))
+	if err := d.repositories.MergeROMs(d.ctx, target.ID, source.ID, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := groupOf(target.ID); got == nil || *got != d.id("group-a") {
+		t.Errorf("target group = %v, want the source's", got)
+	}
+	keeper, other := d.rom("keeper", "owner", 1), d.rom("other", "owner", 1)
+	setGroup(keeper.ID, d.id("group-k"))
+	setGroup(other.ID, d.id("group-o"))
+	if err := d.repositories.MergeROMs(d.ctx, keeper.ID, other.ID, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := groupOf(keeper.ID); got == nil || *got != d.id("group-k") {
+		t.Errorf("keeper group = %v, want its own", got)
+	}
+}
+
+func TestMergeRefusesMissingROMs(t *testing.T) {
+	d := openDiscDeletion(t)
+	target := d.rom("target", "owner", 1)
+	for _, ids := range [][2]string{{target.ID, d.id("none")}, {d.id("none"), target.ID}} {
+		err := d.repositories.MergeROMs(d.ctx, ids[0], ids[1], func(string) error { return nil })
+		var appError *fault.Error
+		if !errors.As(err, &appError) || appError.Code != fault.CodeNotFound {
+			t.Errorf("MergeROMs(%v) = %v, want not found", ids, err)
+		}
+	}
+	if d.count(&ROMModel{}, "id = ?", target.ID) != 1 {
+		t.Error("the target is gone")
+	}
+}
+
+func TestSplitMakesANewTitle(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 2)
+	group := d.id("group")
+	if err := d.repositories.DB.Model(&ROMModel{}).Where("id = ?", game.ID).Update("disc_group", group).Error; err != nil {
+		t.Fatal(err)
+	}
+	library := d.library("shelf", game.ID)
+	disc2 := d.id("title-disc2")
+	newID := d.id("split")
+	if err := d.repositories.SplitROMDisc(d.ctx, game.ID, disc2, newID); err != nil {
+		t.Fatal(err)
+	}
+	split, err := d.repositories.FindROMByID(d.ctx, newID)
+	if err != nil || split == nil {
+		t.Fatalf("split = %v, %v", split, err)
+	}
+	if split.Identity.Title != game.Identity.Title || split.Identity.Platform != "psx" || split.Identity.CoverArtPath == nil || *split.Identity.CoverArtPath != "/covers/"+game.ID || split.UploaderID != "owner" || split.DiscGroup != nil || split.ROMFileID != disc2 {
+		t.Errorf("split = %+v, want the old identity and cover, no group, file %s", split, disc2)
+	}
+	discs, err := d.repositories.FindROMDiscs(d.ctx, newID)
+	if err != nil || len(discs) != 1 || discs[0].Number != 1 || discs[0].ROMFileID != disc2 || discs[0].Filename != "title disc 2.cue" {
+		t.Errorf("split discs = %+v, %v", discs, err)
+	}
+	old, err := d.repositories.FindROMByID(d.ctx, game.ID)
+	if err != nil || old == nil || old.ROMFileID != game.ROMFileID || old.DiscGroup == nil || *old.DiscGroup != group {
+		t.Errorf("old ROM = %+v, %v", old, err)
+	}
+	if numbers := d.numbers(game.ID); len(numbers) != 1 || numbers[game.ROMFileID] != 1 {
+		t.Errorf("old discs = %v", numbers)
+	}
+	if d.count(&UploadModel{}, "id = ? AND rom_id = ?", disc2+"-upload", newID) != 1 || d.count(&UploadModel{}, "rom_id = ?", game.ID) != 1 {
+		t.Error("the disc's upload did not move to the new ROM alone")
+	}
+	if d.count(&LibraryItemModel{}, "library_id = ? AND rom_id = ?", library, newID) != 1 {
+		t.Error("the new ROM is not in the old ROM's library")
+	}
+	d.assertFile(disc2, 1)
+}
+
+func TestDeletingASplitTitleKeepsTheSharedCover(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 2)
+	newID := d.id("split")
+	if err := d.repositories.SplitROMDisc(d.ctx, game.ID, d.id("title-disc2"), newID); err != nil {
+		t.Fatal(err)
+	}
+	var deleted deletedPaths
+	if err := d.repositories.HardDeleteROM(d.ctx, newID, deleted.delete); err != nil {
+		t.Fatal(err)
+	}
+	if deleted.has("/covers/" + game.ID) {
+		t.Errorf("the shared cover was deleted: %v", deleted)
+	}
+}
+
+func TestSplitTheOnlyDiscIsRefused(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 1)
+	d.assertValidation(d.repositories.SplitROMDisc(d.ctx, game.ID, game.ROMFileID, d.id("split")))
+	if d.count(&ROMModel{}, "id = ?", d.id("split")) != 0 || d.count(&ROMDiscModel{}, "rom_id = ?", game.ID) != 1 {
+		t.Error("something changed")
+	}
+}
+
+func TestSplitLeavesAnotherDiscsUploadWithTheSameFilename(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 2)
+	disc2 := d.id("title-disc2")
+	// After a merge both discs came from uploads named game.iso.
+	for _, fileID := range []string{game.ROMFileID, disc2} {
+		if err := d.repositories.DB.Model(&ROMDiscModel{}).Where("rom_id = ? AND rom_file_id = ?", game.ID, fileID).Update("filename", "game.iso").Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := d.repositories.DB.Model(&UploadModel{}).Where("id = ?", fileID+"-upload").Update("original_filename", "game.iso").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.repositories.SplitROMDisc(d.ctx, game.ID, disc2, d.id("split")); err != nil {
+		t.Fatal(err)
+	}
+	if d.count(&UploadModel{}, "rom_id = ?", game.ID) != 2 || d.count(&UploadModel{}, "rom_id = ?", d.id("split")) != 0 {
+		t.Error("an ambiguous upload was repointed")
+	}
+}
+
+func TestRemovingADiscKeepsAnotherDiscsUploadWithTheSameFilename(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 2)
+	disc2 := d.id("title-disc2")
+	for _, fileID := range []string{game.ROMFileID, disc2} {
+		if err := d.repositories.DB.Model(&ROMDiscModel{}).Where("rom_id = ? AND rom_file_id = ?", game.ID, fileID).Update("filename", "game.iso").Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := d.repositories.DB.Model(&UploadModel{}).Where("id = ?", fileID+"-upload").Update("original_filename", "game.iso").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var deleted deletedPaths
+	if err := d.repositories.HardDeleteROMDisc(d.ctx, game.ID, disc2, deleted.delete); err != nil {
+		t.Fatal(err)
+	}
+	d.assertFile(disc2, 0)
+	if d.count(&UploadModel{}, "rom_id = ?", game.ID) != 2 {
+		t.Error("an upload was deleted though two discs shared its filename")
+	}
+}
+
+func TestReorderRenumbersAndChangesPrimary(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 3)
+	file1, file2, file3 := game.ROMFileID, d.id("title-disc2"), d.id("title-disc3")
+	if err := d.repositories.ReorderROMDiscs(d.ctx, game.ID, []string{file2, file1, file3}); err != nil {
+		t.Fatal(err)
+	}
+	numbers := d.numbers(game.ID)
+	if numbers[file2] != 1 || numbers[file1] != 2 || numbers[file3] != 3 {
+		t.Errorf("numbers = %v", numbers)
+	}
+	saved, err := d.repositories.FindROMByID(d.ctx, game.ID)
+	if err != nil || saved == nil || saved.ROMFileID != file2 {
+		t.Errorf("primary = %+v, %v; want %s", saved, err, file2)
+	}
+	discs, _ := d.repositories.FindROMDiscs(d.ctx, game.ID)
+	if got := []string{discs[0].Filename, discs[1].Filename}; !slices.Equal(got, []string{"title disc 2.cue", "title disc 1.cue"}) {
+		t.Errorf("filenames did not follow their discs: %v", got)
+	}
+}
+
+func TestReorderMustNameEveryDisc(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 2)
+	file1, file2 := game.ROMFileID, d.id("title-disc2")
+	for name, ids := range map[string][]string{
+		"missing":  {file2},
+		"unknown":  {file2, file1, d.id("nope")},
+		"repeated": {file2, file2},
+		"swapped":  {file2, d.id("nope")},
+		"empty":    {},
+	} {
+		d.assertValidation(d.repositories.ReorderROMDiscs(d.ctx, game.ID, ids))
+		if numbers := d.numbers(game.ID); numbers[file1] != 1 || numbers[file2] != 2 {
+			t.Errorf("%s: numbers changed to %v", name, numbers)
+		}
 	}
 }

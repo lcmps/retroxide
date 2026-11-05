@@ -436,6 +436,8 @@ func openDiscDeletion(t *testing.T) *discDeletion {
 			"DELETE FROM upload WHERE id LIKE ?",
 			"DELETE FROM disc_track WHERE rom_file_id LIKE ?",
 			"DELETE FROM rom_file WHERE id LIKE ?",
+			"DELETE FROM library_item WHERE library_id LIKE ?",
+			"DELETE FROM library WHERE id LIKE ?",
 		} {
 			_ = db.Exec(statement, like).Error
 		}
