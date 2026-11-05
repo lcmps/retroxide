@@ -20,6 +20,9 @@ type identifyUploadRepository interface {
 type identifyROMRepository interface {
 	FindROMFileByID(context.Context, string) (*romdomain.ROMFile, error)
 	SaveROM(context.Context, romdomain.ROM) error
+	FindROMDiscs(context.Context, string) ([]romdomain.ROMDisc, error)
+	FindROMByDiscGroup(context.Context, string, string) (*romdomain.ROM, error)
+	RecordDisc(context.Context, romdomain.ROMDisc) error
 }
 
 type IdentifyService struct {
@@ -55,18 +58,8 @@ func (service *IdentifyService) Identify(ctx context.Context, uploadID, romFileI
 		return fault.NotFound()
 	}
 
-	identity := InferIdentityFromFilename(upload.OriginalFilename)
-	romID, err := id.New("rom")
+	romID, err := service.attachOrCreate(ctx, upload, romFileID)
 	if err != nil {
-		return fault.Internal(fmt.Errorf("generating rom id: %w", err))
-	}
-	rom := romdomain.ROM{
-		ID:         romID,
-		ROMFileID:  romFileID,
-		UploaderID: upload.UploaderID,
-		Identity:   identity,
-	}
-	if err := service.romRepository.SaveROM(ctx, rom); err != nil {
 		if transitionErr := upload.TransitionTo(uploadsdomain.UploadStatusFailed); transitionErr == nil {
 			message := err.Error()
 			upload.ErrorMessage = &message
@@ -84,8 +77,59 @@ func (service *IdentifyService) Identify(ctx context.Context, uploadID, romFileI
 	return service.uploadRepository.SaveUpload(ctx, *upload)
 }
 
+// attachOrCreate puts the upload's file in a ROM and returns that ROM's id. A file whose name
+// marks it as a disc joins the uploader's ROM for the same release when one exists and the disc
+// number is free; otherwise it becomes a new ROM. A unique-index conflict from a concurrent
+// upload of another disc is returned, so the job's retry finds the ROM that won.
+func (service *IdentifyService) attachOrCreate(ctx context.Context, upload *uploadsdomain.Upload, romFileID string) (string, error) {
+	identity := InferIdentityFromFilename(upload.OriginalFilename)
+	stem, _ := splitFilename(upload.OriginalFilename)
+	disc, marked := romdomain.ParseDiscName(stem)
+	number := 1
+	var group *string
+	if marked {
+		number = disc.Number
+		key := romdomain.DiscGroupKey(identity.Platform, disc.Base)
+		group = &key
+		existing, err := service.romRepository.FindROMByDiscGroup(ctx, upload.UploaderID, key)
+		if err != nil {
+			return "", err
+		}
+		if existing != nil {
+			discs, err := service.romRepository.FindROMDiscs(ctx, existing.ID)
+			if err != nil {
+				return "", err
+			}
+			attached, taken := false, false
+			for _, existingDisc := range discs {
+				attached = attached || existingDisc.ROMFileID == romFileID
+				taken = taken || existingDisc.Number == number
+			}
+			if attached {
+				return existing.ID, nil
+			}
+			if !taken {
+				return existing.ID, service.romRepository.RecordDisc(ctx, romdomain.ROMDisc{ROMID: existing.ID, ROMFileID: romFileID, Number: number, Filename: upload.OriginalFilename})
+			}
+			group = nil
+		}
+	}
+	romID, err := id.New("rom")
+	if err != nil {
+		return "", fault.Internal(fmt.Errorf("generating rom id: %w", err))
+	}
+	rom := romdomain.ROM{ID: romID, ROMFileID: romFileID, UploaderID: upload.UploaderID, DiscGroup: group, Identity: identity}
+	if err := service.romRepository.SaveROM(ctx, rom); err != nil {
+		return "", err
+	}
+	return romID, service.romRepository.RecordDisc(ctx, romdomain.ROMDisc{ROMID: romID, ROMFileID: romFileID, Number: number, Filename: upload.OriginalFilename})
+}
+
 func InferIdentityFromFilename(filename string) romdomain.ROMIdentity {
 	name, extension := splitFilename(filename)
+	if disc, ok := romdomain.ParseDiscName(name); ok {
+		name = disc.Base
+	}
 	lowerName := strings.ToLower(name)
 	platform := inferPlatform(extension)
 	region := inferRegion(lowerName)

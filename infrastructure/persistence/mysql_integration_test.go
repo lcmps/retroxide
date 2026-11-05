@@ -13,13 +13,17 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/lcmps/retroxide/application/uploads"
 	authdomain "github.com/lcmps/retroxide/domain/auth"
 	"github.com/lcmps/retroxide/domain/identity"
 	jobsdomain "github.com/lcmps/retroxide/domain/jobs"
 	librariesdomain "github.com/lcmps/retroxide/domain/libraries"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
+	"github.com/lcmps/retroxide/infrastructure/hash"
+	"github.com/lcmps/retroxide/infrastructure/storage"
 	"time"
 
 	gormmysql "gorm.io/driver/mysql"
@@ -351,5 +355,79 @@ func TestMySQLUploadSessionsAndStoragePaths(t *testing.T) {
 	referenced, err := repositories.ReferencedStoragePaths(ctx, []string{key, "zz/" + strings.Repeat("z", 64)})
 	if err != nil || !referenced[key] || len(referenced) != 1 {
 		t.Fatalf("referenced = %v, %v; want only %s", referenced, err, key)
+	}
+}
+
+func TestMySQLConcurrentDiscsEndUpInOneTitle(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	repositories := NewRepositories(db)
+	userID := fmt.Sprintf("disc-%x", time.Now().UnixNano())
+	defer func() {
+		if err := db.WithContext(ctx).Where("id = ?", userID).Delete(&UserModel{}).Error; err != nil {
+			t.Errorf("cleaning integration user: %v", err)
+		}
+	}()
+	if err := repositories.SaveUser(ctx, authdomain.User{ID: userID, Email: userID + "@example.test", PasswordHash: "integration-hash", Role: identity.RoleUser}); err != nil {
+		t.Fatal(err)
+	}
+	uploader := uploads.NewUploadService(repositories, repositories, storage.New(t.TempDir()), hash.New(), nil, nil, uploads.UploadPolicy{MaxUploadBytes: 1024, AllowedExtensions: []string{"iso"}})
+	var accepted []uploads.UploadAcceptedDTO
+	for _, disc := range []string{"1", "2"} {
+		result, err := uploader.Create(ctx, identity.Requester{UserID: userID, Role: identity.RoleUser}, uploads.UploadInput{Filename: "Game (USA) (Disc " + disc + ").iso", Content: strings.NewReader(userID + " disc " + disc)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		accepted = append(accepted, result)
+	}
+	var group sync.WaitGroup
+	errs := make([]error, len(accepted))
+	for index, upload := range accepted {
+		var job JobQueueModel
+		if err := db.WithContext(ctx).Where("upload_id = ?", upload.UploadID).Take(&job).Error; err != nil {
+			t.Fatal(err)
+		}
+		// Leave no job behind for the other tests' queue assertions.
+		defer db.WithContext(ctx).Delete(&JobQueueModel{}, job.ID)
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for range 5 {
+				if errs[index] = NewIdentifier(db).Identify(ctx, job.UploadID, job.ROMFileID); errs[index] == nil {
+					return
+				}
+			}
+		}()
+	}
+	group.Wait()
+	for index, err := range errs {
+		if err != nil {
+			t.Fatalf("job %d still failing after retries: %v", index, err)
+		}
+	}
+	var roms []ROMModel
+	if err := db.WithContext(ctx).Where("uploader_id = ?", userID).Find(&roms).Error; err != nil || len(roms) != 1 {
+		t.Fatalf("roms = %d, %v; want one title", len(roms), err)
+	}
+	if discs, err := repositories.FindROMDiscs(ctx, roms[0].ID); err != nil || len(discs) != 2 {
+		t.Fatalf("discs = %+v, %v", discs, err)
+	}
+	for _, upload := range accepted {
+		stored, err := repositories.FindUpload(ctx, upload.UploadID)
+		if err != nil || stored == nil || string(stored.Status) != "completed" || stored.ROMID == nil || *stored.ROMID != roms[0].ID {
+			t.Fatalf("upload = %+v, %v", stored, err)
+		}
 	}
 }
