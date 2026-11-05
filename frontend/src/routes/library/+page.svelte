@@ -9,6 +9,7 @@
 	import { i18n } from '#lib';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { getErrorMessage } from '#lib/helpers/error.js';
+	import { platformBadge } from '#lib/platforms/badges.js';
 	import { platforms } from '#lib/platforms/catalog.svelte.js';
 	import { RomPager } from '#lib/roms/pager.svelte.js';
 	import { applySortToParams, sortFromParams, type RomSort } from '#lib/roms/sort.js';
@@ -92,9 +93,14 @@
 	{:else}
 		<ul class="rom-gallery" aria-label={t('library.roms.title', 'ROM Catalog')} aria-busy={pager.loading}>
 			{#each pager.items as rom (rom.rom_id)}
+				{@const badge = platformBadge(rom.platform)}
 				<li>
-					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={rom.title}>
-						<div class="rom-cover" aria-hidden="true"><RomCover romId={rom.rom_id} coverArtUrl={rom.cover_art_url} coverThumbUrl={rom.cover_thumb_url} /></div>
+					<!-- The cover is hidden from screen readers, so the link names the platform the badge shows. -->
+					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={rom.platform_name ? `${rom.title}, ${rom.platform_name}` : rom.title}>
+						<div class="rom-cover" aria-hidden="true">
+							<RomCover romId={rom.rom_id} coverArtUrl={rom.cover_art_url} coverThumbUrl={rom.cover_thumb_url} />
+							{#if badge}<div class="rom-platform">{badge}</div>{/if}
+						</div>
 						<Tooltip.Root>
 							<Tooltip.Trigger>
 								{#snippet child({ props })}
@@ -164,6 +170,7 @@
 	}
 
 	.rom-cover {
+		position: relative;
 		width: 7.75rem;
 		aspect-ratio: 25 / 36;
 		background: #353535;
@@ -171,6 +178,26 @@
 		overflow: hidden;
 	}
 
+	/* A floating plate; four hard shadows draw its border, leaving the corners cut like a pixel font's. */
+	.rom-platform {
+		position: absolute;
+		left: 50%;
+		bottom: 0.5625rem;
+		transform: translateX(-50%);
+		min-width: 2.875rem;
+		padding: 0.3125rem 0.4375rem 0.25rem;
+		background: var(--pixel-bg);
+		box-shadow:
+			0 -2px 0 var(--pixel-accent-strong),
+			0 2px 0 var(--pixel-accent-strong),
+			-2px 0 0 var(--pixel-accent-strong),
+			2px 0 0 var(--pixel-accent-strong);
+		color: #ffffff;
+		font-size: 0.5rem;
+		line-height: 1;
+		text-align: center;
+		white-space: nowrap;
+	}
 
 	.rom-tile:hover .rom-cover,
 	.rom-tile:focus-visible .rom-cover {

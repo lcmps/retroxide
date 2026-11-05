@@ -1,0 +1,51 @@
+/** The short label each platform shows on its covers in the library, by platform key. */
+const BADGES = new Map<string, string>([
+	['nes', 'NES'],
+	['fds', 'FDS'],
+	['snes', 'SNES'],
+	['gb', 'GB'],
+	['gbc', 'GBC'],
+	['gba', 'GBA'],
+	['n64', 'N64'],
+	['nds', 'NDS'],
+	['3ds', '3DS'],
+	['vb', 'VB'],
+	['pokemini', 'PKMN'],
+	['gc', 'GC'],
+	['wii', 'WII'],
+	['wiiu', 'WIIU'],
+	['switch', 'NSW'],
+	['sg1000', 'SG1K'],
+	['sms', 'SMS'],
+	['gg', 'GG'],
+	['genesis', 'MD'],
+	['32x', '32X'],
+	['segacd', 'SCD'],
+	['saturn', 'SAT'],
+	['dreamcast', 'DC'],
+	['psx', 'PSX'],
+	['ps2', 'PS2'],
+	['ps3', 'PS3'],
+	['psp', 'PSP'],
+	['vita', 'VITA'],
+	['pce', 'PCE'],
+	['pcecd', 'PCCD'],
+	['ngp', 'NGP'],
+	['ngpc', 'NGPC'],
+	['ws', 'WS'],
+	['wsc', 'WSC'],
+	['a2600', '2600'],
+	['a7800', '7800'],
+	['lynx', 'LYNX'],
+	['jaguar', 'JAG'],
+	['coleco', 'CV'],
+	['intv', 'INTV'],
+	['vectrex', 'VECTREX'],
+	['3do', '3DO'],
+	['xbox', 'XBOX']
+]);
+
+/** A platform's cover label, or null for one outside the catalog, which shows no badge. */
+export function platformBadge(platform: string): string | null {
+	return BADGES.get(platform.toLowerCase()) ?? null;
+}
