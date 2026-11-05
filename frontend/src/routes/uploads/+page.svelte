@@ -3,21 +3,13 @@
 	import ActionButton from '#lib/components/ActionButton.svelte';
 	import UploadForm from '#lib/components/uploads/UploadForm.svelte';
 	import UploadQueueItem from '#lib/components/uploads/UploadQueueItem.svelte';
-	import { getUploadOptions, uploadStatus } from '#lib/api/client.js';
+	import { getUploadOptions } from '#lib/api/client.js';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
-	import { UploadQueue } from '#lib/uploads/queue.svelte.js';
-	import { serverApi, uploadResumable } from '#lib/uploads/resumable.js';
-	import { discApi, groupDiscs, uploadDisc } from '#lib/uploads/disc.js';
+	import { groupDiscs } from '#lib/uploads/disc.js';
+	import { uploadQueue as queue } from '#lib/uploads/shared.js';
 
 	const t = useTranslate(i18n);
-	// Large files go in parts that survive a dropped connection and resume when added again.
-	const queue = new UploadQueue(
-		(file, onProgress, onReconnecting) => uploadResumable(file, serverApi, { onProgress, onReconnecting }),
-		uploadStatus,
-		{ sendDisc: (disc, onProgress, onReconnecting) => uploadDisc(disc, discApi, { onProgress, onReconnecting }) }
-	);
-
 	/** Picked discs (a sheet and its track files) upload as one; other files on their own. */
 	async function addFiles(files: File[], compressDiscs: boolean): Promise<void> {
 		const { discs, others } = await groupDiscs(files);
@@ -34,7 +26,6 @@
 		getUploadOptions()
 			.then((options) => (compression = { available: options.disc_compression, byDefault: options.disc_compression_default }))
 			.catch(() => (compression = { available: false, byDefault: false }));
-		return () => queue.stop();
 	});
 </script>
 

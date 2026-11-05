@@ -52,7 +52,7 @@ describe('UploadQueue', () => {
 		pending[2].resolve({ upload_id: 'upl_c', status: 'processing' });
 		await flush();
 		expect(queue.transferring).toBe(false);
-		queue.stop();
+		queue.cancel();
 	});
 
 	it('tracks each accepted upload independently and clears finished items', async () => {
@@ -78,20 +78,90 @@ describe('UploadQueue', () => {
 		await flush();
 		queue.clearFinished();
 		expect(queue.items.map((item) => item.file.name)).toEqual(['c.nes']);
-		queue.stop();
+		queue.cancel();
 	});
 
-	it('skips queued transfers once stopped', async () => {
+	it('counts the files still to transfer', async () => {
 		const { send, pending } = controllableSend();
 		const queue = new UploadQueue(send, async (id) => completed(id), { concurrency: 1 });
 
+		queue.add([rom('a.nes'), rom('b.nes'), rom('c.nes')]);
+		await flush();
+		expect(queue.transferringCount).toBe(3);
+
+		pending[0].reject(new Error('too large'));
+		await flush();
+		expect(queue.transferringCount).toBe(2);
+
+		pending[1].resolve({ upload_id: 'upl_b', status: 'processing' });
+		await flush();
+		expect(queue.transferringCount).toBe(1);
+		queue.cancel();
+	});
+
+	it('cancelling aborts what is running, drops what is waiting, and empties the list', async () => {
+		const { send, pending } = controllableSend();
+		const fetchStatus = vi.fn(async (id: string) => completed(id));
+		const queue = new UploadQueue(send, fetchStatus, { concurrency: 1 });
+
 		queue.add([rom('a.nes'), rom('b.nes')]);
 		await flush();
-		queue.stop();
+		const signal = send.mock.calls[0][3] as AbortSignal;
+		expect(signal.aborted).toBe(false);
+
+		queue.cancel();
+		expect(signal.aborted).toBe(true);
+		expect(queue.items).toEqual([]);
+		expect(queue.transferring).toBe(false);
+
+		// A transfer accepted just as it was cancelled is not tracked or brought back.
 		pending[0].resolve({ upload_id: 'upl_a', status: 'processing' });
 		await flush();
-
 		expect(send).toHaveBeenCalledTimes(1);
-		expect(queue.items[1].phase).toBe('queued');
+		expect(fetchStatus).not.toHaveBeenCalled();
+		expect(queue.items).toEqual([]);
+	});
+
+	it('stops following uploads being processed when cancelled', async () => {
+		vi.useFakeTimers();
+		try {
+			const { send, pending } = controllableSend();
+			const fetchStatus = vi.fn(async (id: string): Promise<UploadStatusResponse> => ({ upload_id: id, status: 'processing', rom_id: null, error: null }));
+			const queue = new UploadQueue(send, fetchStatus, { concurrency: 1 });
+			queue.add([rom('a.nes')]);
+			await vi.advanceTimersByTimeAsync(0);
+			pending[0].resolve({ upload_id: 'upl_a', status: 'processing' });
+			await vi.advanceTimersByTimeAsync(0);
+			const calls = fetchStatus.mock.calls.length;
+			expect(calls).toBeGreaterThan(0);
+
+			queue.cancel();
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(fetchStatus).toHaveBeenCalledTimes(calls);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('works again after cancelling, without waiting on the cancelled transfers', async () => {
+		const send = vi.fn<SendUpload>(
+			(_file, _progress, _reconnecting, signal) =>
+				new Promise((resolve, reject) => {
+					if (_file.name === 'stuck.nes') signal?.addEventListener('abort', () => reject(signal.reason));
+					else resolve({ upload_id: 'upl_new', status: 'processing' });
+				})
+		);
+		const queue = new UploadQueue(send, async (id) => completed(id), { concurrency: 1 });
+		queue.add([rom('stuck.nes')]);
+		await flush();
+		queue.cancel();
+		await flush();
+
+		queue.add([rom('new.nes')]);
+		await flush();
+		await flush();
+		expect(queue.items.map((item) => [item.file.name, item.phase])).toEqual([['new.nes', 'accepted']]);
+		expect((send.mock.calls[1][3] as AbortSignal).aborted).toBe(false);
+		queue.cancel();
 	});
 });

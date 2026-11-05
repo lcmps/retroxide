@@ -167,4 +167,84 @@ describe('duplicate checks while uploading', () => {
 		const accepted = await uploadResumable(file, server.api, { onProgress: () => {} }, { ...instant, storage: memoryStorage(), hash: async () => 'c'.repeat(64) });
 		expect(accepted.upload_id).toBe('upl_1');
 	});
+
+	describe('cancelling', () => {
+		const large = () => new File([new Uint8Array(RESUMABLE_FROM_BYTES)], 'big.bin');
+		const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+		const noHash = async () => '';
+
+		it('passes the signal to a small upload', async () => {
+			const server = fakeServer(4);
+			const { signal } = new AbortController();
+			const onProgress = vi.fn();
+			await uploadResumable(new File(['rom!'], 'a.nes'), server.api, { onProgress, signal });
+			expect(server.api.uploadWhole).toHaveBeenCalledWith(expect.any(File), onProgress, signal);
+		});
+
+		it('stops at the part in flight, keeps the session to resume, and does not retry', async () => {
+			const file = large();
+			const server = fakeServer(file.size);
+			const controller = new AbortController();
+			vi.mocked(server.api.sendPart).mockImplementationOnce(
+				(_session, _offset, _part, _progress, signal) =>
+					new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason)))
+			);
+			const storage = memoryStorage();
+			const sleep = vi.fn(async () => {});
+			const upload = uploadResumable(file, server.api, { onProgress: vi.fn(), signal: controller.signal }, { storage, sleep, hash: noHash });
+			await flush();
+			controller.abort();
+
+			await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
+			expect(server.api.sendPart).toHaveBeenCalledTimes(1);
+			expect(sleep).not.toHaveBeenCalled();
+			expect([...storage.items.values()]).toEqual(['ups_1']);
+		});
+
+		it('sends nothing more once aborted between parts', async () => {
+			const file = large();
+			const server = fakeServer(file.size);
+			const controller = new AbortController();
+			const send = server.api.sendPart;
+			server.api.sendPart = vi.fn(async (...args: Parameters<ResumableApi['sendPart']>) => {
+				const session = await send(...args);
+				controller.abort();
+				return session;
+			});
+			const upload = uploadResumable(file, server.api, { onProgress: vi.fn(), signal: controller.signal }, { storage: memoryStorage(), hash: noHash });
+
+			await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
+			expect(server.api.sendPart).toHaveBeenCalledTimes(1);
+		});
+
+		it('wakes from waiting to retry', async () => {
+			const file = large();
+			const server = fakeServer(file.size);
+			server.failNext(new ApiClientError({ message: 'offline' }));
+			const controller = new AbortController();
+			const upload = uploadResumable(file, server.api, { onProgress: vi.fn(), signal: controller.signal }, { storage: memoryStorage(), sleep: () => new Promise(() => {}), hash: noHash });
+			await flush();
+			controller.abort();
+			await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
+		});
+
+		it('wakes from waiting to be online', async () => {
+			const file = large();
+			const server = fakeServer(file.size);
+			server.failNext(new ApiClientError({ message: 'offline' }));
+			const controller = new AbortController();
+			const upload = uploadResumable(file, server.api, { onProgress: vi.fn(), signal: controller.signal }, { storage: memoryStorage(), sleep: async () => {}, waitUntilOnline: () => new Promise(() => {}), hash: noHash });
+			await flush();
+			controller.abort();
+			await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
+		});
+
+		it('does not start when already aborted', async () => {
+			const file = large();
+			const server = fakeServer(file.size);
+			const upload = uploadResumable(file, server.api, { onProgress: vi.fn(), signal: AbortSignal.abort() }, { storage: memoryStorage(), hash: noHash });
+			await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
+			expect(server.api.sendPart).not.toHaveBeenCalled();
+		});
+	});
 });

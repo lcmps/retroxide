@@ -116,6 +116,7 @@ export const EMBEDDED_ENGLISH_CATALOG: TranslationCatalog = {
 	'app.shell.navigation': 'Primary navigation',
 	'nav.library': 'Library',
 	'nav.uploads': 'Uploads',
+	'nav.uploadsInProgress': 'Uploads: {count} in progress',
 	'nav.downloads': 'Downloads',
 	'common.actions.logout': 'Log out',
 	'common.status.completed': 'Completed',

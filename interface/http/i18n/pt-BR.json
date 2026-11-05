@@ -133,6 +133,7 @@
   "nav.logout": "Sair",
   "nav.profile": "Perfil e configurações",
   "nav.uploads": "Envios",
+  "nav.uploadsInProgress": "Envios: {count} em andamento",
   "nav.users": "Usuários",
   "profile.actions.save": "Salvar perfil",
   "profile.errors.emailTaken": "Esse email já é usado por outra conta.",

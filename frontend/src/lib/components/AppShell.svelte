@@ -7,6 +7,7 @@
 	import { onMount } from "svelte";
 	import type { Snippet } from "svelte";
 	import { getProfile, i18n, logger, logoutSession } from "#lib";
+	import { uploadQueue } from "#lib/uploads/shared.js";
 	import { useTranslate } from "#lib/i18n/helpers.js";
 	import { setUserFont } from "#lib/appearance.js";
 	import { platforms } from "#lib/platforms/catalog.svelte.js";
@@ -39,6 +40,9 @@
 		{ path: "/downloads" as const, label: translate("nav.downloads", "Downloads") },
 		{ path: "/uploads" as const, label: translate("nav.uploads", "Uploads") },
 	]);
+	const uploadsInProgress = $derived(
+		translate("nav.uploadsInProgress", "Uploads: {count} in progress", { count: uploadQueue.transferringCount }),
+	);
 	async function updateLibrarySearchParams(
 		nextPlatform: string,
 		nextQuery: string,
@@ -90,6 +94,8 @@
 	}
 
 	async function logout(): Promise<void> {
+		// Uploads belong to this account: none may carry on, or finish under the next one signed in.
+		uploadQueue.cancel();
 		try {
 			await logoutSession();
 		} catch (error) {
@@ -119,6 +125,7 @@
 
 	onMount(() => {
 		const handleSessionExpired = () => {
+			uploadQueue.cancel();
 			setUserFont(null);
 			void goto(resolve("/login"), { replace: true });
 		};
@@ -126,6 +133,11 @@
 			"retroxide:session-expired",
 			handleSessionExpired,
 		);
+		// Reloading or closing the tab loses the picked files, so the browser asks first.
+		const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+			if (uploadQueue.transferring) event.preventDefault();
+		};
+		window.addEventListener("beforeunload", warnBeforeLeaving);
 		const refreshPlatforms = () => void platforms.refresh();
 		window.addEventListener("focus", refreshPlatforms);
 		// The account's language wins over the browser's, on every device the user signs in on.
@@ -141,6 +153,7 @@
 				logger.warn("Unable to apply the account language.", error),
 			);
 		return () => {
+			window.removeEventListener("beforeunload", warnBeforeLeaving);
 			window.removeEventListener(
 				"retroxide:session-expired",
 				handleSessionExpired,
@@ -266,8 +279,15 @@
 			<a
 				href={resolve(link.path)}
 				class:current={inSection(link.path)}
-				aria-current={activePath === link.path ? "page" : undefined}>{link.label}</a
+				aria-current={activePath === link.path ? "page" : undefined}
+				aria-label={link.path === "/uploads" && uploadQueue.transferring ? uploadsInProgress : undefined}
+				title={link.path === "/uploads" && uploadQueue.transferring ? uploadsInProgress : undefined}
 			>
+				{link.label}
+				{#if link.path === "/uploads" && uploadQueue.transferring}
+					<span class="app-shell__nav-count" aria-hidden="true">{uploadQueue.transferringCount}</span>
+				{/if}
+			</a>
 		{/each}
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger
