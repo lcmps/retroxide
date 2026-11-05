@@ -86,7 +86,7 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 			*field.target = optionalUnlessWhitespace(field.input)
 		}
 	}
-	if err := service.repository.SaveROM(ctx, *rom); err != nil {
+	if err := service.repository.UpdateROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
 	return service.detail(ctx, *rom)
@@ -278,7 +278,7 @@ func (service *Service) UploadCover(ctx context.Context, requester identity.Requ
 	if err := service.storeCover(ctx, &rom.Identity, content); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	if err := service.repository.SaveROM(ctx, *rom); err != nil {
+	if err := service.repository.UpdateROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
 	return service.detail(ctx, *rom)
@@ -382,7 +382,7 @@ func (service *Service) scrape(ctx context.Context, rom *romdomain.ROM) (ROMDeta
 		}
 		*image.target = &storagePath
 	}
-	if err := service.repository.SaveROM(ctx, *rom); err != nil {
+	if err := service.repository.UpdateROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
 	return service.detail(ctx, *rom)

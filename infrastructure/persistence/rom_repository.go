@@ -12,6 +12,7 @@ import (
 	"github.com/lcmps/retroxide/application/rom"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // UpsertROMFile inserts romFile, reporting an already-exists conflict when identical content is stored.
@@ -57,11 +58,7 @@ func (repositories *Repositories) SaveROM(ctx context.Context, rom romdomain.ROM
 			if err := tx.Create(&model).Error; err != nil {
 				return err
 			}
-		} else if err := tx.Model(&ROMModel{}).Where("id = ?", model.ID).Select(
-			"title", "platform", "region", "version", "identified_by", "confidence",
-			"cover_art_path", "cover_thumb_path", "publisher", "release_year", "genre",
-			"description", "title_screen_path", "screenshot_path",
-		).Updates(&model).Error; err != nil {
+		} else if err := tx.Model(&ROMModel{}).Where("id = ?", model.ID).Select(romMetadataColumns).Updates(&model).Error; err != nil {
 			return err
 		}
 		var discs int64
@@ -74,6 +71,39 @@ func (repositories *Repositories) SaveROM(ctx context.Context, rom romdomain.ROM
 		return databaseError("saving rom", err)
 	}
 	return nil
+}
+
+// UpdateROM writes an existing ROM's metadata. It never writes id, uploader_id, rom_file_id or
+// disc_group, and never creates a row or a disc: a ROM merged away or deleted since the caller
+// loaded it is not found, so a slow scrape cannot bring it back.
+func (repositories *Repositories) UpdateROM(ctx context.Context, rom romdomain.ROM) error {
+	model := romModel(rom)
+	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Locked, and checked by lookup: MySQL reports no affected rows for an unchanged row.
+		var existing ROMModel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", model.ID).Take(&existing).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fault.NotFound()
+			}
+			return err
+		}
+		return tx.Model(&ROMModel{}).Where("id = ?", model.ID).Select(romMetadataColumns).Updates(&model).Error
+	})
+	if err != nil {
+		var appError *fault.Error
+		if errors.As(err, &appError) {
+			return err
+		}
+		return databaseError("updating rom", err)
+	}
+	return nil
+}
+
+// romMetadataColumns are the columns an update of an existing ROM writes.
+var romMetadataColumns = []string{
+	"title", "platform", "region", "version", "identified_by", "confidence",
+	"cover_art_path", "cover_thumb_path", "publisher", "release_year", "genre",
+	"description", "title_screen_path", "screenshot_path",
 }
 
 // ListROMsWithFiles returns up to limit+1 ROMs in filter.Sort order, so callers can detect a

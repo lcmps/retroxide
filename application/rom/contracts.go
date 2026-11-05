@@ -12,7 +12,8 @@ import (
 
 type Repository interface {
 	UpsertROMFile(context.Context, romdomain.ROMFile) (romdomain.ROMFile, error)
-	SaveROM(context.Context, romdomain.ROM) error
+	// UpdateROM writes an existing ROM's metadata; a ROM removed since it was loaded is not found.
+	UpdateROM(context.Context, romdomain.ROM) error
 	// FindDiscTracks returns a disc's tracks in order; none for other files.
 	FindDiscTracks(ctx context.Context, romFileID string) ([]romdomain.DiscTrack, error)
 	// SetCoverThumbnail records a ROM's cover thumbnail, unless its cover has changed since.

@@ -543,3 +543,74 @@ func TestReorderMustNameEveryDisc(t *testing.T) {
 		}
 	}
 }
+
+func (d *discDeletion) assertStaleUpdateIsRefused(stale romdomain.ROM) {
+	d.t.Helper()
+	err := d.repositories.UpdateROM(d.ctx, stale)
+	var appError *fault.Error
+	if !errors.As(err, &appError) || appError.Code != fault.CodeNotFound {
+		d.t.Fatalf("UpdateROM() = %v, want not found", err)
+	}
+	if d.count(&ROMModel{}, "id = ?", stale.ID)+d.count(&ROMDiscModel{}, "rom_id = ?", stale.ID) != 0 {
+		d.t.Error("a stale update brought the ROM or its disc back")
+	}
+}
+
+func TestAStaleSaveDoesNotBringBackAMergedROM(t *testing.T) {
+	d := openDiscDeletion(t)
+	target := d.rom("target", "owner", 1)
+	source := d.rom("source", "owner", 1)
+	stale, err := d.repositories.FindROMByID(d.ctx, source.ID)
+	if err != nil || stale == nil {
+		t.Fatal(err)
+	}
+	if err := d.repositories.MergeROMs(d.ctx, target.ID, source.ID, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	stale.Identity.Title = "scraped"
+	d.assertStaleUpdateIsRefused(*stale)
+}
+
+func TestAStaleSaveDoesNotBringBackADeletedROM(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 1)
+	stale, err := d.repositories.FindROMByID(d.ctx, game.ID)
+	if err != nil || stale == nil {
+		t.Fatal(err)
+	}
+	if err := d.repositories.HardDeleteROM(d.ctx, game.ID, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	d.assertStaleUpdateIsRefused(*stale)
+}
+
+func TestUpdateROMClearsAFieldAndKeepsTheRest(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 2)
+	group := d.id("group")
+	if err := d.repositories.DB.Model(&ROMModel{}).Where("id = ?", game.ID).Updates(map[string]any{"disc_group": group, "publisher": "Acme", "region": "USA"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := d.repositories.FindROMByID(d.ctx, game.ID)
+	if err != nil || loaded == nil {
+		t.Fatal(err)
+	}
+	loaded.Identity.Publisher, loaded.Identity.Title, loaded.ROMFileID, loaded.UploaderID, loaded.DiscGroup = nil, "New title", "other-file", "intruder", nil
+	if err := d.repositories.UpdateROM(d.ctx, *loaded); err != nil {
+		t.Fatal(err)
+	}
+	var row ROMModel
+	if err := d.repositories.DB.Where("id = ?", game.ID).Take(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Publisher != nil || row.Title != "New title" || row.Region == nil || *row.Region != "USA" {
+		t.Errorf("row = %+v, want publisher NULL, new title, region kept", row)
+	}
+	if row.ROMFileID != game.ROMFileID || row.UploaderID != "owner" || row.DiscGroup == nil || *row.DiscGroup != group {
+		t.Errorf("row = %+v: id-level columns were written", row)
+	}
+	// Saving what is stored changes nothing; MySQL reports no affected rows, which is not missing.
+	if err := d.repositories.UpdateROM(d.ctx, romEntity(row)); err != nil {
+		t.Fatalf("UpdateROM() of an unchanged ROM = %v", err)
+	}
+}

@@ -88,6 +88,14 @@ func (repository *romTestRepository) UpsertROMFile(_ context.Context, romFile ro
 	return romFile, nil
 }
 
+func (repository *romTestRepository) UpdateROM(_ context.Context, rom romdomain.ROM) error {
+	if _, ok := repository.roms[rom.ID]; !ok {
+		return fault.NotFound()
+	}
+	repository.roms[rom.ID] = rom
+	return nil
+}
+
 func (repository *romTestRepository) SaveROM(_ context.Context, rom romdomain.ROM) error {
 	repository.roms[rom.ID] = rom
 	return nil
