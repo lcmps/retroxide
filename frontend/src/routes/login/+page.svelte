@@ -58,7 +58,7 @@
 <main class="login-page">
   <section class="login-card stack" aria-labelledby="login-title" style="--layout-gap: 1.75rem">
     <h1 id="login-title" class="visually-hidden">{t('login.cardTitle', 'Session Login')}</h1>
-    <img class="login-logo" src="/components/main-logo.png" alt="Retroxide" />
+    <img class="login-logo" src="/components/main-logo.png" alt="Retroxide" width="726" height="160" />
 
     <form class="login-form stack" onsubmit={submitLogin}>
       <FormField label={t('login.fields.login', 'Email or username')} class="field visually-hidden-label">
@@ -106,6 +106,7 @@
 <style>
   .login-page {
     min-height: 100vh;
+    min-height: 100svh;
     display: grid;
     place-items: center;
     padding: 1.5rem;

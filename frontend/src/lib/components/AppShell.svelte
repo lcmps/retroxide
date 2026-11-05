@@ -3,6 +3,7 @@
 	import { resolve } from "$app/paths";
 	import { page } from "$app/state";
 	import { Gamepad2, Search } from "@lucide/svelte";
+	import { DropdownMenu } from "bits-ui";
 	import { onMount } from "svelte";
 	import type { Snippet } from "svelte";
 	import { getProfile, i18n, logger, logoutSession } from "#lib";
@@ -37,7 +38,6 @@
 		{ path: "/library" as const, label: translate("nav.library", "Library") },
 		{ path: "/downloads" as const, label: translate("nav.downloads", "Downloads") },
 		{ path: "/uploads" as const, label: translate("nav.uploads", "Uploads") },
-		...(isAdmin ? [{ path: "/users" as const, label: translate("nav.users", "Users") }] : []),
 	]);
 	async function updateLibrarySearchParams(
 		nextPlatform: string,
@@ -269,19 +269,39 @@
 				aria-current={activePath === link.path ? "page" : undefined}>{link.label}</a
 			>
 		{/each}
-		<button type="button" onclick={() => void logout()} title={translate("common.actions.logoutHint", "Sign out on every device")}>
-			{translate("common.actions.logout", "Log out")}
-		</button>
-		<a
-			class="app-shell__profile"
-			class:current={isActive("/profile")}
-			href={resolve("/profile")}
-			aria-label={translate("nav.profile", "Profile and settings")}
-			title={translate("nav.profile", "Profile and settings")}
-			aria-current={isActive("/profile") ? "page" : undefined}
-		>
-			<img src="/components/btns/user.png" alt="" aria-hidden="true" />
-		</a>
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger
+				class={`app-shell__profile${isActive("/profile") || isActive("/users") ? " current" : ""}`}
+				aria-label={translate("nav.profile", "Profile and settings")}
+				title={translate("nav.profile", "Profile and settings")}
+			>
+				<img src="/components/btns/user.png" alt="" aria-hidden="true" />
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Portal>
+				<!-- preventScroll is off: locking the page would remove its scrollbar and shift it sideways. -->
+				<DropdownMenu.Content class="app-shell__menu" align="end" sideOffset={6} collisionPadding={8} preventScroll={false}>
+					<DropdownMenu.Item>
+						{#snippet child({ props })}
+							<a {...props} href={resolve("/profile")} aria-current={isActive("/profile") ? "page" : undefined}>
+								{translate("nav.profile", "Profile and settings")}
+							</a>
+						{/snippet}
+					</DropdownMenu.Item>
+					{#if isAdmin}
+						<DropdownMenu.Item>
+							{#snippet child({ props })}
+								<a {...props} href={resolve("/users")} aria-current={isActive("/users") ? "page" : undefined}>
+									{translate("nav.users", "Users")}
+								</a>
+							{/snippet}
+						</DropdownMenu.Item>
+					{/if}
+					<DropdownMenu.Item onSelect={() => void logout()} title={translate("common.actions.logoutHint", "Sign out on every device")}>
+						{translate("common.actions.logout", "Log out")}
+					</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Portal>
+		</DropdownMenu.Root>
 	</nav>
 
 	<main class="app-shell__content" id="app-shell-content" tabindex="-1">

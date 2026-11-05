@@ -225,10 +225,12 @@
 		min-height: 4rem;
 	}
 
-	.download-row > div:first-child { display: grid; gap: 0.5rem; }
-	.download-row strong { font-size: 0.85rem; }
-	.download-row span { color: var(--pixel-muted); font-size: 0.55rem; }
-	.download-actions { display: flex; gap: 0.5rem; }
+	/* The text takes what the actions leave; min-width lets a long title wrap instead of pushing them off the page. */
+	.download-row > div:first-child { display: grid; gap: 0.5rem; min-width: 0; }
+	.download-row strong { font-size: 0.85rem; line-height: 1.5; overflow-wrap: anywhere; }
+	.download-row span { color: var(--pixel-muted); font-size: 0.55rem; line-height: 1.5; overflow-wrap: anywhere; }
+	.download-row > :global(.action-button) { flex: none; }
+	.download-actions { display: flex; flex: none; gap: 0.5rem; }
 	.page-state { color: var(--pixel-muted); font-size: 0.6rem; }
 
 	@media (max-width: 40rem) {
@@ -236,7 +238,7 @@
 		.download-list { gap: 1.75rem; margin-top: 0.75rem; }
 		.download-row { flex-direction: column; align-items: center; gap: 0.75rem; min-height: 0; text-align: center; }
 		.download-row > div:first-child { justify-items: center; }
-		.download-row strong { font-size: 0.65rem; line-height: 1.5; overflow-wrap: anywhere; }
+		.download-row strong { font-size: 0.65rem; }
 		.page-state, .message { text-align: center; }
 	}
 </style>

@@ -17,32 +17,28 @@
 			? t('rom.disc.storedCHD', 'Stored as CHD. Track hashes are those of the original track files, as disc databases list them.')
 			: t('rom.disc.storedTracks', 'Stored as its sheet and track files.')}
 	</p>
-	<!-- Focusable so keyboard users can scroll a table wider than the screen. -->
-	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-	<div class="disc__table" role="region" aria-labelledby={`${id}-title`} tabindex="0">
-		<table>
-			<thead>
+	<table aria-labelledby={`${id}-title`}>
+		<thead>
+			<tr>
+				<th scope="col">{t('rom.disc.track', 'Track')}</th>
+				<th scope="col">{t('rom.disc.mode', 'Mode')}</th>
+				<th scope="col">{t('rom.disc.size', 'Size')}</th>
+				<th scope="col">SHA-1</th>
+				<th scope="col">CRC32</th>
+			</tr>
+		</thead>
+		<tbody>
+			{#each disc.tracks as track (track.number)}
 				<tr>
-					<th scope="col">{t('rom.disc.track', 'Track')}</th>
-					<th scope="col">{t('rom.disc.mode', 'Mode')}</th>
-					<th scope="col">{t('rom.disc.size', 'Size')}</th>
-					<th scope="col">SHA-1</th>
-					<th scope="col">CRC32</th>
+					<td data-label={t('rom.disc.track', 'Track')}>{track.number}</td>
+					<td data-label={t('rom.disc.mode', 'Mode')}>{track.mode}</td>
+					<td data-label={t('rom.disc.size', 'Size')}>{formatBytes(track.size, i18n.locale)}</td>
+					<td class="mono" data-label="SHA-1" title={`SHA-1 ${track.sha1}\nMD5 ${track.md5}`}>{track.sha1}</td>
+					<td class="mono" data-label="CRC32">{track.crc32}</td>
 				</tr>
-			</thead>
-			<tbody>
-				{#each disc.tracks as track (track.number)}
-					<tr>
-						<td>{track.number}</td>
-						<td>{track.mode}</td>
-						<td>{formatBytes(track.size, i18n.locale)}</td>
-						<td class="mono" title={`SHA-1 ${track.sha1}\nMD5 ${track.md5}`}>{track.sha1}</td>
-						<td class="mono">{track.crc32}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
-	</div>
+			{/each}
+		</tbody>
+	</table>
 </div>
 
 <style>
@@ -51,6 +47,8 @@
 		gap: 0.6rem;
 		margin-top: 1.25rem;
 		min-width: 0;
+		/* The table's room depends on the box around it, not on the width of the screen. */
+		container-type: inline-size;
 	}
 
 	h2 {
@@ -63,15 +61,6 @@
 		font-size: 0.5rem;
 		line-height: 1.7;
 		color: var(--pixel-muted);
-	}
-
-	.disc__table {
-		overflow-x: auto;
-	}
-
-	.disc__table:focus-visible {
-		outline: 2px solid var(--pixel-focus);
-		outline-offset: 2px;
 	}
 
 	table {
@@ -96,5 +85,43 @@
 	.mono {
 		font-family: ui-monospace, monospace;
 		font-size: 0.7rem;
+		/* Hashes are the only long values; they wrap so the table always fits its box. */
+		white-space: normal;
+		word-break: break-all;
+	}
+
+	/* Too narrow for columns: each track becomes a block of labelled rows. */
+	@container (max-width: 34rem) {
+		thead {
+			display: none;
+		}
+
+		table,
+		tbody,
+		tr {
+			display: block;
+		}
+
+		tr {
+			padding-block: 0.5rem;
+			border-bottom: 1px solid var(--pixel-border);
+		}
+
+		td {
+			display: grid;
+			grid-template-columns: 4rem minmax(0, 1fr);
+			gap: 0.5rem;
+			align-items: baseline;
+			padding: 0.25rem 0;
+			border: 0;
+			white-space: normal;
+		}
+
+		td::before {
+			content: attr(data-label);
+			color: var(--pixel-muted);
+			font-family: var(--app-font);
+			font-size: 0.5rem;
+		}
 	}
 </style>

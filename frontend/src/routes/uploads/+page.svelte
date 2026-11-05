@@ -33,7 +33,7 @@
 		void i18n.initialize();
 		getUploadOptions()
 			.then((options) => (compression = { available: options.disc_compression, byDefault: options.disc_compression_default }))
-			.catch(() => undefined);
+			.catch(() => (compression = { available: false, byDefault: false }));
 		return () => queue.stop();
 	});
 </script>
@@ -47,24 +47,27 @@
 	<div class="upload-layout stack">
 		<h1 id="uploads-title">{t('uploads.heading', 'Uploads')}</h1>
 
-		<div class="upload-workspace stack">
-			<UploadForm onupload={(files, compressDiscs) => void addFiles(files, compressDiscs)} {compression} />
+		<!-- Held until the options are known: the compression choice would push the form down. -->
+		{#if compression}
+			<div class="upload-workspace stack">
+				<UploadForm onupload={(files, compressDiscs) => void addFiles(files, compressDiscs)} {compression} />
 
-			{#if queue.items.length > 0}
-				<ul class="upload-queue stack" aria-label={t('uploads.queue.label', 'Upload queue')}>
-					{#each queue.items as item (item.key)}
-						<UploadQueueItem {item} />
-					{/each}
-				</ul>
-				{#if hasFinished}
-					<ActionButton type="button" onclick={() => queue.clearFinished()} title={t('uploads.queue.clearHint', 'Remove completed and failed uploads from this list')}>
-						{t('uploads.queue.clearFinished', 'Clear finished')}
-					</ActionButton>
+				{#if queue.items.length > 0}
+					<ul class="upload-queue stack" aria-label={t('uploads.queue.label', 'Upload queue')}>
+						{#each queue.items as item (item.key)}
+							<UploadQueueItem {item} />
+						{/each}
+					</ul>
+					{#if hasFinished}
+						<ActionButton type="button" onclick={() => queue.clearFinished()} title={t('uploads.queue.clearHint', 'Remove completed and failed uploads from this list')}>
+							{t('uploads.queue.clearFinished', 'Clear finished')}
+						</ActionButton>
+					{/if}
+				{:else}
+					<p>{t('uploads.empty', 'No uploads in progress.')}</p>
 				{/if}
-			{:else}
-				<p>{t('uploads.empty', 'No uploads in progress.')}</p>
-			{/if}
-		</div>
+			</div>
+		{/if}
 	</div>
 </section>
 
