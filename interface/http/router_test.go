@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -522,15 +523,22 @@ func (roms linkTestROMs) Get(_ context.Context, requester identity.Requester, ro
 	return rom.ROMDetailDTO{ROMID: romID}, nil
 }
 
-func (roms linkTestROMs) DownloadFilename(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat) (string, error) {
+func (roms linkTestROMs) DownloadFilename(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat, disc int) (string, error) {
 	if _, err := roms.Get(ctx, requester, romID); err != nil {
 		return "", err
+	}
+	if disc != 0 {
+		return fmt.Sprintf("Title of %s (Disc %d).nes", romID, disc), nil
 	}
 	return "Title of " + romID + ".nes", nil
 }
 
-func (roms linkTestROMs) DownloadAs(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat) (rom.DownloadOutput, error) {
-	return roms.Download(ctx, requester, romID)
+func (roms linkTestROMs) DownloadAs(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat, disc int) (rom.DownloadOutput, error) {
+	output, err := roms.Download(ctx, requester, romID)
+	if disc != 0 {
+		output.Filename = fmt.Sprintf("Title of %s (Disc %d).nes", romID, disc)
+	}
+	return output, err
 }
 
 func (roms linkTestROMs) Download(ctx context.Context, requester identity.Requester, romID string) (rom.DownloadOutput, error) {
@@ -600,6 +608,49 @@ func TestRouterDownloadLinksStreamWithoutBearerTokenAndCheckAccess(t *testing.T)
 		ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/v1/download?token=garbage", nil))
 	if invalid.Code != http.StatusForbidden || !strings.Contains(invalid.Body.String(), "invalid_download_link") {
 		t.Fatalf("invalid link = %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestDownloadLinkCarriesTheDisc(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dependencies := Dependencies{
+		ROMs:          linkTestROMs{owner: "user-1"},
+		DownloadLinks: linkTestSigner{},
+		Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: "user-1", Role: identity.RoleUser}},
+	}
+	router := NewRouter(dependencies, Options{})
+	post := func(query string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/rom/rom-1/download-link?"+query, nil)
+		request.Header.Set("Authorization", "Bearer token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	response := post("disc=2&format=chd")
+	var link downloadLinkResponse
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &link) != nil {
+		t.Fatalf("create link = %d %s", response.Code, response.Body.String())
+	}
+	parsed, err := url.Parse(link.URL)
+	if err != nil || parsed.Query().Get("disc") != "2" || parsed.Query().Get("format") != "chd" || link.Filename != "Title of rom-1 (Disc 2).nes" {
+		t.Fatalf("link = %+v, %v", link, err)
+	}
+	download := httptest.NewRecorder()
+	router.ServeHTTP(download, httptest.NewRequest(http.MethodGet, link.URL, nil))
+	if got := download.Header().Get("Content-Disposition"); download.Code != http.StatusOK || got != `attachment; filename="Title of rom-1 (Disc 2).nes"` {
+		t.Fatalf("download via link = %d, Content-Disposition %q", download.Code, got)
+	}
+
+	for _, bad := range []string{"disc=abc", "disc=0", "disc=-1"} {
+		if response := post(bad); response.Code != http.StatusBadRequest {
+			t.Errorf("POST download-link?%s = %d %s, want a validation error", bad, response.Code, response.Body.String())
+		}
+	}
+	bad := httptest.NewRecorder()
+	router.ServeHTTP(bad, httptest.NewRequest(http.MethodGet, "/api/v1/download?token=user-1:rom-1&disc=abc", nil))
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("download?disc=abc = %d, want 400", bad.Code)
 	}
 }
 

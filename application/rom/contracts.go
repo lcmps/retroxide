@@ -24,9 +24,6 @@ type Repository interface {
 	FindROMFileByID(context.Context, string) (*romdomain.ROMFile, error)
 	FindROMFileBySHA256(context.Context, string) (*romdomain.ROMFile, error)
 	FindROMFileByROMID(context.Context, string) (*romdomain.ROMFile, error)
-	// FindUploadedFilename returns the original filename of the upload that created the ROM,
-	// or nil when no upload is linked to it.
-	FindUploadedFilename(ctx context.Context, romID string) (*string, error)
 	// FindROMIDByUploadID returns the ROM an upload created, or nil while it has none.
 	FindROMIDByUploadID(ctx context.Context, uploadID string) (*string, error)
 	// ListPlatforms counts ROMs per platform, restricted to one uploader when uploaderID is set.
@@ -116,6 +113,8 @@ type ListRequest struct {
 // Discs writes discs in their download formats and compresses them.
 type Discs interface {
 	Archive(ctx context.Context, romFile romdomain.ROMFile, base string, out io.Writer) error
+	// ArchiveDiscs writes every disc of a title in one zip, with a playlist named after title.
+	ArchiveDiscs(ctx context.Context, title string, discs []romdomain.ArchiveDisc, out io.Writer) error
 	ISO(ctx context.Context, romFile romdomain.ROMFile, out io.Writer) error
 	RequestCompression(ctx context.Context, romFile romdomain.ROMFile) error
 	CanCompressFile(ctx context.Context, romFile romdomain.ROMFile) bool
@@ -136,6 +135,8 @@ const (
 	DownloadTracks DownloadFormat = "tracks"
 	// DownloadISO is a single-track data disc as an ISO image.
 	DownloadISO DownloadFormat = "iso"
+	// DownloadAll is a zip of every disc of a title, with a playlist.
+	DownloadAll DownloadFormat = "all"
 )
 
 // Thumbnailer makes the small cover copies library grids show.
@@ -198,12 +199,14 @@ type API interface {
 	Update(context.Context, identity.Requester, string, UpdateROMRequest) (ROMDetailDTO, error)
 	Delete(context.Context, identity.Requester, string) error
 	Download(context.Context, identity.Requester, string) (DownloadOutput, error)
-	// DownloadAs downloads a ROM in one of the formats its details list.
-	DownloadAs(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat) (DownloadOutput, error)
-	// RequestCompression asks for a disc kept as tracks to be compressed to CHD.
-	RequestCompression(context.Context, identity.Requester, string) (ROMDetailDTO, error)
+	// DownloadAs downloads a ROM in one of the formats its details list. disc is the number of
+	// the disc to download, or 0 for none.
+	DownloadAs(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat, disc int) (DownloadOutput, error)
+	// RequestCompression asks for a disc kept as tracks to be compressed to CHD; disc 0 asks for
+	// every disc of a title that can be.
+	RequestCompression(ctx context.Context, requester identity.Requester, romID string, disc int) (ROMDetailDTO, error)
 	// DownloadFilename returns the name an accessible ROM is downloaded as.
-	DownloadFilename(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat) (string, error)
+	DownloadFilename(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat, disc int) (string, error)
 	UploadCover(context.Context, identity.Requester, string, []byte) (ROMDetailDTO, error)
 	OpenCover(context.Context, identity.Requester, string) (Image, error)
 	// OpenCoverThumbnail opens the small copy of the cover that library grids show.

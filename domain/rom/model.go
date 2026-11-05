@@ -99,3 +99,13 @@ type ROMFile struct {
 	// CompressRequested asks for a disc kept as tracks to be compressed to CHD.
 	CompressRequested bool
 }
+
+// ArchiveDisc is a disc to put in a zip of a whole title. Name is the disc's name there, without
+// an extension; Filename supplies the extension of a disc that is not kept as tracks. AsTracks
+// writes the disc as its sheet and track files, in a folder named Name.
+type ArchiveDisc struct {
+	ROMFile  ROMFile
+	Name     string
+	Filename string
+	AsTracks bool
+}
