@@ -62,6 +62,9 @@ type DiscDTO struct {
 	// sheet); CompressionRequested that it is waiting for, or being, compressed.
 	CanCompress          bool `json:"can_compress"`
 	CompressionRequested bool `json:"compression_requested"`
+	// CompressionPercent is how far along the disc being compressed is, and 100 while the result
+	// is checked; it is absent while the disc waits its turn.
+	CompressionPercent *int `json:"compression_percent,omitempty"`
 }
 
 // DiscTrackDTO is one track and the hashes of its file, as disc databases list them.

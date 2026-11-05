@@ -107,6 +107,9 @@ type Discs interface {
 	ISO(ctx context.Context, romFile romdomain.ROMFile, out io.Writer) error
 	RequestCompression(ctx context.Context, romFile romdomain.ROMFile) error
 	CanCompressFile(ctx context.Context, romFile romdomain.ROMFile) bool
+	// CompressionProgress reports how far along a disc being compressed is (100 while its result
+	// is checked), and false for any other disc.
+	CompressionProgress(romFileID string) (percent int, running bool)
 }
 
 // DownloadFormat names a way to download a ROM.

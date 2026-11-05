@@ -103,6 +103,8 @@ export type RomDisc = {
   can_compress: boolean;
   /** Whether the disc is waiting to be, or being, compressed. */
   compression_requested: boolean;
+  /** How far along compressing is; 100 while the result is checked, absent while waiting. */
+  compression_percent?: number;
 };
 
 export type RomDiscTrack = {

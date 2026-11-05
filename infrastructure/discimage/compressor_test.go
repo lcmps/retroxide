@@ -50,7 +50,7 @@ func discOnDisk(t *testing.T) (sheetPath string, fixture chd.Header) {
 func TestCompressMatchesChdman(t *testing.T) {
 	sheet, fixture := discOnDisk(t)
 	output := filepath.Join(t.TempDir(), "disc.chd")
-	if err := NewCompressor().Compress(context.Background(), sheet, output); err != nil {
+	if err := NewCompressor().Compress(context.Background(), sheet, output, nil); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(output)
@@ -71,7 +71,7 @@ func TestCompressCancelledLeavesNoOutput(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "disc.chd")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := NewCompressor().Compress(ctx, sheet, output); !errors.Is(err, context.Canceled) {
+	if err := NewCompressor().Compress(ctx, sheet, output, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Compress() = %v, want context.Canceled", err)
 	}
 	if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
@@ -84,7 +84,7 @@ func TestCompressPanicBecomesError(t *testing.T) {
 	compressor := Compressor{createCD: func(context.Context, string, string, chdman.CreateOptions) (chdman.CreateResult, error) {
 		panic("boom")
 	}}
-	err := compressor.Compress(context.Background(), "disc.cue", "disc.chd")
+	err := compressor.Compress(context.Background(), "disc.cue", "disc.chd", nil)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("Compress() = %v, want an error naming the panic", err)
 	}
@@ -94,7 +94,7 @@ func TestCompressFailureIsReturned(t *testing.T) {
 	compressor := Compressor{createCD: func(context.Context, string, string, chdman.CreateOptions) (chdman.CreateResult, error) {
 		return chdman.CreateResult{}, chdman.ErrInvalidCue
 	}}
-	if err := compressor.Compress(context.Background(), "disc.cue", "disc.chd"); !errors.Is(err, chdman.ErrInvalidCue) {
+	if err := compressor.Compress(context.Background(), "disc.cue", "disc.chd", nil); !errors.Is(err, chdman.ErrInvalidCue) {
 		t.Fatalf("Compress() = %v, want the library's error", err)
 	}
 }
@@ -104,7 +104,7 @@ func TestCompressWarningsDoNotFail(t *testing.T) {
 	compressor := Compressor{createCD: func(context.Context, string, string, chdman.CreateOptions) (chdman.CreateResult, error) {
 		return chdman.CreateResult{Warnings: []chdman.Warning{{Kind: chdman.WarnFileUnused, Message: "unused"}}}, nil
 	}}
-	if err := compressor.Compress(context.Background(), "disc.cue", "disc.chd"); err != nil {
+	if err := compressor.Compress(context.Background(), "disc.cue", "disc.chd", nil); err != nil {
 		t.Fatalf("Compress() = %v", err)
 	}
 }
@@ -115,7 +115,7 @@ func TestCompressionLeavesACoreFree(t *testing.T) {
 		workers = options.Workers
 		return chdman.CreateResult{}, nil
 	}}
-	if err := compressor.Compress(context.Background(), "disc.cue", "disc.chd"); err != nil {
+	if err := compressor.Compress(context.Background(), "disc.cue", "disc.chd", nil); err != nil {
 		t.Fatal(err)
 	}
 	if want := compressionWorkers(runtime.GOMAXPROCS(0)); workers != want {
@@ -128,5 +128,17 @@ func TestCompressionWorkers(t *testing.T) {
 		if got := compressionWorkers(procs); got != want {
 			t.Errorf("compressionWorkers(%d) = %d, want %d", procs, got, want)
 		}
+	}
+}
+
+func TestCompressReportsProgressUpToTheWholeDisc(t *testing.T) {
+	sheet, _ := discOnDisk(t)
+	var last, total uint64
+	report := func(done, of uint64) { last, total = done, of }
+	if err := NewCompressor().Compress(context.Background(), sheet, filepath.Join(t.TempDir(), "disc.chd"), report); err != nil {
+		t.Fatal(err)
+	}
+	if total == 0 || last != total {
+		t.Fatalf("last report = %d of %d, want the whole disc", last, total)
 	}
 }

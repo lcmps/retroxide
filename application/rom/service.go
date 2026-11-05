@@ -425,6 +425,11 @@ func (service *Service) detail(ctx context.Context, rom romdomain.ROM) (ROMDetai
 				CanCompress:          service.discs != nil && service.discs.CanCompressFile(ctx, *romFile),
 				CompressionRequested: romFile.CompressRequested,
 			}
+			if romFile.CompressRequested && service.discs != nil {
+				if percent, running := service.discs.CompressionProgress(romFile.ID); running {
+					disc.CompressionPercent = &percent
+				}
+			}
 			for index, track := range tracks {
 				disc.Tracks[index] = DiscTrackDTO{
 					Number: track.Number, Mode: track.Mode, Size: track.Size,

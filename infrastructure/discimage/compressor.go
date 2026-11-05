@@ -25,14 +25,15 @@ func NewCompressor() Compressor {
 }
 
 // Compress makes a CHD at output from the CUE sheet at sheetPath and the track files beside it.
-// The library runs inside the server, so a panic in it is returned as an error.
-func (compressor Compressor) Compress(ctx context.Context, sheetPath, output string) (err error) {
+// progress, if set, is told how many bytes of the disc are done. The library runs inside the
+// server, so a panic in it is returned as an error.
+func (compressor Compressor) Compress(ctx context.Context, sheetPath, output string, progress func(done, total uint64)) (err error) {
 	defer func() {
 		if value := recover(); value != nil {
 			err = fmt.Errorf("chd compression panicked: %v", value)
 		}
 	}()
-	result, err := compressor.createCD(ctx, sheetPath, output, chdman.CreateOptions{Workers: compressionWorkers(runtime.GOMAXPROCS(0))})
+	result, err := compressor.createCD(ctx, sheetPath, output, chdman.CreateOptions{Workers: compressionWorkers(runtime.GOMAXPROCS(0)), Progress: progress})
 	if err != nil {
 		return fmt.Errorf("createcd: %w", err)
 	}

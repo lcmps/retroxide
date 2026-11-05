@@ -507,15 +507,15 @@ func TestOnlyCueDiscsKeptAsTracksCanCompress(t *testing.T) {
 	}
 }
 
-type compressorFunc func(ctx context.Context, sheetPath, output string) error
+type compressorFunc func(ctx context.Context, sheetPath, output string, progress func(done, total uint64)) error
 
-func (compress compressorFunc) Compress(ctx context.Context, sheetPath, output string) error {
-	return compress(ctx, sheetPath, output)
+func (compress compressorFunc) Compress(ctx context.Context, sheetPath, output string, progress func(done, total uint64)) error {
+	return compress(ctx, sheetPath, output, progress)
 }
 
 func TestCompressionFailureKeepsDisc(t *testing.T) {
 	ctx := context.Background()
-	service, repositories, files := compressionFixture(t, compressorFunc(func(context.Context, string, string) error {
+	service, repositories, files := compressionFixture(t, compressorFunc(func(context.Context, string, string, func(uint64, uint64)) error {
 		return fmt.Errorf("broken")
 	}))
 	sheet, parts := discFixture(t, files, "cd-cdlz.chd", "Game")
@@ -537,7 +537,7 @@ func TestCompressionFailureKeepsDisc(t *testing.T) {
 func TestCompressionCancelledKeepsRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	service, repositories, files := compressionFixture(t, compressorFunc(func(ctx context.Context, _, _ string) error {
+	service, repositories, files := compressionFixture(t, compressorFunc(func(ctx context.Context, _, _ string, _ func(uint64, uint64)) error {
 		cancel()
 		return ctx.Err()
 	}))
@@ -595,5 +595,103 @@ func TestCueWithOneDensityCommentCanCompress(t *testing.T) {
 	}
 	if !service.CanCompressFile(ctx, file) {
 		t.Error("a sheet with one density comment is refused")
+	}
+}
+
+// checkedImages sees the service's progress when the compressed disc is read back.
+type checkedImages struct {
+	discs.Images
+	onInspect func()
+}
+
+func (images checkedImages) Inspect(ctx context.Context, content io.ReaderAt, size int64, base string) ([]romdomain.DiscTrack, bool, error) {
+	images.onInspect()
+	return images.Images.Inspect(ctx, content, size, base)
+}
+
+func TestCompressionProgressFollowsTheDisc(t *testing.T) {
+	ctx := context.Background()
+	directory := t.TempDir()
+	database, err := persistence.OpenDatabase(ctx, "sqlite", filepath.Join(directory, "db.sqlite3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := database.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	repositories := persistence.NewRepositories(database)
+	files := storage.New(filepath.Join(directory, "storage"))
+	var service *discs.Service
+	var fileID string
+	progressNow := func() (int, bool) { return service.CompressionProgress(fileID) }
+	var reported []int
+	var checking []int
+	images := checkedImages{Images: discimage.NewImages(romhash.New()), onInspect: func() {
+		percent, running := progressNow()
+		if !running {
+			t.Error("not running while reading the CHD back")
+		}
+		checking = append(checking, percent)
+	}}
+	compressor := compressorFunc(func(ctx context.Context, sheetPath, output string, progress func(done, total uint64)) error {
+		if percent, running := progressNow(); !running || percent != 0 {
+			t.Errorf("before the first report = %d, %v", percent, running)
+		}
+		for _, done := range []uint64{1, 50, 200} {
+			progress(done, 200)
+			percent, _ := progressNow()
+			reported = append(reported, percent)
+		}
+		return discimage.NewCompressor().Compress(ctx, sheetPath, output, nil)
+	})
+	service = discs.NewService(repositories, files, romhash.New(), images, compressor)
+	sheet, parts := discFixture(t, files, "cd-cdlz.chd", "Game")
+	file, err := service.Assemble(ctx, "Game.cue", sheet, parts, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileID = file.ID
+	if _, running := progressNow(); running {
+		t.Error("a disc waiting its turn reports as running")
+	}
+	if compressed, err := service.CompressPending(ctx); err != nil || compressed != 1 {
+		t.Fatalf("CompressPending() = %d, %v", compressed, err)
+	}
+	// 100 is kept for the check after compressing, so a full bar does not sit there unexplained.
+	if fmt.Sprint(reported) != "[0 25 99]" {
+		t.Errorf("reported = %v, want [0 25 99]", reported)
+	}
+	if fmt.Sprint(checking) != "[100]" {
+		t.Errorf("while reading back = %v, want [100]", checking)
+	}
+	if _, running := progressNow(); running {
+		t.Error("still running after finishing")
+	}
+}
+
+func TestFailedCompressionStopsReportingProgress(t *testing.T) {
+	ctx := context.Background()
+	var service *discs.Service
+	var other bool
+	service, _, files := compressionFixture(t, compressorFunc(func(_ context.Context, _, _ string, progress func(done, total uint64)) error {
+		progress(1, 2)
+		_, other = service.CompressionProgress("some-other-disc")
+		return fmt.Errorf("broken")
+	}))
+	sheet, parts := discFixture(t, files, "cd-cdlz.chd", "Game")
+	file, err := service.Assemble(ctx, "Game.cue", sheet, parts, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CompressPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if other {
+		t.Error("another disc reports this disc's progress")
+	}
+	if _, running := service.CompressionProgress(file.ID); running {
+		t.Error("a failed disc still reports progress")
 	}
 }
