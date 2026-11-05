@@ -84,7 +84,7 @@ CD and GD-ROM images are understood track by track. Disc databases (Redump, whic
 
 - **Grouping by filename**: discs of one game upload as one title. Retroxide reads `(Disc N)`, `(CD N)`, `(DVD N)`, `[Disc N]`, `Disc N of M`, `Game - Disc 2` and `Game_disc2` from the filename. Discs join only when they have the same uploader, the same disc-format platform, and every other filename tag identical, so regions and revisions stay separate titles.
 - **What starts a separate title**: a file that claims a disc number the title already has becomes a title of its own.
-- **Manual fixes**: in edit mode on the ROM page you can merge titles (refused across known regions, platforms or owners), make a disc a separate title, move a disc to another title, and remove a disc. ROMs from before this feature stay one-disc titles; merge them by hand.
+- **Manual fixes**: in edit mode on the ROM page you can merge titles (refused across known regions, platforms or owners), make a disc a separate title, move a disc up or down within its title, and remove a disc. ROMs from before this feature stay one-disc titles; merge them by hand.
 - **Download all**: a title with several discs offers one zip, with Deflate for most files and CHD, CSO, RVZ and PBP stored as they are, plus one `.m3u` playlist. The server builds it as it sends, so it can't be resumed.
 - **Upload size**: DVD images are large. Raise `RETROXIDE_MAX_UPLOAD_SIZE` (default 64 MB) before uploading them.
 
