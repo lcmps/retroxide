@@ -1,4 +1,4 @@
-// Package discimage adapts the CHD reader and MAME's chdman to the disc service.
+// Package discimage adapts the CHD reader and the chdman-go library to the disc service.
 package discimage
 
 import (

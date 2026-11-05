@@ -334,7 +334,9 @@ func (discs *fakeDiscs) RequestCompression(_ context.Context, romFile romdomain.
 	return nil
 }
 
-func (discs *fakeDiscs) CanCompress() bool { return discs.canCompress }
+func (discs *fakeDiscs) CanCompressFile(context.Context, romdomain.ROMFile) bool {
+	return discs.canCompress
+}
 
 func TestROMsOfferEveryFormatTheyDownloadIn(t *testing.T) {
 	sheet := "/stored/sheet"
@@ -373,6 +375,12 @@ func TestROMsOfferEveryFormatTheyDownloadIn(t *testing.T) {
 	if err != nil || !detail.Disc.CanCompress || len(discs.requested) != 1 || woken != 1 {
 		t.Fatalf("RequestCompression() = %+v, %v; requested %v, woken %d", detail.Disc, err, discs.requested, woken)
 	}
+	// Whether a disc offers compression is the disc service's call, such as a GDI disc's no.
+	discs.canCompress = false
+	if detail, err := service.RequestCompression(context.Background(), owner, "rom-1"); err != nil || detail.Disc.CanCompress {
+		t.Fatalf("a disc that cannot compress: %+v, %v", detail.Disc, err)
+	}
+	discs.canCompress = true
 
 	// Compressed since: its upload format first, then the CHD.
 	set(romdomain.ROMFile{StoragePath: "/stored/chd", SheetPath: &sheet, Format: romdomain.FormatCHD})

@@ -69,9 +69,9 @@ type Images interface {
 // AddFile adds a file of size bytes, written by write, to an archive.
 type AddFile func(name string, size int64, write func(io.Writer) error) error
 
-// Compressor makes CHD images; it is optional, since it needs MAME's chdman.
+// Compressor makes CHD images. It is optional: a service without one does not compress.
 type Compressor interface {
-	// Compress makes a CHD at output from the sheet at sheetPath and its track files beside it.
+	// Compress makes a CHD at output from the CUE sheet at sheetPath and its track files beside it.
 	Compress(ctx context.Context, sheetPath, output string) error
 }
 
@@ -90,6 +90,21 @@ func NewService(repository Repository, storage Storage, hasher Hasher, images Im
 
 // CanCompress reports whether discs are compressed to CHD.
 func (service *Service) CanCompress() bool { return service.compressor != nil }
+
+// CanCompressFile reports whether this disc can be compressed: it is kept as tracks and has a CUE
+// sheet. GDI discs stay as uploaded, since the compressor does not make GD-ROM CHDs. A sheet that
+// cannot be read means no, so that a ROM's page does not fail over it.
+func (service *Service) CanCompressFile(ctx context.Context, romFile romdomain.ROMFile) bool {
+	if service.compressor == nil || romFile.Format != romdomain.FormatTracks {
+		return false
+	}
+	sheet, err := service.storage.Read(ctx, sheetPath(romFile))
+	if err != nil {
+		slog.WarnContext(ctx, "could not read a disc's sheet", "rom_file_id", romFile.ID, "error", err)
+		return false
+	}
+	return sheetKindOf(sheet) == SheetCUE
+}
 
 // Index inspects a newly stored (or not yet inspected) file: a CD or GD-ROM CHD gets its tracks
 // and disc identity recorded, so its tracks' hashes can identify it; anything else is marked a
@@ -155,6 +170,8 @@ func (service *Service) Assemble(ctx context.Context, sheetName, sheetText strin
 	if !ok {
 		return romdomain.ROMFile{}, fault.Validation("a disc's sheet must be a .cue or .gdi file")
 	}
+	// A GDI disc is kept as uploaded rather than refused for having asked for compression.
+	compress = compress && kind == SheetCUE
 	sheet, err := ParseSheet(kind, sheetText)
 	if err != nil {
 		return romdomain.ROMFile{}, err
@@ -305,12 +322,12 @@ func msf(frames int) string {
 // ErrNotCompressible reports a file that is not a disc kept as tracks.
 var ErrNotCompressible = errors.New("discs: not a disc kept as separate tracks")
 
-// Compress turns a disc kept as tracks into a CHD with chdman. The CHD replaces the tracks only
+// Compress turns a disc kept as tracks into a CHD. The CHD replaces the tracks only
 // once reading it back gives every track's exact hashes; the tracks' files are then left for
 // the storage sweep to remove.
 func (service *Service) Compress(ctx context.Context, romFileID string) error {
 	if service.compressor == nil {
-		return errors.New("discs: compression needs chdman")
+		return errors.New("discs: this server cannot compress discs")
 	}
 	romFile, err := service.repository.FindROMFileByID(ctx, romFileID)
 	if err != nil {
@@ -327,14 +344,16 @@ func (service *Service) Compress(ctx context.Context, romFileID string) error {
 	if err != nil {
 		return err
 	}
+	if sheetKindOf(sheet) != SheetCUE {
+		return ErrNotCompressible
+	}
 	work, err := service.storage.WorkDir()
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(work)
-	// chdman reads one file per track: a GDI already names one, and a CUE sheet is rewritten
-	// for the stored track files (the uploaded sheet may name one file for several tracks).
-	gdi := sheetKindOf(sheet) == SheetGDI
+	// The compressor reads one file per track, so the sheet is rewritten for the stored track
+	// files (the uploaded sheet may name one file for several tracks).
 	workTracks := make([]romdomain.DiscTrack, len(tracks))
 	for index, track := range tracks {
 		if track.StoragePath == nil {
@@ -344,26 +363,21 @@ func (service *Service) Compress(ctx context.Context, romFileID string) error {
 		if err != nil {
 			return err
 		}
-		if !gdi {
-			track.Filename = splitTrackName("disc", len(tracks), track.Number)
-		}
+		track.Filename = splitTrackName("disc", len(tracks), track.Number)
 		workTracks[index] = track
-		// A hard link costs nothing; chdman only reads the tracks.
+		// A hard link costs nothing; the compressor only reads the tracks.
 		if err := os.Link(source, filepath.Join(work, track.Filename)); err != nil {
 			if err := copyFile(source, filepath.Join(work, track.Filename)); err != nil {
 				return err
 			}
 		}
 	}
-	sheetName := "disc.gdi"
-	if !gdi {
-		sheetName, sheet = "disc.cue", []byte(cueFor(workTracks))
-	}
-	if err := os.WriteFile(filepath.Join(work, sheetName), sheet, 0o600); err != nil {
+	sheetFile := filepath.Join(work, "disc.cue")
+	if err := os.WriteFile(sheetFile, []byte(cueFor(workTracks)), 0o600); err != nil {
 		return err
 	}
 	output := filepath.Join(work, "disc.chd")
-	if err := service.compressor.Compress(ctx, filepath.Join(work, sheetName), output); err != nil {
+	if err := service.compressor.Compress(ctx, sheetFile, output); err != nil {
 		return err
 	}
 
@@ -378,10 +392,10 @@ func (service *Service) Compress(ctx context.Context, romFileID string) error {
 	}
 	readBack, ok, err := service.images.Inspect(ctx, chd, info.Size(), "disc")
 	if err != nil || !ok {
-		return fmt.Errorf("discs: chdman's CHD cannot be read back: %v", err)
+		return fmt.Errorf("discs: the compressed CHD cannot be read back: %v", err)
 	}
 	if romdomain.DiscIdentity(readBack) != *romFile.DiscIdentity {
-		return fmt.Errorf("discs: chdman's CHD does not reproduce the tracks exactly; keeping them")
+		return fmt.Errorf("discs: the compressed CHD does not reproduce the tracks exactly; keeping them")
 	}
 	digest := service.hasher.NewDigest()
 	if _, err := io.Copy(digest, io.NewSectionReader(chd, 0, info.Size())); err != nil {
@@ -431,16 +445,16 @@ func (service *Service) CompressPending(ctx context.Context) (int, error) {
 	return compressed, ctx.Err()
 }
 
-// ErrNoCompressor reports that compression was asked for without chdman installed.
-var ErrNoCompressor = fault.Validation("compressing discs needs MAME's chdman, which this server does not have")
+// ErrNoCompressor reports that compression was asked for on a service without a compressor.
+var ErrNoCompressor = fault.Validation("this server cannot compress discs")
 
 // RequestCompression asks for a disc kept as tracks to be compressed to CHD in the background.
 func (service *Service) RequestCompression(ctx context.Context, romFile romdomain.ROMFile) error {
 	if service.compressor == nil {
 		return ErrNoCompressor
 	}
-	if romFile.Format != romdomain.FormatTracks {
-		return fault.Validation("only discs kept as CUE/BIN or GDI tracks can be compressed")
+	if !service.CanCompressFile(ctx, romFile) {
+		return fault.Validation("only discs kept as CUE/BIN tracks can be compressed")
 	}
 	return service.repository.SetCompressRequested(ctx, romFile.ID, true)
 }

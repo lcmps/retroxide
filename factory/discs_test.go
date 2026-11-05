@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -72,7 +73,7 @@ func zipHashes(t *testing.T, archive []byte) map[string]string {
 }
 
 // TestDiscsAcrossForms follows a disc through upload as CUE/BIN, duplicate detection against
-// the same disc as a CHD, download as tracks, and (with chdman) compression to CHD.
+// the same disc as a CHD, download as tracks, and compression to CHD.
 func TestDiscsAcrossForms(t *testing.T) {
 	ctx := context.Background()
 	directory := t.TempDir()
@@ -87,14 +88,7 @@ func TestDiscsAcrossForms(t *testing.T) {
 	})
 	repositories := persistence.NewRepositories(database)
 	files := storage.New(filepath.Join(directory, "storage"))
-	var compressor discs.Compressor
-	if path := os.Getenv("RETROXIDE_TEST_CHDMAN"); path != "" {
-		chdman, ok := discimage.FindChdman(path)
-		if !ok {
-			t.Fatalf("chdman not usable at %s", path)
-		}
-		compressor = chdman
-	}
+	var compressor discs.Compressor = discimage.NewCompressor()
 	service := discs.NewService(repositories, files, romhash.New(), discimage.NewImages(romhash.New()), compressor)
 
 	tracks, sheet := discTracks(t)
@@ -107,7 +101,7 @@ func TestDiscsAcrossForms(t *testing.T) {
 		}
 		parts = append(parts, discs.Part{Name: name, StoragePath: key, Size: int64(len(data)), Hash: hash})
 	}
-	romFile, err := service.Assemble(ctx, "Game.cue", sheet, parts, compressor != nil)
+	romFile, err := service.Assemble(ctx, "Game.cue", sheet, parts, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,10 +159,6 @@ func TestDiscsAcrossForms(t *testing.T) {
 	}
 	checkArchive("tracks")
 
-	if compressor == nil {
-		t.Log("RETROXIDE_TEST_CHDMAN not set; skipping compression")
-		return
-	}
 	compressed, err := service.CompressPending(ctx)
 	if err != nil || compressed != 1 {
 		t.Fatalf("CompressPending() = %d, %v", compressed, err)
@@ -372,4 +362,196 @@ func TestSingleTrackDataDiscsDownloadAsISO(t *testing.T) {
 	if err := service.ISO(ctx, mixed, io.Discard); !fault.IsCode(err, fault.CodeValidation) {
 		t.Fatalf("ISO of a mixed-mode disc = %v, want refused", err)
 	}
+}
+
+// discFixture stores a fixture CHD's tracks as the files a person would upload.
+func discFixture(t *testing.T, files *storage.Filesystem, chdName, base string) (string, []discs.Part) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(chdFixtures, "chd", chdName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := chd.Open(bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	disc, err := reader.Disc()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []discs.Part
+	for _, track := range disc.Tracks {
+		var data bytes.Buffer
+		if _, err := reader.ExtractTrack(track, &data); err != nil {
+			t.Fatal(err)
+		}
+		hash, _ := romhash.New().Hash(data.Bytes())
+		key, err := files.Write(context.Background(), hash.SHA256, data.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts = append(parts, discs.Part{Name: disc.TrackFileName(base, track), StoragePath: key, Size: int64(data.Len()), Hash: hash})
+	}
+	return disc.Sheet(base), parts
+}
+
+func compressionFixture(t *testing.T, compressor discs.Compressor) (*discs.Service, *persistence.Repositories, *storage.Filesystem) {
+	t.Helper()
+	directory := t.TempDir()
+	database, err := persistence.OpenDatabase(context.Background(), "sqlite", filepath.Join(directory, "db.sqlite3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := database.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	repositories := persistence.NewRepositories(database)
+	files := storage.New(filepath.Join(directory, "storage"))
+	return discs.NewService(repositories, files, romhash.New(), discimage.NewImages(romhash.New()), compressor), repositories, files
+}
+
+func checkStillTracks(t *testing.T, service *discs.Service, repositories *persistence.Repositories, id, sheetName string, parts []discs.Part) {
+	t.Helper()
+	ctx := context.Background()
+	file, err := repositories.FindROMFileByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Format != romdomain.FormatTracks {
+		t.Fatalf("format = %s, want the disc still kept as tracks", file.Format)
+	}
+	var archive bytes.Buffer
+	if err := service.Archive(ctx, *file, strings.TrimSuffix(sheetName, filepath.Ext(sheetName)), &archive); err != nil {
+		t.Fatal(err)
+	}
+	hashes := zipHashes(t, archive.Bytes())
+	if _, ok := hashes[sheetName]; !ok {
+		t.Errorf("archive lacks %s: %v", sheetName, hashes)
+	}
+	for _, part := range parts {
+		if hashes[part.Name] != part.Hash.SHA1 {
+			t.Errorf("%s = %s, want %s", part.Name, hashes[part.Name], part.Hash.SHA1)
+		}
+	}
+}
+
+func TestGDIDiscsStayAsTracks(t *testing.T) {
+	ctx := context.Background()
+	service, repositories, files := compressionFixture(t, discimage.NewCompressor())
+	sheet, parts := discFixture(t, files, "gd.chd", "Disc")
+	// Ticking "Compress" must not lose the upload.
+	file, err := service.Assemble(ctx, "Disc.gdi", sheet, parts, true)
+	if err != nil {
+		t.Fatalf("Assemble() = %v", err)
+	}
+	if file.Format != romdomain.FormatTracks || file.CompressRequested {
+		t.Fatalf("assembled = format %s, requested %v", file.Format, file.CompressRequested)
+	}
+	if service.CanCompressFile(ctx, file) {
+		t.Error("a GDI disc is offered for compression")
+	}
+	if err := service.RequestCompression(ctx, file); !fault.IsCode(err, fault.CodeValidation) {
+		t.Errorf("RequestCompression() = %v, want a validation error", err)
+	}
+	checkStillTracks(t, service, repositories, file.ID, "Disc.gdi", parts)
+}
+
+// A request made while chdman could still compress GDI discs must not retry forever.
+func TestGDIRequestedBeforeUpgradeIsDropped(t *testing.T) {
+	ctx := context.Background()
+	service, repositories, files := compressionFixture(t, discimage.NewCompressor())
+	sheet, parts := discFixture(t, files, "gd.chd", "Disc")
+	file, err := service.Assemble(ctx, "Disc.gdi", sheet, parts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.SetCompressRequested(ctx, file.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if compressed, err := service.CompressPending(ctx); err != nil || compressed != 0 {
+		t.Fatalf("CompressPending() = %d, %v", compressed, err)
+	}
+	after, _ := repositories.FindROMFileByID(ctx, file.ID)
+	if after.CompressRequested {
+		t.Error("the request is still pending")
+	}
+	checkStillTracks(t, service, repositories, file.ID, "Disc.gdi", parts)
+}
+
+func TestOnlyCueDiscsKeptAsTracksCanCompress(t *testing.T) {
+	ctx := context.Background()
+	service, _, files := compressionFixture(t, discimage.NewCompressor())
+	sheet, parts := discFixture(t, files, "cd-cdlz.chd", "Game")
+	file, err := service.Assemble(ctx, "Game.cue", sheet, parts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !service.CanCompressFile(ctx, file) {
+		t.Error("a CUE disc kept as tracks is not offered for compression")
+	}
+	compressed := file
+	compressed.Format = romdomain.FormatCHD
+	plain := file
+	plain.Format = romdomain.FormatFile
+	if service.CanCompressFile(ctx, compressed) || service.CanCompressFile(ctx, plain) {
+		t.Error("a CHD or a plain file is offered for compression")
+	}
+	// A missing sheet is a reason not to offer it, not a reason to fail the ROM page.
+	lost := file
+	missing := "no-such-sheet"
+	lost.SheetPath = &missing
+	if service.CanCompressFile(ctx, lost) {
+		t.Error("a disc whose sheet cannot be read is offered for compression")
+	}
+}
+
+type compressorFunc func(ctx context.Context, sheetPath, output string) error
+
+func (compress compressorFunc) Compress(ctx context.Context, sheetPath, output string) error {
+	return compress(ctx, sheetPath, output)
+}
+
+func TestCompressionFailureKeepsDisc(t *testing.T) {
+	ctx := context.Background()
+	service, repositories, files := compressionFixture(t, compressorFunc(func(context.Context, string, string) error {
+		return fmt.Errorf("broken")
+	}))
+	sheet, parts := discFixture(t, files, "cd-cdlz.chd", "Game")
+	file, err := service.Assemble(ctx, "Game.cue", sheet, parts, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compressed, err := service.CompressPending(ctx); err != nil || compressed != 0 {
+		t.Fatalf("CompressPending() = %d, %v", compressed, err)
+	}
+	after, _ := repositories.FindROMFileByID(ctx, file.ID)
+	if after.CompressRequested {
+		t.Error("the failed request is still pending")
+	}
+	checkStillTracks(t, service, repositories, file.ID, "Game.cue", parts)
+}
+
+// Stopping the server mid-compression keeps the request, so it resumes after the restart.
+func TestCompressionCancelledKeepsRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service, repositories, files := compressionFixture(t, compressorFunc(func(ctx context.Context, _, _ string) error {
+		cancel()
+		return ctx.Err()
+	}))
+	sheet, parts := discFixture(t, files, "cd-cdlz.chd", "Game")
+	file, err := service.Assemble(context.Background(), "Game.cue", sheet, parts, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CompressPending(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CompressPending() = %v, want context.Canceled", err)
+	}
+	after, _ := repositories.FindROMFileByID(context.Background(), file.ID)
+	if !after.CompressRequested {
+		t.Error("the request was dropped by stopping the server")
+	}
+	checkStillTracks(t, service, repositories, file.ID, "Game.cue", parts)
 }
