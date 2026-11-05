@@ -106,7 +106,7 @@ type Discs interface {
 	Archive(ctx context.Context, romFile romdomain.ROMFile, base string, out io.Writer) error
 	ISO(ctx context.Context, romFile romdomain.ROMFile, out io.Writer) error
 	RequestCompression(ctx context.Context, romFile romdomain.ROMFile) error
-	CanCompress() bool
+	CanCompressFile(ctx context.Context, romFile romdomain.ROMFile) bool
 }
 
 // DownloadFormat names a way to download a ROM.

@@ -269,7 +269,7 @@ func (service *UploadService) finishPart(ctx context.Context, sessions *sessionS
 type DiscAssembler interface {
 	// Assemble stores the disc, asking for it to be compressed to CHD when compress is set.
 	Assemble(ctx context.Context, sheetName, sheetText string, parts []discs.Part, compress bool) (romdomain.ROMFile, error)
-	// CanCompress reports whether discs can be compressed to CHD (chdman is installed).
+	// CanCompress reports whether discs can be compressed to CHD.
 	CanCompress() bool
 }
 

@@ -422,7 +422,7 @@ func (service *Service) detail(ctx context.Context, rom romdomain.ROM) (ROMDetai
 		if len(tracks) > 0 {
 			disc := &DiscDTO{
 				Format: string(romFile.Format), Tracks: make([]DiscTrackDTO, len(tracks)),
-				CanCompress:          romFile.Format == romdomain.FormatTracks && service.discs != nil && service.discs.CanCompress(),
+				CanCompress:          service.discs != nil && service.discs.CanCompressFile(ctx, *romFile),
 				CompressionRequested: romFile.CompressRequested,
 			}
 			for index, track := range tracks {

@@ -90,7 +90,7 @@ export type DownloadOption = {
 };
 
 export type UploadOptions = {
-  /** Whether discs can be compressed to CHD (chdman is installed). */
+  /** Whether discs can be compressed to CHD. */
   disc_compression: boolean;
   disc_compression_default: boolean;
 };

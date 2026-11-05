@@ -112,3 +112,27 @@ func TestSettingsStoreUIFontIsValidatedAndLive(t *testing.T) {
 		t.Fatalf("font setting = %+v", font)
 	}
 }
+
+// RETROXIDE_CHDMAN_PATH was a setting until compression became built in; installs keep it around.
+func TestStaleChdmanPathIsIgnored(t *testing.T) {
+	const stale = "RETROXIDE_CHDMAN_PATH"
+	store, path := settingsFixture(t, settingsSecret+stale+"=/usr/bin/chdman\n", map[string]string{stale: "/usr/bin/chdman"})
+	all, err := store.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range all {
+		if setting.Key == stale {
+			t.Fatalf("%s is still listed", stale)
+		}
+	}
+	if err := store.Update(map[string]string{CompressDiscsKey: "true"}); err != nil {
+		t.Fatalf("saving another setting = %v", err)
+	}
+	if written, _ := os.ReadFile(path); !strings.Contains(string(written), CompressDiscsKey+`="true"`) {
+		t.Fatalf("the other setting was not saved:\n%s", written)
+	}
+	if err := store.Update(map[string]string{stale: "/x"}); !fault.IsCode(err, fault.CodeValidation) {
+		t.Fatalf("changing %s = %v, want a validation error", stale, err)
+	}
+}
