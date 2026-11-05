@@ -74,8 +74,8 @@
 		</label>
 		<p class="muted hint" id="compress-hint">
 			{hasDisc
-				? t('uploads.form.compressHint', 'For discs picked as a .cue or .gdi with their track files. The uploaded files can still be downloaded exactly as they are.')
-				: t('uploads.form.compressHintNoDisc', 'Applies to discs picked as a .cue or .gdi with their track files.')}
+				? t('uploads.form.compressHint', 'For discs picked as a .cue with their track files. The uploaded files can still be downloaded exactly as they are. GDI discs are kept as uploaded.')
+				: t('uploads.form.compressHintNoDisc', 'Applies to discs picked as a .cue with their track files.')}
 		</p>
 	{/if}
 

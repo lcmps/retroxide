@@ -61,7 +61,7 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 	}, storage.FreeSpace)
 	audit := metrics.NewCountingAudit(observability.NewAuditLogger(logger), registry)
 	sessions := auth.NewSessionService(repositories, hasher, tokens, repositories)
-	discService := discs.NewService(repositories, storage, hashadapter.New(), discimage.NewImages(hashadapter.New()), newCompressor(settings, logger))
+	discService := discs.NewService(repositories, storage, hashadapter.New(), discimage.NewImages(hashadapter.New()), discimage.NewCompressor())
 	discsUploaded := make(chan struct{}, 1)
 	wakeCompressor := func() {
 		select {
@@ -89,15 +89,4 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 		Authenticator: auth.NewAuthenticator(tokens, repositories, repositories),
 		Identifier:    persistence.NewIdentifier(repositories.DB).WithDiscs(discService),
 	}
-}
-
-// newCompressor finds chdman, which discs need to be compressed to CHD when someone asks.
-func newCompressor(settings config.Config, logger *slog.Logger) discs.Compressor {
-	chdman, found := discimage.FindChdman(settings.ChdmanPath)
-	if !found {
-		logger.Info("chdman not found; discs cannot be compressed to CHD", "path", settings.ChdmanPath)
-		return nil
-	}
-	logger.Info("discs can be compressed to CHD", "chdman", chdman.Path())
-	return chdman
 }

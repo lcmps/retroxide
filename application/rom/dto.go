@@ -58,8 +58,8 @@ type DiscDTO struct {
 	// Format is chd for a CHD image, tracks for a sheet and track files.
 	Format string         `json:"format"`
 	Tracks []DiscTrackDTO `json:"tracks"`
-	// CanCompress says the disc can be compressed to CHD now (it is kept as tracks and chdman
-	// is installed); CompressionRequested that it is waiting for, or being, compressed.
+	// CanCompress says the disc can be compressed to CHD now (it is kept as tracks and has a CUE
+	// sheet); CompressionRequested that it is waiting for, or being, compressed.
 	CanCompress          bool `json:"can_compress"`
 	CompressionRequested bool `json:"compression_requested"`
 }

@@ -43,6 +43,7 @@ RUN apk add --no-cache ca-certificates \
     && chown -R retroxide:retroxide /app
 
 COPY --from=builder /out/retroxide /usr/local/bin/retroxide
+COPY LICENSE NOTICE /usr/share/licenses/retroxide/
 
 USER retroxide
 EXPOSE 3000
