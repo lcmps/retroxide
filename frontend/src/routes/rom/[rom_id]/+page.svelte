@@ -12,7 +12,7 @@
   import DiscTracks from '#lib/components/rom/DiscTracks.svelte';
   import { requestCompression, uploadRomCover } from '#lib/api/client.js';
   import DiscSwitcher from '#lib/components/rom/DiscSwitcher.svelte';
-  import { compressionOutcome, pickDisc } from '#lib/rom/discs.js';
+  import { compressionOutcome, pickDisc, rememberRequested } from '#lib/rom/discs.js';
   import type { DownloadFormat, DownloadOption, RomDiscEntry } from '#lib/api/types.js';
   import { ApiClientError } from '#lib/api/errors.js';
   import { getErrorMessage, getValidationAwareErrorMessage } from '#lib/helpers/error.js';
@@ -139,6 +139,8 @@
   const downloads = $derived<DownloadOption[]>(currentDownloads?.length ? currentDownloads : [{ format: 'file', extension: '' }]);
   let downloadFormat = $state<DownloadFormat>('file');
   let compressing = $state(false);
+  /** Every disc seen waiting this round, kept until the round's result is shown. */
+  let roundRequested: string[] = [];
   let compressionPoll: ReturnType<typeof setTimeout> | undefined;
 
   // Start on the first format whenever the ROM, and so its formats, change.
@@ -166,11 +168,12 @@
     compressionPoll = setTimeout(async () => {
       if (!rom) return;
       try {
-        const waiting = discs.filter((entry) => entry.disc?.compression_requested).map((entry) => entry.rom_file_id);
+        roundRequested = rememberRequested(roundRequested, discs);
         const updated = await getRom(rom.rom_id);
-        const outcome = compressionOutcome(waiting, discEntries(updated));
+        const outcome = compressionOutcome(roundRequested, discEntries(updated));
         rom = updated;
         if (outcome !== 'running') {
+          roundRequested = [];
           message = outcome === 'compressed'
             ? t('rom.messages.compressed', 'Compressed to CHD.')
             : t('rom.messages.compressFailed', 'The disc could not be compressed; it is kept as it was.');

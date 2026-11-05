@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RomDisc, RomDiscEntry } from '#lib/api/types.js';
-import { compressionOutcome, pickDisc } from './discs.js';
+import { compressionOutcome, pickDisc, rememberRequested } from './discs.js';
 
 function disc(format: RomDisc['format'], requested = false): RomDisc {
 	return { format, tracks: [], can_compress: false, compression_requested: requested };
@@ -39,5 +39,29 @@ describe('compressionOutcome', () => {
 
 	it('reports failed when a requested disc stopped waiting without becoming a CHD', () => {
 		expect(compressionOutcome(['file-1', 'file-2'], [entry(1, disc('chd')), entry(2, disc('tracks'))])).toBe('failed');
+	});
+});
+
+describe('a round across several polls', () => {
+	const tick = (known: string[], discs: RomDiscEntry[]) => {
+		const requested = rememberRequested(known, discs);
+		return { requested, outcome: compressionOutcome(requested, discs) };
+	};
+	const waiting = [entry(1, disc('tracks', true)), entry(2, disc('tracks', true))];
+
+	it('stays failed when a disc failed in an earlier poll and the other succeeds later', () => {
+		const first = tick([], waiting);
+		const second = tick(first.requested, [entry(1, disc('tracks')), entry(2, disc('tracks', true))]);
+		expect(second.outcome).toBe('running');
+		const third = tick(second.requested, [entry(1, disc('tracks')), entry(2, disc('chd'))]);
+		expect(third.outcome).toBe('failed');
+	});
+
+	it('is compressed when two discs succeed in different polls', () => {
+		const first = tick([], waiting);
+		const second = tick(first.requested, [entry(1, disc('chd')), entry(2, disc('tracks', true))]);
+		expect(second.outcome).toBe('running');
+		const third = tick(second.requested, [entry(1, disc('chd')), entry(2, disc('chd'))]);
+		expect(third.outcome).toBe('compressed');
 	});
 });

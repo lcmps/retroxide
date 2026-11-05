@@ -15,3 +15,9 @@ export function compressionOutcome(wasRequested: string[], discs: RomDiscEntry[]
   const allCompressed = requested.length === wasRequested.length && requested.every((entry) => entry.disc?.format === 'chd');
   return allCompressed ? 'compressed' : 'failed';
 }
+
+/** Adds the discs now waiting to those already seen waiting this round, so earlier finishers are not forgotten. */
+export function rememberRequested(known: string[], discs: RomDiscEntry[]): string[] {
+  const waiting = discs.filter((entry) => entry.disc?.compression_requested).map((entry) => entry.rom_file_id);
+  return [...new Set([...known, ...waiting])];
+}
