@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -392,5 +394,278 @@ func TestROMHardDeleteKeepsUnrelatedRecords(t *testing.T) {
 	}
 	if _, err := files.Read(ctx, file.StoragePath); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// discDeletion is a database for the multi-disc deletion tests. Set RETROXIDE_TEST_MYSQL_URL to run
+// them on MySQL, where foreign keys are enforced; ids carry a prefix unique to the run because
+// that database is shared.
+type discDeletion struct {
+	t            *testing.T
+	repositories *Repositories
+	ctx          context.Context
+	prefix       string
+	storage      map[string]string // rom_file id to its storage path
+}
+
+func openDiscDeletion(t *testing.T) *discDeletion {
+	t.Helper()
+	url := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if url == "" {
+		repositories, ctx := openTestRepositories(t)
+		return &discDeletion{t: t, repositories: repositories, ctx: ctx, prefix: "dd", storage: map[string]string{}}
+	}
+	db, err := OpenDatabase(context.Background(), "mysql", "", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	prefix := fmt.Sprintf("dd%x", time.Now().UnixNano())
+	d := &discDeletion{t: t, repositories: NewRepositories(db), ctx: context.Background(), prefix: prefix, storage: map[string]string{}}
+	t.Cleanup(func() {
+		like := prefix + "%"
+		for _, statement := range []string{
+			"DELETE FROM rom_disc WHERE rom_id LIKE ?",
+			"DELETE FROM rom WHERE id LIKE ?",
+			"DELETE FROM job_queue WHERE rom_file_id LIKE ?",
+			"DELETE FROM job_dead_letter WHERE rom_file_id LIKE ?",
+			"DELETE FROM upload WHERE id LIKE ?",
+			"DELETE FROM disc_track WHERE rom_file_id LIKE ?",
+			"DELETE FROM rom_file WHERE id LIKE ?",
+		} {
+			_ = db.Exec(statement, like).Error
+		}
+	})
+	return d
+}
+
+func (d *discDeletion) id(name string) string { return d.prefix + name }
+
+// rom seeds a ROM with discs 1..count; each disc has its own file, one track file and a sheet, a
+// recorded filename, and an upload named after it.
+func (d *discDeletion) rom(name, uploader string, count int) romdomain.ROM {
+	d.t.Helper()
+	game := seedDiscROM(d.t, d.repositories, d.ctx, d.id(name), uploader, nil)
+	game.Identity.CoverArtPath = ptr("/covers/" + game.ID)
+	if err := d.repositories.SaveROM(d.ctx, game); err != nil {
+		d.t.Fatal(err)
+	}
+	for number := 1; number <= count; number++ {
+		fileID := game.ROMFileID
+		if number > 1 {
+			fileID = d.id(fmt.Sprintf("%s-disc%d", name, number))
+			if _, err := d.repositories.UpsertROMFile(d.ctx, validROMFile(fileID, fileID)); err != nil {
+				d.t.Fatal(err)
+			}
+		}
+		filename := fmt.Sprintf("%s disc %d.cue", name, number)
+		if err := d.repositories.RecordDisc(d.ctx, romdomain.ROMDisc{ROMID: game.ID, ROMFileID: fileID, Number: number, Filename: filename}); err != nil {
+			d.t.Fatal(err)
+		}
+		d.decorate(fileID)
+		upload := UploadModel{ID: fileID + "-upload", UploaderID: uploader, OriginalFilename: filename, Status: "completed", ROMID: &game.ID}
+		if err := d.repositories.DB.Create(&upload).Error; err != nil {
+			d.t.Fatal(err)
+		}
+	}
+	return game
+}
+
+// decorate gives a file a sheet and a track stored apart.
+func (d *discDeletion) decorate(fileID string) {
+	d.t.Helper()
+	var file ROMFileModel
+	if err := d.repositories.DB.Where("id = ?", fileID).Take(&file).Error; err != nil {
+		d.t.Fatal(err)
+	}
+	d.storage[fileID] = file.StoragePath
+	if err := d.repositories.DB.Model(&ROMFileModel{}).Where("id = ?", fileID).Update("sheet_path", "/sheets/"+fileID).Error; err != nil {
+		d.t.Fatal(err)
+	}
+	track := DiscTrackModel{ROMFileID: fileID, Number: 1, Mode: "MODE1/2352", SectorBytes: 2352, Frames: 1, Size: 2352, SHA256: strings.Repeat("a", 64), SHA1: strings.Repeat("b", 40), MD5: strings.Repeat("c", 32), CRC32: "deadbeef", Filename: "t.bin", StoragePath: ptr("/tracks/" + fileID)}
+	if err := d.repositories.DB.Create(&track).Error; err != nil {
+		d.t.Fatal(err)
+	}
+}
+
+func (d *discDeletion) filePaths(fileID string) []string {
+	return []string{d.storage[fileID], "/sheets/" + fileID, "/tracks/" + fileID}
+}
+
+func (d *discDeletion) count(model any, where string, args ...any) int64 {
+	d.t.Helper()
+	var count int64
+	if err := d.repositories.DB.Model(model).Where(where, args...).Count(&count).Error; err != nil {
+		d.t.Fatal(err)
+	}
+	return count
+}
+
+func (d *discDeletion) assertFile(fileID string, want int64) {
+	d.t.Helper()
+	if got := d.count(&ROMFileModel{}, "id = ?", fileID); got != want {
+		d.t.Errorf("rom_file %s count = %d, want %d", fileID, got, want)
+	}
+	if got := d.count(&DiscTrackModel{}, "rom_file_id = ?", fileID); got != want {
+		d.t.Errorf("disc_track of %s count = %d, want %d", fileID, got, want)
+	}
+}
+
+type deletedPaths []string
+
+func (p *deletedPaths) delete(path string) error { *p = append(*p, path); return nil }
+
+func (p deletedPaths) has(path string) bool { return slices.Contains(p, path) }
+
+func TestDeletingATitleDeletesEveryDisc(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 3)
+	files := []string{game.ROMFileID, d.id("title-disc2"), d.id("title-disc3")}
+	var deleted deletedPaths
+	if err := d.repositories.HardDeleteROM(d.ctx, game.ID, deleted.delete); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.count(&ROMModel{}, "id = ?", game.ID) + d.count(&ROMDiscModel{}, "rom_id = ?", game.ID) + d.count(&UploadModel{}, "rom_id = ?", game.ID); got != 0 {
+		t.Errorf("rows left for the ROM = %d", got)
+	}
+	for _, file := range files {
+		d.assertFile(file, 0)
+		for _, path := range d.filePaths(file) {
+			if !deleted.has(path) {
+				t.Errorf("%s was not deleted; deleted = %v", path, deleted)
+			}
+		}
+	}
+	if !deleted.has("/covers/" + game.ID) {
+		t.Errorf("cover was not deleted; deleted = %v", deleted)
+	}
+}
+
+func TestDeletingATitleKeepsADiscAnotherROMUses(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 2)
+	other := d.rom("other", "someone", 1)
+	shared := d.id("title-disc2")
+	if err := d.repositories.RecordDisc(d.ctx, romdomain.ROMDisc{ROMID: other.ID, ROMFileID: shared, Number: 2, Filename: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	var deleted deletedPaths
+	if err := d.repositories.HardDeleteROM(d.ctx, game.ID, deleted.delete); err != nil {
+		t.Fatal(err)
+	}
+	d.assertFile(shared, 1)
+	for _, path := range d.filePaths(shared) {
+		if deleted.has(path) {
+			t.Errorf("%s of the shared disc was deleted", path)
+		}
+	}
+	d.assertFile(game.ROMFileID, 0)
+	for _, path := range d.filePaths(game.ROMFileID) {
+		if !deleted.has(path) {
+			t.Errorf("%s of disc 1 was not deleted", path)
+		}
+	}
+	if d.count(&ROMDiscModel{}, "rom_id = ?", other.ID) != 2 {
+		t.Error("the other ROM lost a disc")
+	}
+}
+
+func TestDeletingOneDisc(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 3)
+	disc2, disc3 := d.id("title-disc2"), d.id("title-disc3")
+	var deleted deletedPaths
+	if err := d.repositories.HardDeleteROMDisc(d.ctx, game.ID, game.ROMFileID, deleted.delete); err != nil {
+		t.Fatal(err)
+	}
+	d.assertFile(game.ROMFileID, 0)
+	for _, path := range d.filePaths(game.ROMFileID) {
+		if !deleted.has(path) {
+			t.Errorf("%s of the removed disc was not deleted", path)
+		}
+	}
+	if deleted.has("/covers/" + game.ID) {
+		t.Error("the cover was deleted")
+	}
+	d.assertFile(disc2, 1)
+	d.assertFile(disc3, 1)
+	discs, err := d.repositories.FindROMDiscs(d.ctx, game.ID)
+	if err != nil || len(discs) != 2 || discs[0].Number != 2 || discs[1].Number != 3 {
+		t.Fatalf("discs = %+v, %v", discs, err)
+	}
+	saved, err := d.repositories.FindROMByID(d.ctx, game.ID)
+	if err != nil || saved == nil || saved.ROMFileID != disc2 {
+		t.Fatalf("primary = %+v, %v; want %s", saved, err, disc2)
+	}
+	if d.count(&UploadModel{}, "id = ?", game.ROMFileID+"-upload") != 0 {
+		t.Error("the removed disc's upload remains")
+	}
+	if d.count(&UploadModel{}, "rom_id = ?", game.ID) != 2 {
+		t.Error("another disc's upload was removed")
+	}
+}
+
+func TestDeletingADiscKeepsAFileAnotherROMUses(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 2)
+	other := d.rom("other", "someone", 1)
+	if err := d.repositories.RecordDisc(d.ctx, romdomain.ROMDisc{ROMID: other.ID, ROMFileID: game.ROMFileID, Number: 2, Filename: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	var deleted deletedPaths
+	if err := d.repositories.HardDeleteROMDisc(d.ctx, game.ID, game.ROMFileID, deleted.delete); err != nil {
+		t.Fatal(err)
+	}
+	d.assertFile(game.ROMFileID, 1)
+	if len(deleted) != 0 {
+		t.Errorf("deleted %v, want nothing", deleted)
+	}
+	if d.count(&ROMDiscModel{}, "rom_id = ? AND rom_file_id = ?", game.ID, game.ROMFileID) != 0 {
+		t.Error("the disc is still recorded on the ROM")
+	}
+	if d.count(&ROMDiscModel{}, "rom_id = ?", other.ID) != 2 {
+		t.Error("the other ROM lost a disc")
+	}
+}
+
+func TestDeletingTheLastDiscIsRefused(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 1)
+	var deleted deletedPaths
+	err := d.repositories.HardDeleteROMDisc(d.ctx, game.ID, game.ROMFileID, deleted.delete)
+	var appError *fault.Error
+	if !errors.As(err, &appError) || appError.Code != fault.CodeValidation {
+		t.Fatalf("error = %v, want a validation error", err)
+	}
+	d.assertFile(game.ROMFileID, 1)
+	if len(deleted) != 0 || d.count(&ROMDiscModel{}, "rom_id = ?", game.ID) != 1 || d.count(&UploadModel{}, "rom_id = ?", game.ID) != 1 {
+		t.Errorf("something changed: deleted %v", deleted)
+	}
+}
+
+func TestDeletingADiscClearsItsQueuedJobs(t *testing.T) {
+	d := openDiscDeletion(t)
+	game := d.rom("title", "owner", 2)
+	disc2 := d.id("title-disc2")
+	for _, job := range []JobQueueModel{
+		{Kind: "identify_rom", UploadID: game.ROMFileID + "-upload", ROMFileID: game.ROMFileID, CreatedAt: "2000-01-01 00:00:00", AvailableAt: "2000-01-01 00:00:00"},
+		{Kind: "identify_rom", UploadID: disc2 + "-upload", ROMFileID: disc2, CreatedAt: "2000-01-01 00:00:00", AvailableAt: "2000-01-01 00:00:00"},
+	} {
+		if err := d.repositories.DB.Create(&job).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.repositories.HardDeleteROMDisc(d.ctx, game.ID, game.ROMFileID, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if d.count(&JobQueueModel{}, "rom_file_id = ?", game.ROMFileID) != 0 {
+		t.Error("the removed disc's job remains")
+	}
+	if d.count(&JobQueueModel{}, "rom_file_id = ?", disc2) != 1 {
+		t.Error("another disc's job was removed")
 	}
 }
