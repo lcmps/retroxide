@@ -313,6 +313,8 @@ func TestPlatformCatalogListsEveryKnownPlatformByName(t *testing.T) {
 // fakeDiscs writes discs as fixed bytes.
 type fakeDiscs struct {
 	canCompress bool
+	percent     int
+	running     bool
 	requested   []string
 }
 
@@ -337,6 +339,8 @@ func (discs *fakeDiscs) RequestCompression(_ context.Context, romFile romdomain.
 func (discs *fakeDiscs) CanCompressFile(context.Context, romdomain.ROMFile) bool {
 	return discs.canCompress
 }
+
+func (discs *fakeDiscs) CompressionProgress(string) (int, bool) { return discs.percent, discs.running }
 
 func TestROMsOfferEveryFormatTheyDownloadIn(t *testing.T) {
 	sheet := "/stored/sheet"
@@ -381,6 +385,26 @@ func TestROMsOfferEveryFormatTheyDownloadIn(t *testing.T) {
 		t.Fatalf("a disc that cannot compress: %+v, %v", detail.Disc, err)
 	}
 	discs.canCompress = true
+
+	// Waiting for its turn has no percentage, which is different from having reached 0%.
+	set(romdomain.ROMFile{StoragePath: sheet, SheetPath: &sheet, Format: romdomain.FormatTracks, CompressRequested: true})
+	if detail, err := service.RequestCompression(context.Background(), owner, "rom-1"); err != nil || detail.Disc.CompressionPercent != nil {
+		t.Fatalf("a disc not being compressed: %+v, %v", detail.Disc, err)
+	}
+	discs.percent, discs.running = 0, true
+	if detail, err := service.RequestCompression(context.Background(), owner, "rom-1"); err != nil || detail.Disc.CompressionPercent == nil || *detail.Disc.CompressionPercent != 0 {
+		t.Fatalf("a disc starting to compress: %+v, %v", detail.Disc, err)
+	}
+	discs.percent = 42
+	if detail, err := service.RequestCompression(context.Background(), owner, "rom-1"); err != nil || detail.Disc.CompressionPercent == nil || *detail.Disc.CompressionPercent != 42 {
+		t.Fatalf("a disc being compressed: %+v, %v", detail.Disc, err)
+	}
+	// Once the request is gone, so is any percentage.
+	set(romdomain.ROMFile{StoragePath: sheet, SheetPath: &sheet, Format: romdomain.FormatTracks})
+	if detail, err := service.RequestCompression(context.Background(), owner, "rom-1"); err != nil || detail.Disc.CompressionPercent != nil {
+		t.Fatalf("a disc no longer requested: %+v, %v", detail.Disc, err)
+	}
+	discs.running = false
 
 	// Compressed since: its upload format first, then the CHD.
 	set(romdomain.ROMFile{StoragePath: "/stored/chd", SheetPath: &sheet, Format: romdomain.FormatCHD})

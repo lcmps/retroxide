@@ -7,7 +7,9 @@ export type SendUpload = (
 	file: File,
 	onProgress: (loadedBytes: number, totalBytes: number) => void,
 	/** Reports whether the transfer is waiting to retry after a dropped connection. */
-	onReconnecting?: (reconnecting: boolean) => void
+	onReconnecting?: (reconnecting: boolean) => void,
+	/** Aborts when the queue is cancelled. */
+	signal?: AbortSignal
 ) => Promise<UploadAcceptedResponse>;
 
 /** queued → uploading → accepted (processing is then tracked) or rejected (the transfer failed). */
@@ -17,7 +19,8 @@ export type UploadPhase = 'queued' | 'uploading' | 'accepted' | 'rejected';
 export type SendDisc = (
 	disc: DiscSelection,
 	onProgress: (loadedBytes: number, totalBytes: number) => void,
-	onReconnecting?: (reconnecting: boolean) => void
+	onReconnecting?: (reconnecting: boolean) => void,
+	signal?: AbortSignal
 ) => Promise<UploadAcceptedResponse>;
 
 export type UploadQueueOptions = {
@@ -72,7 +75,7 @@ export class UploadQueue {
 	readonly #trackerOptions: UploadTrackerOptions | undefined;
 	readonly #limit: ReturnType<typeof createLimiter>;
 	#nextKey = 0;
-	#stopped = false;
+	#cancelling = new AbortController();
 
 	constructor(send: SendUpload, fetchStatus: FetchUploadStatus, { concurrency = 2, tracker, sendDisc }: UploadQueueOptions = {}) {
 		this.#send = send;
@@ -84,12 +87,16 @@ export class UploadQueue {
 
 	/** Whether any file is still waiting for, or in the middle of, its transfer. */
 	get transferring(): boolean {
-		return this.items.some((item) => item.phase === 'queued' || item.phase === 'uploading');
+		return this.transferringCount > 0;
+	}
+
+	/** How many files are still waiting for, or in the middle of, their transfer. */
+	get transferringCount(): number {
+		return this.items.filter((item) => item.phase === 'queued' || item.phase === 'uploading').length;
 	}
 
 	/** Queues files for upload and starts transferring them as slots free up. */
 	add(files: Iterable<File>): void {
-		this.#stopped = false;
 		for (const file of files) {
 			const item = new UploadItem(this.#nextKey++, file, new UploadTracker(this.#fetchStatus, this.#trackerOptions));
 			this.items.push(item);
@@ -102,7 +109,6 @@ export class UploadQueue {
 	 * nothing uploads until every track is there.
 	 */
 	addDisc(disc: DiscSelection): void {
-		this.#stopped = false;
 		const item = new UploadItem(this.#nextKey++, disc.sheet, new UploadTracker(this.#fetchStatus, this.#trackerOptions), disc);
 		this.items.push(item);
 		if (disc.missing.length > 0 || !this.#sendDisc) {
@@ -117,18 +123,24 @@ export class UploadQueue {
 		this.items = this.items.filter((item) => !item.finished);
 	}
 
-	/** Stops polling and skips transfers that have not started; in-flight transfers complete. */
-	stop(): void {
-		this.#stopped = true;
+	/**
+	 * Aborts running transfers, drops waiting ones, stops following uploads being processed, and
+	 * empties the list. An aborted large file keeps its session, so adding it again resumes it.
+	 */
+	cancel(): void {
+		this.#cancelling.abort();
+		this.#cancelling = new AbortController();
 		for (const item of this.items) {
 			item.tracker.stop();
 		}
+		this.items = [];
 	}
 
 	async #transfer(item: UploadItem): Promise<void> {
-		if (this.#stopped || !this.items.includes(item)) {
+		if (!this.items.includes(item)) {
 			return;
 		}
+		const { signal } = this.#cancelling;
 		item.phase = 'uploading';
 		try {
 			const onProgress = (loaded: number, total: number) => {
@@ -139,15 +151,19 @@ export class UploadQueue {
 			};
 			const accepted =
 				item.disc && this.#sendDisc
-					? await this.#sendDisc(item.disc, onProgress, onReconnecting)
-					: await this.#send(item.file, onProgress, onReconnecting);
+					? await this.#sendDisc(item.disc, onProgress, onReconnecting, signal)
+					: await this.#send(item.file, onProgress, onReconnecting, signal);
+			if (signal.aborted) {
+				return;
+			}
 			item.reconnecting = false;
 			item.progress = 100;
 			item.phase = 'accepted';
-			if (!this.#stopped) {
-				item.tracker.track({ upload_id: accepted.upload_id, status: accepted.status, rom_id: null, error: null });
-			}
+			item.tracker.track({ upload_id: accepted.upload_id, status: accepted.status, rom_id: null, error: null });
 		} catch (error) {
+			if (signal.aborted) {
+				return;
+			}
 			item.error = error;
 			item.phase = 'rejected';
 		}

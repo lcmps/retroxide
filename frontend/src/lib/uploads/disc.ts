@@ -74,7 +74,7 @@ export const discApi: DiscApi = { ...serverApi, assemble: assembleDisc };
 export async function uploadDisc(
 	disc: DiscSelection,
 	api: DiscApi,
-	{ onProgress, onReconnecting }: ResumableCallbacks,
+	{ onProgress, onReconnecting, signal }: ResumableCallbacks,
 	environment: ResumableEnvironment = {}
 ): Promise<UploadAcceptedResponse> {
 	const total = disc.tracks.reduce((sum, file) => sum + file.size, 0);
@@ -83,10 +83,11 @@ export async function uploadDisc(
 	for (const track of disc.tracks) {
 		const before = finished;
 		parts.push(
-			await uploadPart(track, api, { onProgress: (loaded) => onProgress(before + loaded, total), onReconnecting }, environment)
+			await uploadPart(track, api, { onProgress: (loaded) => onProgress(before + loaded, total), onReconnecting, signal }, environment)
 		);
 		finished += track.size;
 	}
+	signal?.throwIfAborted();
 	// The sheet names files as they were picked; the server matches them exactly.
 	const sheet = renameSheetFiles(disc.text, disc.tracks);
 	return api.assemble(disc.sheet.name, sheet, parts, disc.compress ?? false);

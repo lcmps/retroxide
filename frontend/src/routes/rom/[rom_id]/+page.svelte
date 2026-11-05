@@ -8,6 +8,7 @@
   import { platforms } from '#lib/platforms/catalog.svelte.js';
   import { tick } from 'svelte';
   import { deleteRom, downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '#lib';
+  import CompressionProgress from '#lib/components/rom/CompressionProgress.svelte';
   import DiscTracks from '#lib/components/rom/DiscTracks.svelte';
   import { requestCompression, uploadRomCover } from '#lib/api/client.js';
   import type { DownloadFormat, DownloadOption } from '#lib/api/types.js';
@@ -157,7 +158,7 @@
         // Try again on the next round.
       }
       watchCompression();
-    }, 3000);
+    }, 2000);
   }
 
   $effect(() => {
@@ -324,6 +325,9 @@
         {/if}
       </div>
       <div class="rom-actions" role="group" aria-label={t('rom.actions.label', 'ROM actions')}>
+        {#if rom.disc?.compression_requested}
+          <CompressionProgress percent={rom.disc.compression_percent ?? null} />
+        {/if}
         <div class="rom-download">
           {#if downloads.length > 1}
             <label class="rom-download__format">

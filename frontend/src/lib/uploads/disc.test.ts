@@ -63,4 +63,23 @@ describe('disc uploads', () => {
 		expect(text).toContain('FILE "game (track 1).bin" BINARY');
 		expect(progress.at(-1)).toBe(1);
 	});
+
+	it('does not assemble a disc cancelled after its last track', async () => {
+		const track = new File(['aa'], 'Game (Track 1).bin');
+		const controller = new AbortController();
+		const api: DiscApi = {
+			createSession: vi.fn(async () => ({ session_id: 'ups_1', size: 2, received: 0, max_chunk_size: 8 })),
+			getSession: vi.fn(),
+			sendPart: vi.fn(async () => {
+				controller.abort();
+				return { session_id: 'ups_1', size: 2, received: 2, max_chunk_size: 8, part_id: 'part_1' };
+			}),
+			uploadWhole: vi.fn(),
+			checkDuplicate: vi.fn(),
+			assemble: vi.fn()
+		};
+		const upload = uploadDisc({ sheet: new File([cue], 'Game.cue'), text: cue, tracks: [track], missing: [] }, api, { onProgress: vi.fn(), signal: controller.signal });
+		await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
+		expect(api.assemble).not.toHaveBeenCalled();
+	});
 });

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
@@ -71,8 +72,9 @@ type AddFile func(name string, size int64, write func(io.Writer) error) error
 
 // Compressor makes CHD images. It is optional: a service without one does not compress.
 type Compressor interface {
-	// Compress makes a CHD at output from the CUE sheet at sheetPath and its track files beside it.
-	Compress(ctx context.Context, sheetPath, output string) error
+	// Compress makes a CHD at output from the CUE sheet at sheetPath and its track files beside
+	// it, telling progress how many bytes of the disc are done.
+	Compress(ctx context.Context, sheetPath, output string, progress func(done, total uint64)) error
 }
 
 // Service indexes, assembles, compresses, and archives discs.
@@ -82,6 +84,11 @@ type Service struct {
 	hasher     Hasher
 	images     Images
 	compressor Compressor
+
+	// Discs compress one at a time, so these describe the one under way, if any.
+	progressLock    sync.RWMutex
+	progressFileID  string
+	progressPercent int
 }
 
 func NewService(repository Repository, storage Storage, hasher Hasher, images Images, compressor Compressor) *Service {
@@ -90,6 +97,33 @@ func NewService(repository Repository, storage Storage, hasher Hasher, images Im
 
 // CanCompress reports whether discs are compressed to CHD.
 func (service *Service) CanCompress() bool { return service.compressor != nil }
+
+// CompressionProgress reports how far along a disc being compressed is, and false for any other
+// disc. 100 means compressing is done and the result is being checked; compressing itself reports
+// at most 99, so a full bar is never left unexplained. It is kept in memory: after a restart a
+// disc starts over, and only the request survives.
+func (service *Service) CompressionProgress(romFileID string) (int, bool) {
+	service.progressLock.RLock()
+	defer service.progressLock.RUnlock()
+	if romFileID == "" || service.progressFileID != romFileID {
+		return 0, false
+	}
+	return service.progressPercent, true
+}
+
+func (service *Service) setCompressionProgress(romFileID string, percent int) {
+	service.progressLock.Lock()
+	defer service.progressLock.Unlock()
+	service.progressFileID, service.progressPercent = romFileID, percent
+}
+
+// compressedPercent is how far along compressing done of total bytes is, short of the check.
+func compressedPercent(done, total uint64) int {
+	if total == 0 {
+		return 0
+	}
+	return int(min(99, done*100/total))
+}
 
 // CanCompressFile reports whether this disc can be compressed: it is kept as tracks and is not a
 // GD-ROM, which stays as uploaded since the compressor does not make GD-ROM CHDs. A sheet that
@@ -347,6 +381,8 @@ func (service *Service) Compress(ctx context.Context, romFileID string) error {
 	if !compressibleSheet(sheet) {
 		return ErrNotCompressible
 	}
+	service.setCompressionProgress(romFile.ID, 0)
+	defer service.setCompressionProgress("", 0)
 	work, err := service.storage.WorkDir()
 	if err != nil {
 		return err
@@ -377,9 +413,13 @@ func (service *Service) Compress(ctx context.Context, romFileID string) error {
 		return err
 	}
 	output := filepath.Join(work, "disc.chd")
-	if err := service.compressor.Compress(ctx, sheetFile, output); err != nil {
+	report := func(done, total uint64) {
+		service.setCompressionProgress(romFile.ID, compressedPercent(done, total))
+	}
+	if err := service.compressor.Compress(ctx, sheetFile, output, report); err != nil {
 		return err
 	}
+	service.setCompressionProgress(romFile.ID, 100)
 
 	chd, err := os.Open(output)
 	if err != nil {

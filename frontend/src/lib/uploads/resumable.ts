@@ -28,9 +28,9 @@ export type ResumableApi = {
 	/** Starts a session; with part, for one of a disc's files. */
 	createSession(file: File, part?: boolean): Promise<Session>;
 	getSession(sessionId: string): Promise<Session>;
-	sendPart(sessionId: string, offset: number, part: Blob, onProgress: (loadedBytes: number) => void): Promise<Session>;
+	sendPart(sessionId: string, offset: number, part: Blob, onProgress: (loadedBytes: number) => void, signal?: AbortSignal): Promise<Session>;
 	/** Uploads a small file in one request. */
-	uploadWhole(file: File, onProgress: (loadedBytes: number, totalBytes: number) => void): Promise<UploadAcceptedResponse>;
+	uploadWhole(file: File, onProgress: (loadedBytes: number, totalBytes: number) => void, signal?: AbortSignal): Promise<UploadAcceptedResponse>;
 	/** Ends the session with rom_already_exists if the library already has the file. */
 	checkDuplicate(sessionId: string, sha256: string): Promise<void>;
 };
@@ -48,6 +48,8 @@ export type ResumableCallbacks = {
 	onProgress: (loadedBytes: number, totalBytes: number) => void;
 	/** Reports whether the upload is waiting to retry after a failure. */
 	onReconnecting?: (reconnecting: boolean) => void;
+	/** Stops the upload, which rejects with the signal's reason; a large file can still resume. */
+	signal?: AbortSignal;
 };
 
 /** Identifies a file across page loads, so adding it again resumes its upload. */
@@ -93,7 +95,7 @@ export async function uploadResumable(
 	environment: ResumableEnvironment = {}
 ): Promise<UploadAcceptedResponse> {
 	if (file.size < RESUMABLE_FROM_BYTES) {
-		return api.uploadWhole(file, callbacks.onProgress);
+		return api.uploadWhole(file, callbacks.onProgress, callbacks.signal);
 	}
 	const session = await transfer(file, api, false, callbacks, environment);
 	return session.upload as UploadAcceptedResponse;
@@ -117,7 +119,7 @@ async function transfer(
 	file: File,
 	api: ResumableApi,
 	part: boolean,
-	{ onProgress, onReconnecting }: ResumableCallbacks,
+	{ onProgress, onReconnecting, signal }: ResumableCallbacks,
 	{ storage = defaultStorage(), sleep = defaultSleep, waitUntilOnline = defaultWaitUntilOnline, hash = hashFile }: ResumableEnvironment
 ): Promise<Session> {
 	const key = fingerprint(file, part);
@@ -131,8 +133,20 @@ async function transfer(
 	};
 	const done = (current: Session) => Boolean(current.upload || current.part_id);
 	const create = () => api.createSession(file, part);
+	/** Waits for a promise, or until the upload is cancelled. */
+	const orCancelled = <T>(waiting: Promise<T>): Promise<T> => {
+		if (!signal) return waiting;
+		return new Promise<T>((resolve, reject) => {
+			const cancel = () => reject(signal.reason);
+			if (signal.aborted) cancel();
+			signal.addEventListener('abort', cancel, { once: true });
+			waiting.then(resolve, reject).finally(() => signal.removeEventListener('abort', cancel));
+		});
+	};
 
+	signal?.throwIfAborted();
 	let session = await resumeOrCreate(file, api, storage?.getItem(key) ?? null, create);
+	signal?.throwIfAborted();
 	remember(session.session_id);
 	onProgress(session.received, file.size);
 
@@ -171,16 +185,18 @@ async function transfer(
 	async function sendParts(): Promise<Session> {
 		let failures = 0;
 		while (!done(session)) {
+			signal?.throwIfAborted();
 			await checkForDuplicate();
 			const partSize = Math.min(PART_BYTES, session.max_chunk_size || PART_BYTES);
 			const offset = session.received;
 			const piece = file.slice(offset, Math.min(offset + partSize, file.size));
 			try {
-				session = await api.sendPart(session.session_id, offset, piece, (loaded) => onProgress(offset + loaded, file.size));
+				session = await api.sendPart(session.session_id, offset, piece, (loaded) => onProgress(offset + loaded, file.size), signal);
 				failures = 0;
 				onReconnecting?.(false);
 				onProgress(session.received, file.size);
 			} catch (error) {
+				if (signal?.aborted) throw error;
 				if (isStatus(error, 404)) {
 					// The session expired or was removed: start over.
 					session = await create();
@@ -199,8 +215,8 @@ async function transfer(
 					throw error;
 				}
 				onReconnecting?.(true);
-				await sleep(RETRY_DELAYS_MS[Math.min(failures - 1, RETRY_DELAYS_MS.length - 1)]);
-				await waitUntilOnline();
+				await orCancelled(sleep(RETRY_DELAYS_MS[Math.min(failures - 1, RETRY_DELAYS_MS.length - 1)]));
+				await orCancelled(waitUntilOnline());
 				// The part may have arrived before the connection dropped; ask where to continue.
 				try {
 					session = await api.getSession(session.session_id);
@@ -212,6 +228,8 @@ async function transfer(
 				}
 			}
 		}
+		// Finished parts of a cancelled upload are not reported as an accepted upload.
+		signal?.throwIfAborted();
 		remember(null);
 		onReconnecting?.(false);
 		onProgress(file.size, file.size);

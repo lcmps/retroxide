@@ -508,9 +508,24 @@ export function scrapeRom(romId: string): Promise<RomDetail> {
   });
 }
 
+/** Aborts request when signal does, rejecting with the signal's reason; reports if it already has. */
+function abortWith(request: XMLHttpRequest, signal: AbortSignal | undefined, reject: (reason: unknown) => void): boolean {
+  if (!signal) return false;
+  if (signal.aborted) {
+    reject(signal.reason);
+    return true;
+  }
+  const abort = () => request.abort();
+  signal.addEventListener('abort', abort, { once: true });
+  request.addEventListener('abort', () => reject(signal.reason));
+  request.addEventListener('loadend', () => signal.removeEventListener('abort', abort));
+  return false;
+}
+
 export function uploadRom(
   file: File,
-  onProgress?: (loadedBytes: number, totalBytes: number) => void
+  onProgress?: (loadedBytes: number, totalBytes: number) => void,
+  signal?: AbortSignal
 ): Promise<UploadAcceptedResponse> {
   if (!browser) {
     return Promise.reject(new Error('Upload is only available in the browser.'));
@@ -522,6 +537,7 @@ export function uploadRom(
 
   const sendUpload = (): Promise<XMLHttpRequest> => new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
+    if (abortWith(request, signal, reject)) return;
     request.open('POST', createApiUrl('/upload'));
     request.responseType = 'text';
     request.setRequestHeader('Accept', 'application/json');
@@ -637,7 +653,8 @@ export function sendUploadPart(
   sessionId: string,
   offset: number,
   part: Blob,
-  onProgress?: (loadedBytes: number) => void
+  onProgress?: (loadedBytes: number) => void,
+  signal?: AbortSignal
 ): Promise<UploadSession> {
   const send = (): Promise<XMLHttpRequest> => new Promise((resolve, reject) => {
     const session = readStoredSession();
@@ -646,6 +663,7 @@ export function sendUploadPart(
       return;
     }
     const request = new XMLHttpRequest();
+    if (abortWith(request, signal, reject)) return;
     request.open('PATCH', createApiUrl(`/upload/session/${encodeURIComponent(sessionId)}`));
     request.responseType = 'text';
     request.setRequestHeader('Accept', 'application/json');
