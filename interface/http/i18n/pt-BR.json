@@ -83,6 +83,7 @@
   "downloads.subtitle": "Gerencie o histórico de downloads de ROMs e a recuperação de arquivos.",
   "library.created": "Biblioteca criada.",
   "library.create_failed": "Falha ao criar biblioteca",
+  "library.discCount": "{count} discos",
   "library.empty": "Nenhuma biblioteca ainda.",
   "library.list_title": "Bibliotecas",
   "library.load_failed": "Falha ao carregar bibliotecas",

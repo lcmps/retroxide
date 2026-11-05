@@ -139,7 +139,7 @@
 	}
 
 	function discCount(entry: RomSummary): string {
-		const count = entry.disc_count ?? 1;
+		const count = entry.disc_count;
 		return count === 1 ? t('rom.manage.oneDisc', '1 disc') : t('rom.manage.discCount', '{count} discs', { count });
 	}
 </script>

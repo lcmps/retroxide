@@ -38,6 +38,7 @@ export const EMBEDDED_ENGLISH_CATALOG: TranslationCatalog = {
 	'login.messages.success': 'Logged in successfully. Token type: {tokenType}. Expires in {expiresIn}s.',
 	'login.messages.failure': 'Login failed',
 	'library.title': 'Library',
+	'library.discCount': '{count} discs',
 	'library.roms.title': 'ROM Catalog',
 	'library.roms.loading': 'Loading ROMs...',
 	'library.roms.empty': 'No ROMs matched the current filters.',

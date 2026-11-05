@@ -83,6 +83,7 @@
   "downloads.subtitle": "Manage ROM download history and file retrieval.",
   "library.created": "Library created.",
   "library.create_failed": "Failed to create library",
+  "library.discCount": "{count} discs",
   "library.empty": "No libraries yet.",
   "library.list_title": "Libraries",
   "library.load_failed": "Failed to load libraries",
