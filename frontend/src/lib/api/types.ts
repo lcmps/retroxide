@@ -17,6 +17,8 @@ export type RomSummary = {
   cover_art_url?: string | null;
   /** A small copy of the cover, for grids of many ROMs. */
   cover_thumb_url?: string | null;
+  /** How many discs the ROM has. */
+  disc_count?: number;
 };
 
 export type RomListResponse = {

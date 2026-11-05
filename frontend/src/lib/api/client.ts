@@ -628,6 +628,36 @@ export function requestCompression(romId: string, disc?: number): Promise<RomDet
   return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/compress${query}`, { method: 'POST', withAuth: true });
 }
 
+/** Moves every disc of the source ROM onto this one and deletes the source. */
+export function mergeRom(romId: string, sourceRomId: string): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/merge`, {
+    method: 'POST',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_rom_id: sourceRomId })
+  });
+}
+
+/** Turns one disc into a ROM of its own; resolves with that new ROM. */
+export function splitDisc(romId: string, number: number): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/discs/${number}/split`, { method: 'POST', withAuth: true });
+}
+
+/** Numbers the discs in the order of the file IDs, which must name every disc. */
+export function reorderDiscs(romId: string, romFileIds: string[]): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/discs/order`, {
+    method: 'PUT',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rom_file_ids: romFileIds })
+  });
+}
+
+/** Permanently removes a disc and its files. */
+export function removeDisc(romId: string, number: number): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/discs/${number}`, { method: 'DELETE', withAuth: true });
+}
+
 export function getUploadSession(sessionId: string): Promise<UploadSession> {
   return requestJson<UploadSession>(`/upload/session/${encodeURIComponent(sessionId)}`, { withAuth: true });
 }

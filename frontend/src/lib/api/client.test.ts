@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$app/env', () => ({ browser: true }));
 
-import { createDownloadLink, fetchRomCover, getRom, hasStoredSession, logoutSession, persistStoredSession, requestCompression, uploadRom } from './client';
+import { createDownloadLink, fetchRomCover, getRom, hasStoredSession, logoutSession, mergeRom, persistStoredSession, removeDisc, reorderDiscs, requestCompression, splitDisc, uploadRom } from './client';
 
 function jsonResponse(payload: unknown, status = 200): Response {
 	return new Response(JSON.stringify(payload), {
@@ -218,5 +218,55 @@ describe('proactive session refresh', () => {
 		await requestCompression('rom-1', 3);
 
 		expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(['/api/v1/rom/rom-1/compress', '/api/v1/rom/rom-1/compress?disc=3']);
+	});
+	describe('disc management', () => {
+		function stubDiscRequests() {
+			persistStoredSession({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 });
+			const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ rom_id: 'rom-1' }));
+			vi.stubGlobal('fetch', fetchMock);
+			return fetchMock;
+		}
+
+		it('merges with the source ROM in the body', async () => {
+			const fetchMock = stubDiscRequests();
+
+			await mergeRom('rom-1', 'rom-2');
+
+			const [input, init] = fetchMock.mock.calls[0];
+			expect(String(input)).toBe('/api/v1/rom/rom-1/merge');
+			expect(init?.method).toBe('POST');
+			expect(JSON.parse(String(init?.body))).toEqual({ source_rom_id: 'rom-2' });
+		});
+
+		it('splits by disc number', async () => {
+			const fetchMock = stubDiscRequests();
+
+			await splitDisc('rom-1', 2);
+
+			const [input, init] = fetchMock.mock.calls[0];
+			expect(String(input)).toBe('/api/v1/rom/rom-1/discs/2/split');
+			expect(init?.method).toBe('POST');
+		});
+
+		it('reorders with every file ID', async () => {
+			const fetchMock = stubDiscRequests();
+
+			await reorderDiscs('rom-1', ['f2', 'f1']);
+
+			const [input, init] = fetchMock.mock.calls[0];
+			expect(String(input)).toBe('/api/v1/rom/rom-1/discs/order');
+			expect(init?.method).toBe('PUT');
+			expect(JSON.parse(String(init?.body))).toEqual({ rom_file_ids: ['f2', 'f1'] });
+		});
+
+		it('removes by disc number', async () => {
+			const fetchMock = stubDiscRequests();
+
+			await removeDisc('rom-1', 3);
+
+			const [input, init] = fetchMock.mock.calls[0];
+			expect(String(input)).toBe('/api/v1/rom/rom-1/discs/3');
+			expect(init?.method).toBe('DELETE');
+		});
 	});
 });

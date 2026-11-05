@@ -6,19 +6,19 @@
   import ActionButton from '#lib/components/ActionButton.svelte';
   import RomEditForm from '#lib/components/rom/RomEditForm.svelte';
   import { platforms } from '#lib/platforms/catalog.svelte.js';
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { deleteRom, downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '#lib';
   import CompressionProgress from '#lib/components/rom/CompressionProgress.svelte';
   import DiscTracks from '#lib/components/rom/DiscTracks.svelte';
   import { requestCompression, uploadRomCover } from '#lib/api/client.js';
   import DiscSwitcher from '#lib/components/rom/DiscSwitcher.svelte';
+  import DiscManager from '#lib/components/rom/DiscManager.svelte';
   import { compressionOutcome, pickDisc, rememberRequested } from '#lib/rom/discs.js';
   import type { DownloadFormat, DownloadOption, RomDiscEntry } from '#lib/api/types.js';
   import { ApiClientError } from '#lib/api/errors.js';
   import { getErrorMessage, getValidationAwareErrorMessage } from '#lib/helpers/error.js';
   import { useTranslate } from '#lib/i18n/helpers.js';
   import type { RomDetail } from '#lib';
-  import { onMount } from 'svelte';
   import { onDestroy } from 'svelte';
 
   let { data }: PageProps = $props();
@@ -58,24 +58,30 @@
       : []
   );
 
-  async function loadRom() {
+  async function loadRom(romId: string) {
     loading = true;
     message = '';
 
     try {
-    rom = await getRom(data.romId);
-    await loadCoverPreview();
+      const loaded = await getRom(romId);
+      if (romId !== data.romId) return;
+      rom = loaded;
+      await loadCoverPreview();
     } catch (error) {
+      if (romId !== data.romId) return;
       message = getErrorMessage(error, 'rom.messages.loadFailure', 'Failed to load ROM', t);
       rom = null;
     } finally {
-      loading = false;
+      if (romId === data.romId) loading = false;
     }
   }
 
   async function loadCoverPreview(): Promise<void> {
     if (!rom?.cover_art_url) return;
-    showCover(await fetchRomCover(rom.rom_id, rom.cover_art_url));
+    const shown = rom.rom_id;
+    const image = await fetchRomCover(shown, rom.cover_art_url);
+    // A different ROM may have been opened while the cover downloaded.
+    if (rom?.rom_id === shown) showCover(image);
   }
 
   function showCover(image: Blob): void {
@@ -169,7 +175,9 @@
       if (!rom) return;
       try {
         roundRequested = rememberRequested(roundRequested, discs);
-        const updated = await getRom(rom.rom_id);
+        const polled = rom.rom_id;
+        const updated = await getRom(polled);
+        if (rom?.rom_id !== polled) return;
         const outcome = compressionOutcome(roundRequested, discEntries(updated));
         rom = updated;
         if (outcome !== 'running') {
@@ -277,9 +285,39 @@
     }
   }
 
-  onMount(() => {
-    void i18n.initialize().then(loadRom).catch((error: unknown) => {
-      message = getErrorMessage(error, 'rom.messages.loadFailure', 'Failed to load ROM', t);
+  /** After a reorder or remove the numbers change, so the same disc is found again by its file. */
+  function discsChanged(updated: RomDetail): void {
+    const file = current?.rom_file_id;
+    const same = updated.discs?.find((entry) => entry.rom_file_id === file);
+    selectedDisc = same?.number ?? null;
+    rom = updated;
+  }
+
+  // SvelteKit reuses this page between /rom/[rom_id] URLs, so a new ID, such as after a split or
+  // the Back button, starts over: it clears everything that belonged to the previous ROM.
+  $effect(() => {
+    const romId = data.romId;
+    untrack(() => {
+      rom = null;
+      selectedDisc = null;
+      editing = false;
+      deleteOpen = false;
+      compressing = false;
+      roundRequested = [];
+      clearTimeout(compressionPoll);
+      coverMessage = '';
+      coverFailed = false;
+      if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl);
+      coverPreviewUrl = null;
+      loading = true;
+      void i18n
+        .initialize()
+        .then(() => loadRom(romId))
+        .catch((error: unknown) => {
+          if (romId !== data.romId) return;
+          message = getErrorMessage(error, 'rom.messages.loadFailure', 'Failed to load ROM', t);
+          loading = false;
+        });
     });
   });
 </script>
@@ -335,6 +373,9 @@
         </div>
         {#if editing}
           <RomEditForm {rom} onsaved={(updated) => void saveEdits(updated)} oncancel={() => void closeEditor()} />
+          {#if rom.discs?.length}
+            <DiscManager {rom} onchanged={discsChanged} />
+          {/if}
         {:else}
           {#if multiDisc && rom.discs && current}
             <DiscSwitcher discs={rom.discs} selected={current.number} onselect={(number) => (selectedDisc = number)} />
