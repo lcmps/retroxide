@@ -221,8 +221,9 @@ type API interface {
 	SplitDisc(ctx context.Context, requester identity.Requester, romID string, number int) (ROMDetailDTO, error)
 	// ReorderDiscs numbers the discs in the order of romFileIDs, which must name each once.
 	ReorderDiscs(ctx context.Context, requester identity.Requester, romID string, romFileIDs []string) (ROMDetailDTO, error)
-	// RemoveDisc deletes one disc of a ROM that has several.
-	RemoveDisc(ctx context.Context, requester identity.Requester, romID string, number int) (ROMDetailDTO, error)
+	// RemoveDisc deletes one disc of a ROM that has several; romFileID must be the file now
+	// numbered number, or the call is a conflict.
+	RemoveDisc(ctx context.Context, requester identity.Requester, romID string, number int, romFileID string) (ROMDetailDTO, error)
 	// PlatformCatalog lists every known platform, for choosing one when editing a ROM.
 	PlatformCatalog() []PlatformDTO
 }

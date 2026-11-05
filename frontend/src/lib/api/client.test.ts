@@ -262,10 +262,10 @@ describe('proactive session refresh', () => {
 		it('removes by disc number', async () => {
 			const fetchMock = stubDiscRequests();
 
-			await removeDisc('rom-1', 3);
+			await removeDisc('rom-1', 3, 'file/3');
 
 			const [input, init] = fetchMock.mock.calls[0];
-			expect(String(input)).toBe('/api/v1/rom/rom-1/discs/3');
+			expect(String(input)).toBe('/api/v1/rom/rom-1/discs/3?rom_file_id=file%2F3');
 			expect(init?.method).toBe('DELETE');
 		});
 	});

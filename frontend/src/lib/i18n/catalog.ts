@@ -180,6 +180,7 @@ export const EMBEDDED_ENGLISH_CATALOG: TranslationCatalog = {
 	"rom.manage.splitError": "Failed to make the disc a separate title",
 	"rom.manage.removeError": "Failed to remove the disc",
 	"rom.manage.mergeError": "Failed to merge the titles",
+	"rom.manage.discsChanged": "The discs changed since you opened this page. Check the list and try again.",
 	'rom.actions.downloadAll': 'Download all discs',
 	'rom.actions.downloadAllHint': 'Save every disc in one .zip file',
 	'rom.actions.compress': "Compress to CHD",

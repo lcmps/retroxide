@@ -28,6 +28,8 @@
   let downloading = $state(false);
   let scraping = $state(false);
   let deleting = $state(false);
+  /** True while a disc change runs; it holds Scrape, Delete, Save and the cover upload. */
+  let discBusy = $state(false);
   let deleteOpen = $state(false);
   let coverPreviewUrl = $state<string | null>(null);
   let editing = $state(false);
@@ -95,6 +97,7 @@
     // Cleared so that choosing the same file again, say after a failure, still fires a change.
     event.currentTarget.value = '';
     if (!rom || !file) return;
+    const romId = rom.rom_id;
     coverFailed = true;
     if (!COVER_TYPES.includes(file.type)) {
       coverMessage = t('rom.cover.unsupported', 'The cover must be a PNG, JPEG, or WebP image.');
@@ -108,14 +111,17 @@
     coverMessage = '';
     uploadingCover = true;
     try {
-      rom = await uploadRomCover(rom.rom_id, file);
+      const updated = await uploadRomCover(romId, file);
+      if (romId !== data.romId) return;
+      rom = updated;
       showCover(file);
       coverMessage = t('rom.cover.saved', 'Cover art updated.');
     } catch (error) {
+      if (romId !== data.romId) return;
       coverFailed = true;
       coverMessage = getValidationAwareErrorMessage(error, 'rom.cover.error', 'Failed to upload the cover art', t);
     } finally {
-      uploadingCover = false;
+      if (romId === data.romId) uploadingCover = false;
     }
   }
 
@@ -200,15 +206,19 @@
 
   async function compressCurrentRom(): Promise<void> {
     if (!rom) return;
+    const romId = rom.rom_id;
     compressing = true;
     message = '';
     try {
-      rom = await requestCompression(rom.rom_id, discParam);
+      const updated = await requestCompression(romId, discParam);
+      if (romId !== data.romId) return;
+      rom = updated;
       message = t('rom.messages.compressQueued', 'Compressing to CHD in the background.');
     } catch (error) {
+      if (romId !== data.romId) return;
       message = getErrorMessage(error, 'rom.errors.compress', 'Failed to start compressing the disc', t);
     } finally {
-      compressing = false;
+      if (romId === data.romId) compressing = false;
     }
   }
 
@@ -234,13 +244,17 @@
       return;
     }
 
+    const romId = rom.rom_id;
     scraping = true;
     message = '';
     try {
-      rom = await scrapeRom(rom.rom_id);
+      const updated = await scrapeRom(romId);
+      if (romId !== data.romId) return;
+      rom = updated;
       await loadCoverPreview();
       message = t('rom.messages.scrapeSuccess', 'Scrape complete.');
     } catch (error) {
+      if (romId !== data.romId) return;
       if (error instanceof ApiClientError && error.code === 'not_found') {
         message = t('rom.messages.scrapeNoMatch', 'No match found for this ROM.');
       } else if (error instanceof ApiClientError && error.code === 'upstream_unavailable') {
@@ -249,7 +263,7 @@
         message = getErrorMessage(error, 'rom.messages.scrapeFailure', 'Scrape failed.', t);
       }
     } finally {
-      scraping = false;
+      if (romId === data.romId) scraping = false;
     }
   }
 
@@ -262,6 +276,7 @@
   }
 
   async function saveEdits(updated: RomDetail): Promise<void> {
+    if (updated.rom_id !== data.romId) return;
     rom = updated;
     message = t('rom.edit.saved', 'Changes saved.');
     // The platform may have changed, which changes the platform filter's options.
@@ -271,22 +286,25 @@
 
   async function deleteCurrentRom(): Promise<void> {
     if (!rom || deleting) return;
+    const romId = rom.rom_id;
     deleting = true;
     message = '';
     try {
-      await deleteRom(rom.rom_id);
+      await deleteRom(romId);
       deleteOpen = false;
       await goto(resolve('/library'));
     } catch (error) {
+      if (romId !== data.romId) return;
       deleteOpen = false;
       message = getErrorMessage(error, 'rom.messages.deleteFailure', 'Failed to delete ROM', t);
     } finally {
-      deleting = false;
+      if (romId === data.romId) deleting = false;
     }
   }
 
   /** After a reorder or remove the numbers change, so the same disc is found again by its file. */
   function discsChanged(updated: RomDetail): void {
+    if (updated.rom_id !== data.romId) return;
     const file = current?.rom_file_id;
     const same = updated.discs?.find((entry) => entry.rom_file_id === file);
     selectedDisc = same?.number ?? null;
@@ -303,6 +321,10 @@
       editing = false;
       deleteOpen = false;
       compressing = false;
+      scraping = false;
+      deleting = false;
+      uploadingCover = false;
+      discBusy = false;
       roundRequested = [];
       clearTimeout(compressionPoll);
       coverMessage = '';
@@ -341,7 +363,7 @@
               type="button"
               class="rom-cover-upload"
               title={t('rom.cover.hint', 'PNG, JPEG, or WebP, up to 5 MiB. Uploaded as soon as you choose it.')}
-              disabled={uploadingCover || scraping || deleting}
+              disabled={uploadingCover || scraping || deleting || discBusy}
               aria-busy={uploadingCover}
               onclick={() => coverInput?.click()}
             >
@@ -372,9 +394,9 @@
           {/if}
         </div>
         {#if editing}
-          <RomEditForm {rom} onsaved={(updated) => void saveEdits(updated)} oncancel={() => void closeEditor()} />
+          <RomEditForm {rom} disabled={discBusy} onsaved={(updated) => void saveEdits(updated)} oncancel={() => void closeEditor()} />
           {#if rom.discs?.length}
-            <DiscManager {rom} onchanged={discsChanged} />
+            <DiscManager {rom} locked={scraping || deleting || uploadingCover} onbusy={(busy) => (discBusy = busy)} onchanged={discsChanged} />
           {/if}
         {:else}
           {#if multiDisc && rom.discs && current}
@@ -417,15 +439,15 @@
           {/if}
         </div>
         {#if currentDisc?.can_compress || currentDisc?.compression_requested}
-          <ActionButton type="button" onclick={compressCurrentRom} disabled={compressing || deleting || currentDisc.compression_requested} aria-busy={currentDisc.compression_requested} title={t('rom.actions.compressHint', 'Compress the disc to CHD in the background; its uploaded files can still be downloaded exactly as they are')}>
+          <ActionButton type="button" onclick={compressCurrentRom} disabled={compressing || deleting || discBusy || currentDisc.compression_requested} aria-busy={currentDisc.compression_requested} title={t('rom.actions.compressHint', 'Compress the disc to CHD in the background; its uploaded files can still be downloaded exactly as they are')}>
             {currentDisc.compression_requested ? t('rom.actions.compressing', 'Compressing to CHD...') : t('rom.actions.compress', 'Compress to CHD')}
           </ActionButton>
         {/if}
-        <ActionButton type="button" onclick={scrapeCurrentRom} disabled={scraping || deleting || uploadingCover} aria-busy={scraping} title={t('rom.actions.scrapeHint', 'Fetch the title, details, and artwork from online game databases')}>
+        <ActionButton type="button" onclick={scrapeCurrentRom} disabled={scraping || deleting || uploadingCover || discBusy} aria-busy={scraping} title={t('rom.actions.scrapeHint', 'Fetch the title, details, and artwork from online game databases')}>
           {scraping ? t('rom.actions.scraping', 'Scraping...') : t('rom.actions.scrape', 'Scrape')}
         </ActionButton>
         <Dialog.Root bind:open={deleteOpen}>
-          <ActionButton type="button" variant="danger" disabled={deleting || scraping || downloading} aria-haspopup="dialog" title={t('rom.actions.deleteHint', 'Permanently remove this ROM and its file')} onclick={() => { deleteOpen = true; }}>
+          <ActionButton type="button" variant="danger" disabled={deleting || scraping || downloading || discBusy} aria-haspopup="dialog" title={t('rom.actions.deleteHint', 'Permanently remove this ROM and its file')} onclick={() => { deleteOpen = true; }}>
             {t('rom.actions.delete', 'Delete ROM')}
           </ActionButton>
           <Dialog.Portal>

@@ -653,9 +653,9 @@ export function reorderDiscs(romId: string, romFileIds: string[]): Promise<RomDe
   });
 }
 
-/** Permanently removes a disc and its files. */
-export function removeDisc(romId: string, number: number): Promise<RomDetail> {
-  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/discs/${number}`, { method: 'DELETE', withAuth: true });
+/** Permanently removes a disc and its files; the server refuses (409) if that number no longer is that file. */
+export function removeDisc(romId: string, number: number, romFileId: string): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/discs/${number}?rom_file_id=${encodeURIComponent(romFileId)}`, { method: 'DELETE', withAuth: true });
 }
 
 export function getUploadSession(sessionId: string): Promise<UploadSession> {

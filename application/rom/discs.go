@@ -67,11 +67,18 @@ func (service *Service) ReorderDiscs(ctx context.Context, requester identity.Req
 	return service.reloadDetail(ctx, romID)
 }
 
-// RemoveDisc deletes the disc with the number, and its file unless another ROM has it.
-func (service *Service) RemoveDisc(ctx context.Context, requester identity.Requester, romID string, number int) (ROMDetailDTO, error) {
+// RemoveDisc deletes the disc with the number, and its file unless another ROM has it. The caller
+// names the file it saw under that number; if the discs were reordered since, nothing is deleted.
+func (service *Service) RemoveDisc(ctx context.Context, requester identity.Requester, romID string, number int, romFileID string) (ROMDetailDTO, error) {
+	if romFileID == "" {
+		return ROMDetailDTO{}, fault.Validation("rom_file_id is required")
+	}
 	disc, err := service.findDisc(ctx, requester, romID, number)
 	if err != nil {
 		return ROMDetailDTO{}, err
+	}
+	if disc.ROMFileID != romFileID {
+		return ROMDetailDTO{}, fault.Conflict()
 	}
 	if err := service.repository.HardDeleteROMDisc(ctx, romID, disc.ROMFileID, service.deleteStoredFile(ctx)); err != nil {
 		return ROMDetailDTO{}, err

@@ -3,17 +3,25 @@
 	import { resolve } from '$app/paths';
 	import { Dialog } from 'bits-ui';
 	import ActionButton from '#lib/components/ActionButton.svelte';
-	import { listRoms, mergeRom, removeDisc, reorderDiscs, splitDisc } from '#lib/api/client.js';
+	import { getRom, listRoms, mergeRom, removeDisc, reorderDiscs, splitDisc } from '#lib/api/client.js';
+	import { ApiClientError } from '#lib/api/errors.js';
 	import type { RomDetail, RomDiscEntry, RomSummary } from '#lib/api/types.js';
 	import { getValidationAwareErrorMessage } from '#lib/helpers/error.js';
 	import { formatBytes } from '#lib/helpers/format.js';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
 
-	type Props = { rom: RomDetail; onchanged: (rom: RomDetail) => void };
+	type Props = {
+		rom: RomDetail;
+		onchanged: (rom: RomDetail) => void;
+		/** Told when a disc change starts and ends, so the page can hold its other actions. */
+		onbusy?: (busy: boolean) => void;
+		/** True while the page is changing the ROM itself, such as scraping; disc actions wait. */
+		locked?: boolean;
+	};
 	type Pending = { kind: 'remove'; disc: RomDiscEntry } | { kind: 'merge'; source: RomSummary };
 
-	let { rom, onchanged }: Props = $props();
+	let { rom, onchanged, onbusy, locked = false }: Props = $props();
 
 	const t = useTranslate(i18n);
 	const id = $props.id();
@@ -25,7 +33,13 @@
 	const several = $derived(discs.length > 1);
 
 	/** True while any change runs, which disables every disc action. */
-	let busy = $state(false);
+	let working = $state(false);
+	const busy = $derived(working || locked);
+
+	$effect(() => {
+		onbusy?.(working);
+		return () => onbusy?.(false);
+	});
 	let pending = $state<Pending | null>(null);
 	let discError = $state('');
 	let mergeError = $state('');
@@ -68,20 +82,20 @@
 	/** Runs one change with the other actions disabled; resolves with the ROM it returned, or null on failure. */
 	async function run(
 		action: () => Promise<RomDetail>,
-		fail: (message: string) => void,
+		fail: (message: string, error: unknown) => void,
 		fallbackKey: string,
 		fallback: string
 	): Promise<RomDetail | null> {
-		busy = true;
+		working = true;
 		discError = '';
 		mergeError = '';
 		try {
 			return await action();
 		} catch (error) {
-			fail(getValidationAwareErrorMessage(error, fallbackKey, fallback, t));
+			fail(getValidationAwareErrorMessage(error, fallbackKey, fallback, t), error);
 			return null;
 		} finally {
-			busy = false;
+			working = false;
 		}
 	}
 
@@ -97,12 +111,26 @@
 		if (created) await goto(resolve('/rom/[rom_id]', { rom_id: created.rom_id }));
 	}
 
+	/** A conflict means the discs were changed elsewhere; the list is refreshed so the next try uses what is there. */
+	async function removeFailed(message: string, error: unknown): Promise<void> {
+		if (!(error instanceof ApiClientError && error.status === 409)) {
+			discError = message;
+			return;
+		}
+		discError = t('rom.manage.discsChanged', 'The discs changed since you opened this page. Check the list and try again.');
+		try {
+			onchanged(await getRom(rom.rom_id));
+		} catch {
+			// The message already tells the user to check the list.
+		}
+	}
+
 	async function confirm(): Promise<void> {
 		const action = pending;
 		if (!action || busy) return;
 		const updated =
 			action.kind === 'remove'
-				? await run(() => removeDisc(rom.rom_id, action.disc.number), (message) => (discError = message), 'rom.manage.removeError', 'Failed to remove the disc')
+				? await run(() => removeDisc(rom.rom_id, action.disc.number, action.disc.rom_file_id), (message, error) => void removeFailed(message, error), 'rom.manage.removeError', 'Failed to remove the disc')
 				: await run(() => mergeRom(rom.rom_id, action.source.rom_id), (message) => (mergeError = message), 'rom.manage.mergeError', 'Failed to merge the titles');
 		pending = null;
 		if (!updated) return;
@@ -172,10 +200,10 @@
 </section>
 
 <!-- The overlay and dialog classes are the ones Delete ROM uses, defined in the ROM page. -->
-<Dialog.Root open={pending !== null} onOpenChange={(open) => { if (!open && !busy) pending = null; }}>
+<Dialog.Root open={pending !== null} onOpenChange={(open) => { if (!open && !working) pending = null; }}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="rom-delete-overlay" />
-		<Dialog.Content class="rom-delete-dialog" onEscapeKeydown={(event) => { if (busy) event.preventDefault(); }} onInteractOutside={(event) => { if (busy) event.preventDefault(); }}>
+		<Dialog.Content class="rom-delete-dialog" onEscapeKeydown={(event) => { if (working) event.preventDefault(); }} onInteractOutside={(event) => { if (working) event.preventDefault(); }}>
 			{#if pending?.kind === 'remove'}
 				<Dialog.Title class="rom-delete-title">{t('rom.manage.removeTitle', 'Remove disc {number}?', { number: pending.disc.number })}</Dialog.Title>
 				<Dialog.Description class="rom-delete-description">
@@ -189,11 +217,11 @@
 			{/if}
 			<div class="disc-manager__dialog-actions">
 				<ActionButton variant="secondary" disabled={busy} onclick={() => (pending = null)}>{t('common.actions.cancel', 'Cancel')}</ActionButton>
-				<ActionButton variant="danger" disabled={busy} aria-busy={busy} onclick={confirm}>
+				<ActionButton variant="danger" disabled={busy} aria-busy={working} onclick={confirm}>
 					{#if pending?.kind === 'merge'}
-						{busy ? t('rom.manage.merging', 'Merging...') : t('rom.manage.mergeConfirm', 'Merge titles')}
+						{working ? t('rom.manage.merging', 'Merging...') : t('rom.manage.mergeConfirm', 'Merge titles')}
 					{:else}
-						{busy ? t('rom.manage.removing', 'Removing...') : t('rom.manage.removeConfirm', 'Remove permanently')}
+						{working ? t('rom.manage.removing', 'Removing...') : t('rom.manage.removeConfirm', 'Remove permanently')}
 					{/if}
 				</ActionButton>
 			</div>

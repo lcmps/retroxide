@@ -729,8 +729,8 @@ func (roms discTestROMs) ReorderDiscs(_ context.Context, _ identity.Requester, r
 	return roms.record("reorder "+romID+" "+strings.Join(ids, ","), romID)
 }
 
-func (roms discTestROMs) RemoveDisc(_ context.Context, _ identity.Requester, romID string, number int) (rom.ROMDetailDTO, error) {
-	return roms.record(fmt.Sprintf("remove %s %d", romID, number), romID)
+func (roms discTestROMs) RemoveDisc(_ context.Context, _ identity.Requester, romID string, number int, romFileID string) (rom.ROMDetailDTO, error) {
+	return roms.record(fmt.Sprintf("remove %s %d %s", romID, number, romFileID), romID)
 }
 
 func TestDiscRoutes(t *testing.T) {
@@ -752,7 +752,7 @@ func TestDiscRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/rom/a/merge", `{"source_rom_id":"b"}`, "merge a b", "a"},
 		{http.MethodPost, "/api/v1/rom/a/discs/2/split", ``, "split a 2", "new-rom"},
 		{http.MethodPut, "/api/v1/rom/a/discs/order", `{"rom_file_ids":["f2","f1"]}`, "reorder a f2,f1", "a"},
-		{http.MethodDelete, "/api/v1/rom/a/discs/2", ``, "remove a 2", "a"},
+		{http.MethodDelete, "/api/v1/rom/a/discs/2?rom_file_id=f2", ``, "remove a 2 f2", "a"},
 	} {
 		calls = nil
 		response := send(test.method, test.path, test.body)
@@ -763,7 +763,8 @@ func TestDiscRoutes(t *testing.T) {
 	calls = nil
 	for _, test := range []struct{ method, path string }{
 		{http.MethodPost, "/api/v1/rom/a/discs/two/split"},
-		{http.MethodDelete, "/api/v1/rom/a/discs/two"},
+		{http.MethodDelete, "/api/v1/rom/a/discs/two?rom_file_id=f2"},
+		{http.MethodDelete, "/api/v1/rom/a/discs/2"},
 	} {
 		if response := send(test.method, test.path, ""); response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "validation") {
 			t.Errorf("%s %s = %d %s, want a validation error", test.method, test.path, response.Code, response.Body.String())

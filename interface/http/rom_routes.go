@@ -202,7 +202,12 @@ func (handler romHandler) removeDisc(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	remaining, err := handler.roms.RemoveDisc(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), number)
+	romFileID := c.Query("rom_file_id")
+	if romFileID == "" {
+		writeError(c, fault.Validation("rom_file_id is required"))
+		return
+	}
+	remaining, err := handler.roms.RemoveDisc(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), number, romFileID)
 	respondJSON(c, http.StatusOK, remaining, err)
 }
 

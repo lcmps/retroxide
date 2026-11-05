@@ -106,7 +106,7 @@ func TestDiscOperationsNeedAccess(t *testing.T) {
 	_, mergeErr := service.MergeROM(ctx, stranger, "a", "b")
 	_, splitErr := service.SplitDisc(ctx, stranger, "a", 2)
 	_, reorderErr := service.ReorderDiscs(ctx, stranger, "a", []string{"file-a2", "file-a"})
-	_, removeErr := service.RemoveDisc(ctx, stranger, "a", 2)
+	_, removeErr := service.RemoveDisc(ctx, stranger, "a", 2, "file-a2")
 	for name, err := range map[string]error{"merge": mergeErr, "split": splitErr, "reorder": reorderErr, "remove": removeErr} {
 		var appError *fault.Error
 		if !errors.As(err, &appError) || appError.Code != fault.CodeNotFound {
@@ -126,7 +126,7 @@ func TestSplitAndRemoveMapNumbersToFiles(t *testing.T) {
 	if err != nil || split.ROMID == "a" || split.ROMID == "" {
 		t.Fatalf("SplitDisc() = %+v, %v", split, err)
 	}
-	if _, err := service.RemoveDisc(ctx, owner, "a", 1); err != nil {
+	if _, err := service.RemoveDisc(ctx, owner, "a", 1, "file-a"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.ReorderDiscs(ctx, owner, "a", []string{"file-a2", "file-a"}); err != nil {
@@ -138,6 +138,25 @@ func TestSplitAndRemoveMapNumbersToFiles(t *testing.T) {
 	}
 	_, err = service.SplitDisc(ctx, owner, "a", 9)
 	assertErrorCode(t, err, fault.CodeNotFound)
-	_, err = service.RemoveDisc(ctx, owner, "a", 9)
+	_, err = service.RemoveDisc(ctx, owner, "a", 9, "file-a")
 	assertErrorCode(t, err, fault.CodeNotFound)
+}
+
+func TestRemoveDiscRefusesANumberThatNowMeansAnotherFile(t *testing.T) {
+	service, repository := discTestService()
+	owner := identity.Requester{UserID: "owner", Role: identity.RoleUser}
+	ctx := context.Background()
+	_, err := service.RemoveDisc(ctx, owner, "a", 1, "file-a2")
+	assertErrorCode(t, err, fault.CodeConflict)
+	_, err = service.RemoveDisc(ctx, owner, "a", 2, "")
+	assertErrorCode(t, err, fault.CodeValidation)
+	if len(repository.calls) != 0 {
+		t.Errorf("calls = %v, want none", repository.calls)
+	}
+	if _, err := service.RemoveDisc(ctx, owner, "a", 2, "file-a2"); err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.calls) != 1 || repository.calls[0] != "remove a file-a2" {
+		t.Errorf("calls = %v", repository.calls)
+	}
 }

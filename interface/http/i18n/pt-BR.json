@@ -480,5 +480,6 @@
   "rom.manage.reorderError": "Falha ao alterar a ordem dos discos",
   "rom.manage.splitError": "Falha ao tornar o disco um título separado",
   "rom.manage.removeError": "Falha ao remover o disco",
-  "rom.manage.mergeError": "Falha ao mesclar os títulos"
+  "rom.manage.mergeError": "Falha ao mesclar os títulos",
+  "rom.manage.discsChanged": "Os discos mudaram desde que você abriu esta página. Confira a lista e tente novamente."
 }

@@ -437,5 +437,6 @@
   "rom.manage.reorderError": "Failed to change the order of the discs",
   "rom.manage.splitError": "Failed to make the disc a separate title",
   "rom.manage.removeError": "Failed to remove the disc",
-  "rom.manage.mergeError": "Failed to merge the titles"
+  "rom.manage.mergeError": "Failed to merge the titles",
+  "rom.manage.discsChanged": "The discs changed since you opened this page. Check the list and try again."
 }
