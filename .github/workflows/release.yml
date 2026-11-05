@@ -182,6 +182,7 @@ jobs:
       - name: Create tag and GitHub release
         run: |
           chmod +x bin/retroxide-*
+          cp LICENSE NOTICE bin/
           gh release create "$VERSION" bin/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

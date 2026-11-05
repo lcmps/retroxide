@@ -91,8 +91,8 @@ func NewService(repository Repository, storage Storage, hasher Hasher, images Im
 // CanCompress reports whether discs are compressed to CHD.
 func (service *Service) CanCompress() bool { return service.compressor != nil }
 
-// CanCompressFile reports whether this disc can be compressed: it is kept as tracks and has a CUE
-// sheet. GDI discs stay as uploaded, since the compressor does not make GD-ROM CHDs. A sheet that
+// CanCompressFile reports whether this disc can be compressed: it is kept as tracks and is not a
+// GD-ROM, which stays as uploaded since the compressor does not make GD-ROM CHDs. A sheet that
 // cannot be read means no, so that a ROM's page does not fail over it.
 func (service *Service) CanCompressFile(ctx context.Context, romFile romdomain.ROMFile) bool {
 	if service.compressor == nil || romFile.Format != romdomain.FormatTracks {
@@ -103,7 +103,7 @@ func (service *Service) CanCompressFile(ctx context.Context, romFile romdomain.R
 		slog.WarnContext(ctx, "could not read a disc's sheet", "rom_file_id", romFile.ID, "error", err)
 		return false
 	}
-	return sheetKindOf(sheet) == SheetCUE
+	return compressibleSheet(sheet)
 }
 
 // Index inspects a newly stored (or not yet inspected) file: a CD or GD-ROM CHD gets its tracks
@@ -170,8 +170,8 @@ func (service *Service) Assemble(ctx context.Context, sheetName, sheetText strin
 	if !ok {
 		return romdomain.ROMFile{}, fault.Validation("a disc's sheet must be a .cue or .gdi file")
 	}
-	// A GDI disc is kept as uploaded rather than refused for having asked for compression.
-	compress = compress && kind == SheetCUE
+	// A GD-ROM is kept as uploaded rather than refused for having asked for compression.
+	compress = compress && compressibleSheet([]byte(sheetText))
 	sheet, err := ParseSheet(kind, sheetText)
 	if err != nil {
 		return romdomain.ROMFile{}, err
@@ -344,7 +344,7 @@ func (service *Service) Compress(ctx context.Context, romFileID string) error {
 	if err != nil {
 		return err
 	}
-	if sheetKindOf(sheet) != SheetCUE {
+	if !compressibleSheet(sheet) {
 		return ErrNotCompressible
 	}
 	work, err := service.storage.WorkDir()
@@ -473,6 +473,24 @@ func sheetKindOf(sheet []byte) SheetKind {
 		return SheetCUE
 	}
 	return SheetGDI
+}
+
+// compressibleSheet reports a CUE sheet of an ordinary CD. A GD-ROM is either a GDI file or a CUE
+// sheet with REM lines naming both of its density areas, as Redump writes for Dreamcast discs;
+// the sheet rewritten for compressing would lose those lines, and the CHD with them that layout.
+func compressibleSheet(sheet []byte) bool {
+	if sheetKindOf(sheet) != SheetCUE {
+		return false
+	}
+	var single, high bool
+	for line := range strings.Lines(strings.ToUpper(string(sheet))) {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[0] == "REM" && fields[2] == "AREA" {
+			single = single || fields[1] == "SINGLE-DENSITY"
+			high = high || fields[1] == "HIGH-DENSITY"
+		}
+	}
+	return !(single && high)
 }
 
 // IndexPending inspects files stored before discs were recognized, a batch at a time.

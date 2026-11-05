@@ -555,3 +555,45 @@ func TestCompressionCancelledKeepsRequest(t *testing.T) {
 	}
 	checkStillTracks(t, service, repositories, file.ID, "Game.cue", parts)
 }
+
+// Redump's Dreamcast sheets are CUE files, but their REM lines mark a GD-ROM's two areas. The
+// compressor would make a plain CD CHD of them, without that layout.
+func TestDreamcastCueSheetsStayAsTracks(t *testing.T) {
+	ctx := context.Background()
+	service, repositories, files := compressionFixture(t, discimage.NewCompressor())
+	sheet, parts := discFixture(t, files, "cd-cdlz.chd", "Game")
+	lines := strings.SplitAfterN(sheet, "\n", 4)
+	sheet = "REM SINGLE-DENSITY AREA\n" + lines[0] + lines[1] + lines[2] + "rem high-density area\r\n" + lines[3]
+	file, err := service.Assemble(ctx, "Game.cue", sheet, parts, true)
+	if err != nil {
+		t.Fatalf("Assemble() = %v", err)
+	}
+	if file.CompressRequested {
+		t.Error("compression was requested for a Dreamcast sheet")
+	}
+	if service.CanCompressFile(ctx, file) {
+		t.Error("a Dreamcast sheet is offered for compression")
+	}
+	// A request made before the upgrade is dropped, and the disc kept.
+	if err := repositories.SetCompressRequested(ctx, file.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if compressed, err := service.CompressPending(ctx); err != nil || compressed != 0 {
+		t.Fatalf("CompressPending() = %d, %v", compressed, err)
+	}
+	checkStillTracks(t, service, repositories, file.ID, "Game.cue", parts)
+}
+
+// One high-density REM alone is not the layout, so an ordinary disc with a stray comment compresses.
+func TestCueWithOneDensityCommentCanCompress(t *testing.T) {
+	ctx := context.Background()
+	service, _, files := compressionFixture(t, discimage.NewCompressor())
+	sheet, parts := discFixture(t, files, "cd-cdlz.chd", "Game")
+	file, err := service.Assemble(ctx, "Game.cue", "REM HIGH-DENSITY AREA\n"+sheet, parts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !service.CanCompressFile(ctx, file) {
+		t.Error("a sheet with one density comment is refused")
+	}
+}
