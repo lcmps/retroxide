@@ -10,9 +10,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/klauspost/compress/flate"
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
@@ -575,6 +579,62 @@ func (service *Service) inspectQuietly(ctx context.Context, file romdomain.ROMFi
 	return tracks, ok && err == nil
 }
 
+// zipWriter writes the entries of a download zip: Deflate at the default level, stored for
+// formats that are compressed already, every entry stamped with one modification time.
+type zipWriter struct {
+	archive  *zip.Writer
+	modified time.Time
+}
+
+func newZipWriter(out io.Writer) *zipWriter {
+	archive := zip.NewWriter(out)
+	archive.RegisterCompressor(zip.Deflate, func(w io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(w, flate.DefaultCompression)
+	})
+	return &zipWriter{archive: archive, modified: time.Now()}
+}
+
+// zipMethod stores the disc formats that are compressed already, and deflates the rest.
+func zipMethod(name string) uint16 {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".chd", ".cso", ".rvz", ".pbp":
+		return zip.Store
+	}
+	return zip.Deflate
+}
+
+// safeEntryName reports whether name is a relative zip path with forward slashes and no empty,
+// "." or ".." segment, so extracting it cannot leave the folder it is extracted into.
+func safeEntryName(name string) bool {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
+		return false
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func (writer *zipWriter) add(name string, size int64, write func(io.Writer) error) error {
+	if !safeEntryName(name) {
+		return fault.Validation(fmt.Sprintf("cannot put %q in a zip", name))
+	}
+	header := &zip.FileHeader{Name: name, Method: zipMethod(name), Modified: writer.modified}
+	header.SetMode(0o644)
+	if size >= 0 {
+		header.UncompressedSize64 = uint64(size)
+	}
+	entry, err := writer.archive.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+	return write(entry)
+}
+
+func (writer *zipWriter) close() error { return writer.archive.Close() }
+
 // Archive writes a disc as a zip of its sheet and track files, named after base. A disc
 // uploaded as a sheet and tracks comes back exactly as uploaded (its sheet, its file names,
 // tracks that shared a file joined again), rebuilt from its CHD if it was compressed since; a
@@ -583,18 +643,70 @@ func (service *Service) Archive(ctx context.Context, romFile romdomain.ROMFile, 
 	if romFile.Format != romdomain.FormatCHD && romFile.Format != romdomain.FormatTracks {
 		return fault.Validation("this ROM is not a disc")
 	}
-	archive := zip.NewWriter(out)
-	add := func(name string, size int64, write func(io.Writer) error) error {
-		header := &zip.FileHeader{Name: name, Method: zip.Store}
-		header.SetMode(0o644)
-		if size >= 0 {
-			header.UncompressedSize64 = uint64(size)
+	archive := newZipWriter(out)
+	if err := service.writeDisc(ctx, romFile, base, archive.add); err != nil {
+		return err
+	}
+	return archive.close()
+}
+
+// ArchiveDiscs writes every disc of a title in one zip, with a playlist, title.m3u, as its last
+// entry. A disc kept as tracks goes in a folder named after it, since track names can repeat
+// between discs; any other disc is one file, copied from storage as it is.
+func (service *Service) ArchiveDiscs(ctx context.Context, title string, discs []romdomain.ArchiveDisc, out io.Writer) error {
+	archive := newZipWriter(out)
+	var playlist strings.Builder
+	for _, disc := range discs {
+		var line string
+		if disc.AsTracks {
+			add := func(name string, size int64, write func(io.Writer) error) error {
+				entry := disc.Name + "/" + name
+				if ext := strings.ToLower(path.Ext(name)); line == "" && (ext == ".cue" || ext == ".gdi") {
+					line = entry
+				}
+				return archive.add(entry, size, write)
+			}
+			if err := service.writeDisc(ctx, disc.ROMFile, disc.Name, add); err != nil {
+				return err
+			}
+			if line == "" {
+				return fault.Internal(fmt.Errorf("disc %q has no sheet", disc.Name))
+			}
+		} else {
+			line = disc.Name + path.Ext(disc.Filename)
+			if err := service.copyStored(ctx, disc.ROMFile, line, archive.add); err != nil {
+				return err
+			}
 		}
-		entry, err := archive.CreateHeader(header)
-		if err != nil {
-			return err
-		}
-		return write(entry)
+		playlist.WriteString(line + "\n")
+	}
+	text := playlist.String()
+	if err := archive.add(title+".m3u", int64(len(text)), func(w io.Writer) error {
+		_, err := io.WriteString(w, text)
+		return err
+	}); err != nil {
+		return err
+	}
+	return archive.close()
+}
+
+// copyStored adds a disc's stored file as one entry.
+func (service *Service) copyStored(ctx context.Context, romFile romdomain.ROMFile, name string, add AddFile) error {
+	content, err := service.storage.Open(ctx, romFile.StoragePath)
+	if err != nil {
+		return err
+	}
+	defer content.Close()
+	return add(name, content.Size, func(w io.Writer) error {
+		_, err := io.Copy(w, content)
+		return err
+	})
+}
+
+// writeDisc adds a disc's sheet and track files, named after base, through add.
+func (service *Service) writeDisc(ctx context.Context, romFile romdomain.ROMFile, base string, add AddFile) error {
+	if romFile.Format != romdomain.FormatCHD && romFile.Format != romdomain.FormatTracks {
+		return fault.Validation("this ROM is not a disc")
 	}
 	var chd io.ReaderAt
 	var chdSize int64
@@ -609,10 +721,7 @@ func (service *Service) Archive(ctx context.Context, romFile romdomain.ROMFile, 
 		}
 		chdSize = content.Size
 		if romFile.SheetPath == nil {
-			if err := service.images.Extract(ctx, chd, chdSize, base, add); err != nil {
-				return err
-			}
-			return archive.Close()
+			return service.images.Extract(ctx, chd, chdSize, base, add)
 		}
 	}
 
@@ -654,7 +763,7 @@ func (service *Service) Archive(ctx context.Context, romFile romdomain.ROMFile, 
 		}
 		start = end
 	}
-	return archive.Close()
+	return nil
 }
 
 // writeTrack writes a track's file: rebuilt from the CHD when there is one, else as stored.

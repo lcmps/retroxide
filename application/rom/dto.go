@@ -15,6 +15,8 @@ type ROMSummaryDTO struct {
 	CoverArtURL  *string `json:"cover_art_url"`
 	// CoverThumbURL is a small copy of the cover, for grids of many ROMs.
 	CoverThumbURL *string `json:"cover_thumb_url"`
+	// DiscCount is how many discs the ROM has.
+	DiscCount int `json:"disc_count"`
 }
 
 type ROMListResponseDTO struct {
@@ -40,6 +42,21 @@ type ROMDetailDTO struct {
 	// Disc describes a CD or GD-ROM image's tracks; absent for other ROMs.
 	Disc *DiscDTO `json:"disc,omitempty"`
 	// Downloads lists the formats the ROM downloads in, the one it was uploaded in first.
+	Downloads []DownloadOptionDTO `json:"downloads,omitempty"`
+	// Discs lists every disc in number order; a ROM of one file has one. For a title of several
+	// discs, Hash and Disc are the first disc's and Downloads is only the zip of all of them.
+	Discs []DiscEntryDTO `json:"discs"`
+}
+
+// DiscEntryDTO is one disc of a ROM.
+type DiscEntryDTO struct {
+	Number    int        `json:"number"`
+	ROMFileID string     `json:"rom_file_id"`
+	Filename  string     `json:"filename"`
+	Size      uint64     `json:"size"`
+	Hash      ROMHashDTO `json:"hash"`
+	// Disc describes a CD or GD-ROM image's tracks; absent for other files.
+	Disc      *DiscDTO            `json:"disc,omitempty"`
 	Downloads []DownloadOptionDTO `json:"downloads,omitempty"`
 }
 
@@ -82,6 +99,8 @@ type PlatformDTO struct {
 	Key      string `json:"key"`
 	Name     string `json:"name"`
 	ROMCount uint64 `json:"rom_count"`
+	// BIOSCount counts the platform's BIOS files; a platform may have BIOS files and no games.
+	BIOSCount uint64 `json:"bios_count"`
 }
 
 type ROMHashDTO struct {

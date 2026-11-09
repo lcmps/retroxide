@@ -471,39 +471,6 @@ func exerciseROMSearch(t *testing.T, ctx context.Context, repositories *Reposito
 	}
 }
 
-func TestRepositoriesFindUploadedFilenameByROMUsesTheIndex(t *testing.T) {
-	repositories, ctx := openTestRepositories(t)
-	romID := "rom-1"
-	if err := repositories.DB.WithContext(ctx).Create(&UploadModel{
-		ID: "upload-1", UploaderID: "user-1", OriginalFilename: "Zelda (USA).nes", Status: "completed", ROMID: &romID,
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
-
-	filename, err := repositories.FindUploadedFilename(ctx, romID)
-	if err != nil || filename == nil || *filename != "Zelda (USA).nes" {
-		t.Fatalf("FindUploadedFilename() = %v, %v", filename, err)
-	}
-	if missing, err := repositories.FindUploadedFilename(ctx, "rom-unknown"); err != nil || missing != nil {
-		t.Fatalf("FindUploadedFilename(unknown) = %v, %v; want nil, nil", missing, err)
-	}
-
-	var plan []struct {
-		Detail string `gorm:"column:detail"`
-	}
-	if err := repositories.DB.WithContext(ctx).
-		Raw("EXPLAIN QUERY PLAN SELECT original_filename FROM upload WHERE rom_id = ?", romID).
-		Scan(&plan).Error; err != nil {
-		t.Fatal(err)
-	}
-	for _, step := range plan {
-		if strings.Contains(step.Detail, "idx_upload_rom_id") {
-			return
-		}
-	}
-	t.Fatalf("query plan %+v does not use idx_upload_rom_id", plan)
-}
-
 func TestRepositoriesClaimHonoursTheKindFilter(t *testing.T) {
 	repositories, ctx := openTestRepositories(t)
 	for _, kind := range []string{jobsdomain.KindScrapeROM, jobsdomain.KindIdentifyROM} {
@@ -714,6 +681,52 @@ func exerciseUserManagement(t *testing.T, ctx context.Context, repositories *Rep
 	}
 	if _, err := repositories.DeleteUserTransferringData(ctx, leaverID, heirID); !fault.IsCode(err, fault.CodeNotFound) {
 		t.Fatalf("deleting a missing user = %v, want not found", err)
+	}
+}
+
+func TestDeletingAUserWhoSharesADiscGroupWithTheHeir(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	exerciseDiscGroupTransfer(t, ctx, repositories, "dg")
+}
+
+// exerciseDiscGroupTransfer deletes a user whose ROM is in a disc group the heir also uses: the
+// unique (uploader, disc group) index must not block the transfer.
+func exerciseDiscGroupTransfer(t *testing.T, ctx context.Context, repositories *Repositories, prefix string) {
+	t.Helper()
+	heirID, leaverID := prefix+"-heir", prefix+"-leaver"
+	for _, account := range []authdomain.User{
+		{ID: heirID, Email: heirID + "@example.test", PasswordHash: "h", Role: identity.RoleAdmin},
+		{ID: leaverID, Email: leaverID + "@example.test", PasswordHash: "h", Role: identity.RoleUser},
+	} {
+		if err := repositories.SaveUser(ctx, account); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		repositories.DB.Where("uploader_id IN ?", []string{heirID, leaverID}).Delete(&ROMModel{})
+		repositories.DB.Where("id LIKE ?", "file-"+prefix+"-%").Delete(&ROMFileModel{})
+		repositories.DB.Where("id IN ?", []string{heirID, leaverID}).Delete(&UserModel{})
+	})
+	shared, own := prefix+"-shared", prefix+"-own"
+	heirROM := seedDiscROM(t, repositories, ctx, prefix+"-heir-rom", heirID, &shared)
+	leaverROM := seedDiscROM(t, repositories, ctx, prefix+"-leaver-rom", leaverID, &shared)
+	keptROM := seedDiscROM(t, repositories, ctx, prefix+"-kept-rom", leaverID, &own)
+
+	transfer, err := repositories.DeleteUserTransferringData(ctx, leaverID, heirID)
+	if err != nil {
+		t.Fatalf("deleting a user who shares a disc group with the heir: %v", err)
+	}
+	if transfer.ROMs != 2 {
+		t.Fatalf("transfer = %+v, want 2 ROMs", transfer)
+	}
+	for id, want := range map[string]*string{heirROM.ID: &shared, leaverROM.ID: nil, keptROM.ID: &own} {
+		found, err := repositories.FindROMByID(ctx, id)
+		if err != nil || found == nil || found.UploaderID != heirID {
+			t.Fatalf("ROM %s after the transfer = %+v, %v; want the heir's", id, found, err)
+		}
+		if (want == nil) != (found.DiscGroup == nil) || (want != nil && *found.DiscGroup != *want) {
+			t.Fatalf("ROM %s disc group = %v, want %v", id, found.DiscGroup, want)
+		}
 	}
 }
 

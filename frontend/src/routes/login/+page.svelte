@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
   import { resolve } from '$app/paths';
+  import { page } from '$app/state';
+  import { safeReturnPath, shareToken } from '#lib/share/paths.js';
   import { browser } from '$app/env';
 	import { onMount } from 'svelte';
 	import ActionButton from '#lib/components/ActionButton.svelte';
@@ -16,6 +18,12 @@
 	let resultMessage = $state('');
   const isAuthenticated = $derived(browser && hasStoredSession());
 
+  /** Where signing in leads: back to a share link the person was opening, else the library. */
+  function afterSignIn(): string {
+    const token = shareToken(safeReturnPath(page.url.searchParams.get('next')));
+    return token ? resolve('/share/[token]', { token }) : resolve('/library');
+  }
+
 	const t = useTranslate(i18n);
 
 	async function submitLogin(event: SubmitEvent) {
@@ -30,7 +38,7 @@
 				tokenType: session.token_type,
 				expiresIn: session.expires_in
 			});
-      await goto(resolve('/library'));
+      await goto(afterSignIn());
 		} catch (error) {
 			resultMessage = getErrorMessage(error, 'login.messages.failure', 'Login failed', t);
 		} finally {
@@ -40,7 +48,7 @@
 
   onMount(() => {
     if (hasStoredSession()) {
-      void goto(resolve('/library'), { replace: true });
+      void goto(afterSignIn(), { replace: true });
       return;
     }
 

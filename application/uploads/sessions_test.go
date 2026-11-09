@@ -423,3 +423,26 @@ func TestDiscFilesUploadAsPartsAndAssemble(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionUploadIdentifiesAStoredFileNoTitleUsesAgain(t *testing.T) {
+	ctx := context.Background()
+	fixture := newSessionFixture(&testStorage{})
+	hash, _ := romhash.New().Hash([]byte("left"))
+	fixture.roms.existing = &romdomain.ROMFile{ID: "rf_left", Hash: hash}
+	fixture.roms.unused = true
+	session, _ := fixture.service.CreateSession(ctx, player, CreateSessionInput{Filename: "game.sfc", Size: 4})
+	// The early check lets it through, since the library doesn't show it.
+	if err := fixture.service.CheckSessionDuplicate(ctx, player, session.SessionID, hash.SHA256); err != nil {
+		t.Fatalf("check of a stored file no title uses = %v, want the upload to go on", err)
+	}
+	done, err := fixture.service.AppendToSession(ctx, player, session.SessionID, 0, strings.NewReader("left"))
+	if err != nil || done.Upload == nil {
+		t.Fatalf("finish = %+v, %v; want the upload accepted", done, err)
+	}
+	if len(fixture.uploads.jobs) != 1 || fixture.uploads.jobs[0].ROMFileID != "rf_left" {
+		t.Fatalf("jobs = %+v, want identification of the stored file", fixture.uploads.jobs)
+	}
+	if len(fixture.sessions.sessions) != 0 || len(fixture.partials.files) != 0 || len(fixture.partials.committed) != 0 {
+		t.Fatal("the session or its copy of the content was kept")
+	}
+}

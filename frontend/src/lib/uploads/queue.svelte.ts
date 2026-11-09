@@ -1,4 +1,4 @@
-import type { UploadAcceptedResponse } from '#lib/api/types.js';
+import type { UploadAcceptedResponse, BiosUploadOptions } from '#lib/api/types.js';
 import type { DiscSelection } from './disc.js';
 import { createLimiter } from '#lib/helpers/concurrency.js';
 import { isTerminalUploadState, UploadTracker, type FetchUploadStatus, type UploadTrackerOptions } from './tracker.svelte.js';
@@ -9,7 +9,9 @@ export type SendUpload = (
 	/** Reports whether the transfer is waiting to retry after a dropped connection. */
 	onReconnecting?: (reconnecting: boolean) => void,
 	/** Aborts when the queue is cancelled. */
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	/** Set when the file was picked as BIOS files. */
+	bios?: BiosUploadOptions
 ) => Promise<UploadAcceptedResponse>;
 
 /** queued → uploading → accepted (processing is then tracked) or rejected (the transfer failed). */
@@ -44,12 +46,15 @@ export class UploadItem {
 	readonly tracker: UploadTracker;
 	/** Set for a disc: the file is its sheet, and these are its tracks. */
 	readonly disc: DiscSelection | null;
+	/** Set when the file was picked as BIOS files. */
+	readonly bios: BiosUploadOptions | undefined;
 
-	constructor(key: number, file: File, tracker: UploadTracker, disc: DiscSelection | null = null) {
+	constructor(key: number, file: File, tracker: UploadTracker, disc: DiscSelection | null = null, bios?: BiosUploadOptions) {
 		this.key = key;
 		this.file = file;
 		this.tracker = tracker;
 		this.disc = disc;
+		this.bios = bios;
 	}
 
 	/** Whether nothing further will happen to this item. */
@@ -95,10 +100,10 @@ export class UploadQueue {
 		return this.items.filter((item) => item.phase === 'queued' || item.phase === 'uploading').length;
 	}
 
-	/** Queues files for upload and starts transferring them as slots free up. */
-	add(files: Iterable<File>): void {
+	/** Queues files for upload, as BIOS files when bios is set, and starts transferring them as slots free up. */
+	add(files: Iterable<File>, bios?: BiosUploadOptions): void {
 		for (const file of files) {
-			const item = new UploadItem(this.#nextKey++, file, new UploadTracker(this.#fetchStatus, this.#trackerOptions));
+			const item = new UploadItem(this.#nextKey++, file, new UploadTracker(this.#fetchStatus, this.#trackerOptions), null, bios);
 			this.items.push(item);
 			void this.#limit(() => this.#transfer(item));
 		}
@@ -152,7 +157,7 @@ export class UploadQueue {
 			const accepted =
 				item.disc && this.#sendDisc
 					? await this.#sendDisc(item.disc, onProgress, onReconnecting, signal)
-					: await this.#send(item.file, onProgress, onReconnecting, signal);
+					: await this.#send(item.file, onProgress, onReconnecting, signal, item.bios);
 			if (signal.aborted) {
 				return;
 			}

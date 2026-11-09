@@ -14,6 +14,7 @@ type ErrorResponse struct {
 	Message           string  `json:"message"`
 	RequestID         string  `json:"request_id"`
 	ExistingROMFileID *string `json:"existing_rom_file_id,omitempty"`
+	ExistingBIOSID    *string `json:"existing_bios_id,omitempty"`
 	SHA256            *string `json:"sha256,omitempty"`
 }
 
@@ -44,6 +45,7 @@ func PresentError(err error, requestID string) (int, ErrorResponse) {
 		Message:           message,
 		RequestID:         requestID,
 		ExistingROMFileID: appError.ExistingROMFileID,
+		ExistingBIOSID:    appError.ExistingBIOSID,
 		SHA256:            appError.SHA256,
 	}
 }
@@ -58,7 +60,7 @@ func httpStatusForError(code fault.Code) int {
 		return http.StatusForbidden
 	case fault.CodeNotFound:
 		return http.StatusNotFound
-	case fault.CodeConflict, fault.CodeROMAlreadyExists:
+	case fault.CodeConflict, fault.CodeROMAlreadyExists, fault.CodeBIOSAlreadyExists, fault.CodeAlreadyInLibrary:
 		return http.StatusConflict
 	case fault.CodeUploadTooLarge:
 		return http.StatusRequestEntityTooLarge

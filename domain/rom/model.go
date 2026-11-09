@@ -71,7 +71,17 @@ type ROM struct {
 	ID         string
 	ROMFileID  string
 	UploaderID string
-	Identity   ROMIdentity
+	// DiscGroup is the filename key that groups a ROM's discs; nil when never grouped.
+	DiscGroup *string
+	Identity  ROMIdentity
+}
+
+// ROMDisc is one disc of a ROM. An empty Filename means the upload's name is unknown.
+type ROMDisc struct {
+	ROMID     string
+	ROMFileID string
+	Number    int
+	Filename  string
 }
 
 type ROMFile struct {
@@ -88,4 +98,14 @@ type ROMFile struct {
 	SheetPath *string
 	// CompressRequested asks for a disc kept as tracks to be compressed to CHD.
 	CompressRequested bool
+}
+
+// ArchiveDisc is a disc to put in a zip of a whole title. Name is the disc's name there, without
+// an extension; Filename supplies the extension of a disc that is not kept as tracks. AsTracks
+// writes the disc as its sheet and track files, in a folder named Name.
+type ArchiveDisc struct {
+	ROMFile  ROMFile
+	Name     string
+	Filename string
+	AsTracks bool
 }

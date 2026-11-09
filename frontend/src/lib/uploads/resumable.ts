@@ -1,12 +1,20 @@
 import { checkUploadSessionDuplicate, createUploadSession, getUploadSession, sendUploadPart, uploadRom } from '#lib/api/client.js';
 import { ApiClientError } from '#lib/api/errors.js';
-import type { UploadAcceptedResponse } from '#lib/api/types.js';
-import { hashFile } from './hash.js';
+import type { BiosUploadOptions, UploadAcceptedResponse } from '#lib/api/types.js';
+import { hashFileInBackground } from './background-hash.js';
 
 /** Files from this size are sent in parts that survive a dropped connection. */
 export const RESUMABLE_FROM_BYTES = 16 * 1024 * 1024;
-/** How much of a file each request carries. */
-export const PART_BYTES = 8 * 1024 * 1024;
+/**
+ * The first part's size, and the smallest a part gets (unless the server accepts less). Parts
+ * then grow or shrink to take about PART_SECONDS each: every part costs the server an fsync, a
+ * database write, and saving the hash progress, so a fast link gets large parts that keep that
+ * overhead small, while a slow one gets small parts, so a dropped connection resends little.
+ */
+export const MIN_PART_BYTES = 8 * 1024 * 1024;
+/** How long each part should take to send, in seconds. */
+export const PART_SECONDS = 8;
+const MiB = 1024 * 1024;
 /** Waits before retrying a failed part, in milliseconds; the last repeats. */
 const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000];
 /** Consecutive failures of one part before giving up, about ten minutes in all. */
@@ -25,12 +33,12 @@ type Session = {
 
 /** The server calls a resumable upload needs, injectable for tests. */
 export type ResumableApi = {
-	/** Starts a session; with part, for one of a disc's files. */
-	createSession(file: File, part?: boolean): Promise<Session>;
+	/** Starts a session; with part, for one of a disc's files; with bios, for BIOS files. */
+	createSession(file: File, part?: boolean, bios?: BiosUploadOptions): Promise<Session>;
 	getSession(sessionId: string): Promise<Session>;
 	sendPart(sessionId: string, offset: number, part: Blob, onProgress: (loadedBytes: number) => void, signal?: AbortSignal): Promise<Session>;
 	/** Uploads a small file in one request. */
-	uploadWhole(file: File, onProgress: (loadedBytes: number, totalBytes: number) => void, signal?: AbortSignal): Promise<UploadAcceptedResponse>;
+	uploadWhole(file: File, onProgress: (loadedBytes: number, totalBytes: number) => void, signal?: AbortSignal, bios?: BiosUploadOptions): Promise<UploadAcceptedResponse>;
 	/** Ends the session with rom_already_exists if the library already has the file. */
 	checkDuplicate(sessionId: string, sha256: string): Promise<void>;
 };
@@ -42,6 +50,8 @@ export type ResumableEnvironment = {
 	waitUntilOnline?: () => Promise<void>;
 	/** Computes a file's SHA-256 as lowercase hex. */
 	hash?: (file: File, signal: AbortSignal) => Promise<string>;
+	/** The current time in milliseconds, for timing parts. */
+	now?: () => number;
 };
 
 export type ResumableCallbacks = {
@@ -50,11 +60,14 @@ export type ResumableCallbacks = {
 	onReconnecting?: (reconnecting: boolean) => void;
 	/** Stops the upload, which rejects with the signal's reason; a large file can still resume. */
 	signal?: AbortSignal;
+	/** Marks the upload as BIOS files for a platform. */
+	bios?: BiosUploadOptions;
 };
 
 /** Identifies a file across page loads, so adding it again resumes its upload. */
-function fingerprint(file: File, part = false): string {
-	return `${STORAGE_PREFIX}${part ? 'part:' : ''}${file.name}:${file.size}:${file.lastModified}`;
+function fingerprint(file: File, part = false, bios?: BiosUploadOptions): string {
+	const kind = part ? 'part:' : bios ? `bios:${bios.platform}:` : '';
+	return `${STORAGE_PREFIX}${kind}${file.name}:${file.size}:${file.lastModified}`;
 }
 
 function defaultStorage(): ResumableEnvironment['storage'] {
@@ -63,6 +76,15 @@ function defaultStorage(): ResumableEnvironment['storage'] {
 	} catch {
 		return null;
 	}
+}
+
+const defaultNow = () => performance.now();
+
+/** Sizes the next part to take about PART_SECONDS at the speed the last one went. */
+function nextPartSize(sentBytes: number, elapsedMilliseconds: number, current: number): number {
+	if (elapsedMilliseconds <= 0) return current;
+	const target = (sentBytes / elapsedMilliseconds) * PART_SECONDS * 1000;
+	return Math.max(MIN_PART_BYTES, Math.round(target / MiB) * MiB);
 }
 
 const defaultSleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -95,7 +117,7 @@ export async function uploadResumable(
 	environment: ResumableEnvironment = {}
 ): Promise<UploadAcceptedResponse> {
 	if (file.size < RESUMABLE_FROM_BYTES) {
-		return api.uploadWhole(file, callbacks.onProgress, callbacks.signal);
+		return api.uploadWhole(file, callbacks.onProgress, callbacks.signal, callbacks.bios);
 	}
 	const session = await transfer(file, api, false, callbacks, environment);
 	return session.upload as UploadAcceptedResponse;
@@ -119,10 +141,10 @@ async function transfer(
 	file: File,
 	api: ResumableApi,
 	part: boolean,
-	{ onProgress, onReconnecting, signal }: ResumableCallbacks,
-	{ storage = defaultStorage(), sleep = defaultSleep, waitUntilOnline = defaultWaitUntilOnline, hash = hashFile }: ResumableEnvironment
+	{ onProgress, onReconnecting, signal, bios }: ResumableCallbacks,
+	{ storage = defaultStorage(), sleep = defaultSleep, waitUntilOnline = defaultWaitUntilOnline, hash = hashFileInBackground, now = defaultNow }: ResumableEnvironment
 ): Promise<Session> {
-	const key = fingerprint(file, part);
+	const key = fingerprint(file, part, bios);
 	const remember = (sessionId: string | null) => {
 		try {
 			if (sessionId) storage?.setItem(key, sessionId);
@@ -132,7 +154,7 @@ async function transfer(
 		}
 	};
 	const done = (current: Session) => Boolean(current.upload || current.part_id);
-	const create = () => api.createSession(file, part);
+	const create = () => api.createSession(file, part, bios);
 	/** Waits for a promise, or until the upload is cancelled. */
 	const orCancelled = <T>(waiting: Promise<T>): Promise<T> => {
 		if (!signal) return waiting;
@@ -150,8 +172,8 @@ async function transfer(
 	remember(session.session_id);
 	onProgress(session.received, file.size);
 
-	// A whole file is hashed while it uploads; hashing is far faster than any home connection, so
-	// a ROM the library already has is caught within the first parts instead of after the last.
+	// A whole file is hashed in a worker while it uploads, so a ROM the library already has is
+	// usually caught within the first parts instead of after the last.
 	// A disc's files are checked as a disc, once assembled.
 	const hashing = new AbortController();
 	let sha256: string | null = null;
@@ -168,7 +190,7 @@ async function transfer(
 		try {
 			await api.checkDuplicate(session.session_id, sha256);
 		} catch (error) {
-			if (error instanceof ApiClientError && error.code === 'rom_already_exists') {
+			if (error instanceof ApiClientError && (error.code === 'rom_already_exists' || error.code === 'bios_already_exists')) {
 				remember(null);
 				throw error;
 			}
@@ -184,14 +206,16 @@ async function transfer(
 
 	async function sendParts(): Promise<Session> {
 		let failures = 0;
+		let partSize = MIN_PART_BYTES;
 		while (!done(session)) {
 			signal?.throwIfAborted();
 			await checkForDuplicate();
-			const partSize = Math.min(PART_BYTES, session.max_chunk_size || PART_BYTES);
 			const offset = session.received;
-			const piece = file.slice(offset, Math.min(offset + partSize, file.size));
+			const piece = file.slice(offset, Math.min(offset + Math.min(partSize, session.max_chunk_size || MIN_PART_BYTES), file.size));
+			const started = now();
 			try {
 				session = await api.sendPart(session.session_id, offset, piece, (loaded) => onProgress(offset + loaded, file.size), signal);
+				partSize = nextPartSize(piece.size, now() - started, partSize);
 				failures = 0;
 				onReconnecting?.(false);
 				onProgress(session.received, file.size);
@@ -214,6 +238,8 @@ async function transfer(
 					if (!isTransient(error)) remember(null);
 					throw error;
 				}
+				// A shorter part is less to resend if the connection keeps dropping.
+				partSize = Math.max(MIN_PART_BYTES, partSize / 2);
 				onReconnecting?.(true);
 				await orCancelled(sleep(RETRY_DELAYS_MS[Math.min(failures - 1, RETRY_DELAYS_MS.length - 1)]));
 				await orCancelled(waitUntilOnline());

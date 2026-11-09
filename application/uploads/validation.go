@@ -16,7 +16,7 @@ func ValidateFilename(filename string) error {
 	if len(filename) > MaxFilenameLength {
 		return fault.Validation(fmt.Sprintf("filename exceeds %d characters", MaxFilenameLength))
 	}
-	if strings.ContainsAny(filename, "/\\\x00") {
+	if filename == "." || filename == ".." || strings.ContainsAny(filename, "/\\\x00") {
 		return fault.Validation("filename contains invalid characters")
 	}
 	return nil

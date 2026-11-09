@@ -1,6 +1,7 @@
 package rom
 
 import (
+	"fmt"
 	"path"
 	"strings"
 	"unicode"
@@ -31,18 +32,45 @@ var platformExtensions = map[string]string{
 // was originally uploaded so emulators recognize the format. Without a usable title it falls back
 // to the uploaded name, then to the ROM ID.
 func downloadFilename(rom romdomain.ROM, uploadedFilename *string) string {
-	original := ""
-	if uploadedFilename != nil {
-		original = path.Base(strings.ReplaceAll(*uploadedFilename, "\\", "/"))
-	}
-	extension := fileExtension(original)
+	extension := fileExtension(uploadedBase(uploadedFilename))
 	if extension == "" {
 		extension = platformExtensions[strings.ToLower(rom.Identity.Platform)]
 	}
 	if extension == "" {
 		extension = ".rom"
 	}
+	return downloadTitle(rom, uploadedFilename) + extension
+}
 
+// discDownloadName names one disc of a title: the ROM's download name, with " (Disc N)" before
+// the extension unless the ROM is a single disc numbered 1.
+func discDownloadName(rom romdomain.ROM, disc romdomain.ROMDisc, discCount int) string {
+	name := downloadFilename(rom, optionalFilename(disc))
+	if discCount == 1 && disc.Number == 1 {
+		return name
+	}
+	extension := path.Ext(name)
+	return fmt.Sprintf("%s (Disc %d)%s", strings.TrimSuffix(name, extension), disc.Number, extension)
+}
+
+// optionalFilename is the disc's uploaded filename, or nil when it is unknown.
+func optionalFilename(disc romdomain.ROMDisc) *string {
+	if disc.Filename == "" {
+		return nil
+	}
+	return &disc.Filename
+}
+
+func uploadedBase(uploadedFilename *string) string {
+	if uploadedFilename == nil {
+		return ""
+	}
+	return path.Base(strings.ReplaceAll(*uploadedFilename, "\\", "/"))
+}
+
+// downloadTitle is a ROM's download name without an extension.
+func downloadTitle(rom romdomain.ROM, uploadedFilename *string) string {
+	original := uploadedBase(uploadedFilename)
 	name := sanitizeFilename(rom.Identity.Title)
 	if name == "" {
 		name = sanitizeFilename(strings.TrimSuffix(original, path.Ext(original)))
@@ -53,7 +81,7 @@ func downloadFilename(rom romdomain.ROM, uploadedFilename *string) string {
 	if name == "" {
 		name = "rom"
 	}
-	return name + extension
+	return name
 }
 
 // fileExtension returns filename's lowercase extension (with the dot) when it looks like a real

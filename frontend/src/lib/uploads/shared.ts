@@ -9,7 +9,7 @@ import { serverApi, uploadResumable } from './resumable.js';
  * survive a dropped connection and resume when added again.
  */
 export const uploadQueue = new UploadQueue(
-	(file, onProgress, onReconnecting, signal) => uploadResumable(file, serverApi, { onProgress, onReconnecting, signal }),
+	(file, onProgress, onReconnecting, signal, bios) => uploadResumable(file, serverApi, { onProgress, onReconnecting, signal, bios }),
 	uploadStatus,
 	{ sendDisc: (disc, onProgress, onReconnecting, signal) => uploadDisc(disc, discApi, { onProgress, onReconnecting, signal }) }
 );

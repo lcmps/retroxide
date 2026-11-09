@@ -85,10 +85,12 @@ func Summarize(row romdomain.ROMWithFile) ROMSummaryDTO {
 		SHA256:        row.SHA256,
 		CoverArtURL:   imageURL(row.ROM.ID, "cover", row.ROM.Identity.CoverArtPath),
 		CoverThumbURL: coverThumbURL(row.ROM),
+		DiscCount:     row.DiscCount,
 	}
 }
 
-// Platforms lists the platforms of the ROMs the requester can see, ordered by display name.
+// Platforms lists the platforms of the ROMs the requester can see, and those with BIOS files
+// (shared by everyone), ordered by display name.
 func (service *Service) Platforms(ctx context.Context, requester identity.Requester) ([]PlatformDTO, error) {
 	var uploaderID *string
 	if !requester.HasBroadAccess() {
@@ -100,7 +102,7 @@ func (service *Service) Platforms(ctx context.Context, requester identity.Reques
 	}
 	platforms := make([]PlatformDTO, 0, len(counts))
 	for _, count := range counts {
-		platforms = append(platforms, PlatformDTO{Key: count.Platform, Name: romdomain.PlatformName(count.Platform), ROMCount: count.Count})
+		platforms = append(platforms, PlatformDTO{Key: count.Platform, Name: romdomain.PlatformName(count.Platform), ROMCount: count.Count, BIOSCount: count.BIOSCount})
 	}
 	slices.SortFunc(platforms, func(a, b PlatformDTO) int {
 		// Unknown sorts last; the rest alphabetically.

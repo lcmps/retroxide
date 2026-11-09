@@ -10,10 +10,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/lcmps/retroxide/application/auth"
+	"github.com/lcmps/retroxide/application/bios"
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/libraries"
 	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/application/settings"
+	"github.com/lcmps/retroxide/application/share"
 	"github.com/lcmps/retroxide/application/uploads"
 	"github.com/lcmps/retroxide/application/users"
 	"github.com/lcmps/retroxide/domain/identity"
@@ -35,6 +37,8 @@ type DownloadLinks interface {
 type Dependencies struct {
 	Uploads       uploads.Service
 	ROMs          rom.API
+	BIOS          bios.API
+	Share         share.API
 	Libraries     libraries.API
 	Sessions      auth.SessionAPI
 	Clients       auth.ClientAPI
@@ -68,6 +72,7 @@ func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 		_ = router.SetTrustedProxies(nil)
 	}
 	router.Use(
+		abortFailedDownload(),
 		gin.CustomRecovery(func(c *gin.Context, recovered any) {
 			slog.ErrorContext(c.Request.Context(), "http handler panic", "panic", recovered)
 			writeError(c, fault.Internal(errors.New("http handler panic")))

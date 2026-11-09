@@ -41,6 +41,11 @@ export default defineConfig(({ mode }) => {
 				})
 			})
 		],
+		build: {
+			// Fonts always ship as files: the CSP allows fonts only from 'self', so a small font
+			// subset that Vite would otherwise inline as a data: URI is blocked by the browser.
+			assetsInlineLimit: (file) => (/\.(woff2?|ttf|otf|eot)$/i.test(file) ? false : undefined)
+		},
 		server: {
 			proxy: {
 				'/api': {

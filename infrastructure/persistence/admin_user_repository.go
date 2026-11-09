@@ -61,7 +61,7 @@ func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]
 		UploaderID string
 		Bytes      uint64
 	}
-	if err := db.Table("rom AS r").Joins("JOIN rom_file AS f ON f.id = r.rom_file_id").
+	if err := db.Table("rom AS r").Joins("JOIN rom_disc AS d ON d.rom_id = r.id").Joins("JOIN rom_file AS f ON f.id = d.rom_file_id").
 		Select("r.uploader_id AS uploader_id, COALESCE(SUM(f.size), 0) AS bytes").Group("r.uploader_id").Scan(&storage).Error; err != nil {
 		return nil, databaseError("summing storage per user", err)
 	}
@@ -104,11 +104,22 @@ func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]
 	return activity, nil
 }
 
-// DeleteUserTransferringData hands the user's ROMs, libraries, and uploads to heirID and deletes
+// DeleteUserTransferringData hands the user's ROMs, libraries, uploads, and BIOS files to heirID and deletes
 // the account in one transaction; foreign keys delete their API clients and refresh tokens.
 func (repositories *Repositories) DeleteUserTransferringData(ctx context.Context, userID, heirID string) (users.Transfer, error) {
 	var transfer users.Transfer
 	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// A disc group is unique per uploader, so a ROM whose group the heir already uses would
+		// collide on the move. It leaves the group instead and stops gathering new discs.
+		var heirGroups []string
+		if err := tx.Model(&ROMModel{}).Where("uploader_id = ? AND disc_group IS NOT NULL", heirID).Pluck("disc_group", &heirGroups).Error; err != nil {
+			return err
+		}
+		if len(heirGroups) > 0 {
+			if err := tx.Model(&ROMModel{}).Where("uploader_id = ? AND disc_group IN ?", userID, heirGroups).Update("disc_group", nil).Error; err != nil {
+				return err
+			}
+		}
 		for _, move := range []struct {
 			model  any
 			column string
@@ -117,6 +128,7 @@ func (repositories *Repositories) DeleteUserTransferringData(ctx context.Context
 			{&ROMModel{}, "uploader_id", &transfer.ROMs},
 			{&LibraryModel{}, "user_id", &transfer.Libraries},
 			{&UploadModel{}, "uploader_id", &transfer.Uploads},
+			{&BIOSModel{}, "uploader_id", &transfer.BIOS},
 		} {
 			result := tx.Model(move.model).Where(move.column+" = ?", userID).Update(move.column, heirID)
 			if result.Error != nil {

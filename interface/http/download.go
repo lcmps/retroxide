@@ -32,7 +32,8 @@ func writeDownload(c *gin.Context, output rom.DownloadOutput) int64 {
 }
 
 // writeArchive streams a download built as it is sent (a disc's zip), which has no length and
-// no byte ranges. An error midway leaves a truncated download the client sees as failed.
+// no byte ranges. An error midway marks the request for abortDownloadMiddleware, which drops the
+// connection so the client sees a failed download instead of a corrupt zip that looks complete.
 func writeArchive(c *gin.Context, output rom.DownloadOutput) int64 {
 	header := c.Writer.Header()
 	header.Del("ETag")
@@ -46,8 +47,24 @@ func writeArchive(c *gin.Context, output rom.DownloadOutput) int64 {
 	writer := &fileResponseWriter{ResponseWriter: c.Writer}
 	if err := output.Archive(writer); err != nil {
 		slog.ErrorContext(c.Request.Context(), "disc download failed midway", "error", err)
+		c.Set(downloadFailedKey, true)
 	}
 	return writer.sent
+}
+
+const downloadFailedKey = "download_failed"
+
+// abortFailedDownload drops the connection of a download that failed after its first bytes went
+// out; returning normally would end the chunked response cleanly and pass a truncated file off
+// as complete. It must run outside gin's recovery, which swallows http.ErrAbortHandler, and
+// net/http handles that panic by closing the connection without logging it.
+func abortFailedDownload() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		if failed, _ := c.Get(downloadFailedKey); failed == true {
+			panic(http.ErrAbortHandler)
+		}
+	}
 }
 
 // serveFile serves stored content through http.ServeContent and returns the body bytes sent.
@@ -111,6 +128,9 @@ type onlyWriter struct{ io.Writer }
 // bodyWasServed reports whether the response delivered file content (in full or as a range),
 // as opposed to a 304, a 416, or a body-less request.
 func bodyWasServed(c *gin.Context) bool {
+	if failed, _ := c.Get(downloadFailedKey); failed == true {
+		return false
+	}
 	status := c.Writer.Status()
 	return c.Request.Method != http.MethodHead && (status == http.StatusOK || status == http.StatusPartialContent)
 }

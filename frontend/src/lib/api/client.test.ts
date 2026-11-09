@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$app/env', () => ({ browser: true }));
 
-import { createDownloadLink, fetchRomCover, getRom, hasStoredSession, logoutSession, persistStoredSession, uploadRom } from './client';
+import { createDownloadLink, fetchRomCover, getRom, hasStoredSession, logoutSession, mergeRom, persistStoredSession, removeDisc, reorderDiscs, requestCompression, splitDisc, uploadRom } from './client';
 
 function jsonResponse(payload: unknown, status = 200): Response {
 	return new Response(JSON.stringify(payload), {
@@ -191,5 +191,82 @@ describe('proactive session refresh', () => {
 		await getRom('rom-1');
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('adds disc to the download link only when given', async () => {
+		persistStoredSession({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 });
+		const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ url: '/api/v1/download?token=t', filename: 'a.chd', expires_in: 60 }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await createDownloadLink('rom-1', 'chd');
+		await createDownloadLink('rom-1', 'chd', 2);
+		await createDownloadLink('rom-1', 'all');
+
+		expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+			'/api/v1/rom/rom-1/download-link?format=chd',
+			'/api/v1/rom/rom-1/download-link?format=chd&disc=2',
+			'/api/v1/rom/rom-1/download-link?format=all'
+		]);
+	});
+
+	it('adds disc to the compress request only when given', async () => {
+		persistStoredSession({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 });
+		const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({}));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await requestCompression('rom-1');
+		await requestCompression('rom-1', 3);
+
+		expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(['/api/v1/rom/rom-1/compress', '/api/v1/rom/rom-1/compress?disc=3']);
+	});
+	describe('disc management', () => {
+		function stubDiscRequests() {
+			persistStoredSession({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 });
+			const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ rom_id: 'rom-1' }));
+			vi.stubGlobal('fetch', fetchMock);
+			return fetchMock;
+		}
+
+		it('merges with the source ROM in the body', async () => {
+			const fetchMock = stubDiscRequests();
+
+			await mergeRom('rom-1', 'rom-2');
+
+			const [input, init] = fetchMock.mock.calls[0];
+			expect(String(input)).toBe('/api/v1/rom/rom-1/merge');
+			expect(init?.method).toBe('POST');
+			expect(JSON.parse(String(init?.body))).toEqual({ source_rom_id: 'rom-2' });
+		});
+
+		it('splits by disc number', async () => {
+			const fetchMock = stubDiscRequests();
+
+			await splitDisc('rom-1', 2);
+
+			const [input, init] = fetchMock.mock.calls[0];
+			expect(String(input)).toBe('/api/v1/rom/rom-1/discs/2/split');
+			expect(init?.method).toBe('POST');
+		});
+
+		it('reorders with every file ID', async () => {
+			const fetchMock = stubDiscRequests();
+
+			await reorderDiscs('rom-1', ['f2', 'f1']);
+
+			const [input, init] = fetchMock.mock.calls[0];
+			expect(String(input)).toBe('/api/v1/rom/rom-1/discs/order');
+			expect(init?.method).toBe('PUT');
+			expect(JSON.parse(String(init?.body))).toEqual({ rom_file_ids: ['f2', 'f1'] });
+		});
+
+		it('removes by disc number', async () => {
+			const fetchMock = stubDiscRequests();
+
+			await removeDisc('rom-1', 3, 'file/3');
+
+			const [input, init] = fetchMock.mock.calls[0];
+			expect(String(input)).toBe('/api/v1/rom/rom-1/discs/3?rom_file_id=file%2F3');
+			expect(init?.method).toBe('DELETE');
+		});
 	});
 });

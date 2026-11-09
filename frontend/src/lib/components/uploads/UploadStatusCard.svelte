@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import type { UploadState, UploadStatusResponse } from '#lib/api/types.js';
+	import { biosLibraryLink, uploadResultLabel } from '#lib/bios/panel.js';
 	import { getUploadProcessingErrorMessage } from '#lib/helpers/error.js';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
@@ -13,11 +15,24 @@
 		failed: ['uploads.status.failed', 'Failed']
 	};
 	const stateLabel = $derived(t(...STATE_LABELS[upload.status]));
+	const bios = $derived(upload.bios ? uploadResultLabel(upload.bios) : null);
 </script>
 
 <section class="status-card" aria-live="polite">
 	<p>{t('uploads.messages.id', 'Upload ID: {uploadId}', { uploadId: upload.upload_id })}</p>
 	<p>{t('uploads.messages.status', 'Status: {status}', { status: stateLabel })}</p>
+
+	{#if upload.bios && bios}
+		<p>
+			<a href={`${resolve('/')}${biosLibraryLink(upload.bios.platform).slice(1)}`}>
+				{bios.recognized && bios.details
+					? t('uploads.messages.biosAdded', 'Added as {platform} BIOS ({details})', { platform: bios.platform, details: bios.details })
+					: bios.recognized
+						? t('uploads.messages.biosAddedPlain', 'Added as {platform} BIOS', { platform: bios.platform })
+						: t('uploads.messages.biosUnrecognized', 'Added as {platform} BIOS (not recognized)', { platform: bios.platform })}
+			</a>
+		</p>
+	{/if}
 
 	{#if upload.rom_id}
 		<p>{t('uploads.messages.romId', 'ROM ID: {romId}', { romId: upload.rom_id })}</p>

@@ -7,6 +7,9 @@ type UploadModel struct {
 	Status           string  `gorm:"column:status;not null;size:32"`
 	ErrorMessage     *string `gorm:"column:error_message"`
 	ROMID            *string `gorm:"column:rom_id;size:64"`
+	BIOS             bool    `gorm:"column:bios;not null"`
+	BIOSPlatform     *string `gorm:"column:bios_platform;size:64"`
+	BIOSID           *string `gorm:"column:bios_id;size:64"`
 }
 
 func (UploadModel) TableName() string { return "upload" }
@@ -21,6 +24,9 @@ type UploadSessionModel struct {
 	HashState  []byte  `gorm:"column:hash_state;not null"`
 	UpdatedAt  int64   `gorm:"column:updated_at;not null;autoUpdateTime:false"`
 	Part       bool    `gorm:"column:part;not null"`
+	BIOS       bool    `gorm:"column:bios;not null"`
+	// BIOSPlatform is the platform a session marked as BIOS files is for.
+	BIOSPlatform *string `gorm:"column:bios_platform;size:64"`
 }
 
 type UploadPartModel struct {
@@ -79,7 +85,7 @@ func (DiscTrackModel) TableName() string { return "disc_track" }
 type ROMModel struct {
 	ID              string  `gorm:"column:id;primaryKey;size:64"`
 	ROMFileID       string  `gorm:"column:rom_file_id;not null;size:67;index:idx_rom_rom_file_id"`
-	UploaderID      string  `gorm:"column:uploader_id;not null;default:system;size:64;index:idx_rom_uploader_id"`
+	UploaderID      string  `gorm:"column:uploader_id;not null;default:system;size:64;index:idx_rom_uploader_id;uniqueIndex:idx_rom_uploader_disc_group,priority:1"`
 	Title           string  `gorm:"column:title;not null;size:255"`
 	Platform        string  `gorm:"column:platform;not null;size:64;index:idx_rom_platform"`
 	Region          *string `gorm:"column:region;size:64"`
@@ -94,9 +100,19 @@ type ROMModel struct {
 	Description     *string `gorm:"column:description;type:text"`
 	TitleScreenPath *string `gorm:"column:title_screen_path;type:text"`
 	ScreenshotPath  *string `gorm:"column:screenshot_path;type:text"`
+	DiscGroup       *string `gorm:"column:disc_group;size:64;uniqueIndex:idx_rom_uploader_disc_group,priority:2"`
 }
 
 func (ROMModel) TableName() string { return "rom" }
+
+type ROMDiscModel struct {
+	ROMID     string `gorm:"column:rom_id;primaryKey;size:64;uniqueIndex:uq_rom_disc_file,priority:1"`
+	Number    int    `gorm:"column:number;primaryKey;autoIncrement:false"`
+	ROMFileID string `gorm:"column:rom_file_id;not null;size:67;uniqueIndex:uq_rom_disc_file,priority:2;index:idx_rom_disc_rom_file_id"`
+	Filename  string `gorm:"column:filename;not null;size:255"`
+}
+
+func (ROMDiscModel) TableName() string { return "rom_disc" }
 
 type JobQueueModel struct {
 	ID          uint64  `gorm:"column:id;primaryKey;autoIncrement"`
@@ -173,6 +189,37 @@ type RefreshTokenModel struct {
 }
 
 func (RefreshTokenModel) TableName() string { return "refresh_tokens" }
+
+// BIOSModel is a BIOS file: shared by every user, one entry per stored file.
+type BIOSModel struct {
+	ID           string  `gorm:"column:id;primaryKey;size:64"`
+	ROMFileID    string  `gorm:"column:rom_file_id;not null;size:67"`
+	UploaderID   string  `gorm:"column:uploader_id;not null;size:64"`
+	Platform     string  `gorm:"column:platform;not null;size:64"`
+	Filename     string  `gorm:"column:filename;not null;size:255"`
+	ExpectedPath *string `gorm:"column:expected_path;type:text"`
+	Recognized   bool    `gorm:"column:recognized;not null"`
+	Region       *string `gorm:"column:region;size:64"`
+	Version      *string `gorm:"column:version;size:64"`
+	Model        *string `gorm:"column:model;size:64"`
+	ReleaseDate  *string `gorm:"column:release_date;size:16"`
+	Note         *string `gorm:"column:note;size:255"`
+	CreatedAt    string  `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP;autoCreateTime:false"`
+}
+
+func (BIOSModel) TableName() string { return "bios" }
+
+// ROMShareLinkModel is a single-use link adding a copy of a ROM to another user's library.
+type ROMShareLinkModel struct {
+	TokenHash string  `gorm:"column:token_hash;primaryKey;size:64"`
+	ROMID     string  `gorm:"column:rom_id;not null;size:64"`
+	CreatedBy string  `gorm:"column:created_by;not null;size:64"`
+	CreatedAt string  `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP;autoCreateTime:false"`
+	UsedBy    *string `gorm:"column:used_by;size:64"`
+	UsedAt    *string `gorm:"column:used_at"`
+}
+
+func (ROMShareLinkModel) TableName() string { return "rom_share_link" }
 
 type SchemaMigrationModel struct {
 	Version   uint64 `gorm:"column:version;primaryKey"`

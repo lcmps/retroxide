@@ -16,6 +16,9 @@ type Session struct {
 	UpdatedAt  time.Time
 	// Part marks one file of a disc: once complete it is kept as a Part, not accepted as a ROM.
 	Part bool
+	// BIOS marks the upload as BIOS files for BIOSPlatform.
+	BIOS         bool
+	BIOSPlatform *string
 }
 
 // Part is a finished file of a disc upload, waiting for the disc to be assembled.

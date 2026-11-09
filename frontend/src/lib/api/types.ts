@@ -17,6 +17,8 @@ export type RomSummary = {
   cover_art_url?: string | null;
   /** A small copy of the cover, for grids of many ROMs. */
   cover_thumb_url?: string | null;
+  /** How many discs the ROM has; 1 when the API sends none. */
+  disc_count: number;
 };
 
 export type RomListResponse = {
@@ -49,7 +51,59 @@ export type UploadStatusResponse = {
   status: UploadState;
   rom_id: string | null;
   error: string | null;
+  /** Set when the upload became a BIOS file instead of a game. */
+  bios_id?: string | null;
+  bios?: BiosUploadResult | null;
 };
+
+/** What a BIOS upload became. */
+export type BiosUploadResult = {
+  platform: string;
+  platform_name: string;
+  region: string | null;
+  version: string | null;
+  recognized: boolean;
+};
+
+/** What a share link offers, before it is redeemed. */
+export type SharePreview = {
+  title: string;
+  platform: string;
+  platform_name: string;
+  disc_count: number;
+  has_cover: boolean;
+  /** The viewer already has this ROM, so adding it would be refused. */
+  already_in_library: boolean;
+};
+
+/** Marks an upload as BIOS files for a platform. */
+export type BiosUploadOptions = { platform: string };
+
+/** A BIOS file, shared by every user. */
+export type Bios = {
+  bios_id: string;
+  platform: string;
+  platform_name: string;
+  /** The name it was uploaded with. */
+  filename: string;
+  /** Where emulators look for it; the uploaded name when not recognized. */
+  expected_path: string;
+  recognized: boolean;
+  region: string | null;
+  version: string | null;
+  model: string | null;
+  date: string | null;
+  note: string | null;
+  size: number;
+  sha256: string;
+  sha1: string;
+  md5: string;
+  crc32: string;
+  /** Whether the viewer may label or delete it. */
+  can_modify: boolean;
+};
+
+export type BiosLabels = Partial<Record<'region' | 'version' | 'model' | 'date' | 'note', string | null>>;
 
 export type RomHash = {
   sha256: string;
@@ -77,9 +131,22 @@ export type RomDetail = {
   disc?: RomDisc | null;
   /** The formats the ROM downloads in, the one it was uploaded in first. */
   downloads?: DownloadOption[];
+  /** Each disc of the title, in order; a single-disc ROM has one, and an old cached response none. */
+  discs?: RomDiscEntry[];
 };
 
-export type DownloadFormat = 'file' | 'chd' | 'tracks' | 'iso';
+/** One disc of a title, with its own file, tracks and download formats. */
+export type RomDiscEntry = {
+  number: number;
+  rom_file_id: string;
+  filename: string;
+  size: number;
+  hash: RomHash;
+  disc?: RomDisc | null;
+  downloads?: DownloadOption[];
+};
+
+export type DownloadFormat = 'file' | 'chd' | 'tracks' | 'iso' | 'all';
 
 export type DownloadOption = {
   format: DownloadFormat;
@@ -176,6 +243,8 @@ export type Platform = {
   key: string;
   name: string;
   rom_count: number;
+  /** BIOS files on the platform; a platform can have BIOS files and no games. */
+  bios_count: number;
 };
 
 export type UserRole = 'admin' | 'user';

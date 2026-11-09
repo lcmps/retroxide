@@ -174,3 +174,34 @@ func removeUnreferencedFiles(ctx context.Context, repositories *persistence.Repo
 	}
 	return removed, err
 }
+
+// biosListRefresher downloads a newer list of known BIOS files.
+type biosListRefresher interface {
+	Refresh(ctx context.Context) (changed bool, err error)
+}
+
+// biosRechecker looks unrecognized BIOS files up again.
+type biosRechecker interface {
+	RecheckUnrecognized(ctx context.Context) (int, error)
+}
+
+// refreshBIOSList returns a task refreshing the known BIOS list (at most daily; the list itself
+// skips fresh copies) and, when it changed, recognizing BIOS files it did not know before.
+func refreshBIOSList(list biosListRefresher, bioses biosRechecker) maintenanceTask {
+	return func(ctx context.Context, logger *slog.Logger) {
+		changed, err := list.Refresh(ctx)
+		if err != nil {
+			logger.Warn("could not refresh the list of known BIOS files", "error", err)
+			return
+		}
+		if !changed {
+			return
+		}
+		recognized, err := bioses.RecheckUnrecognized(ctx)
+		if err != nil {
+			logger.Warn("could not check BIOS files against the new list", "error", err, "recognized", recognized)
+		} else {
+			logger.Info("refreshed the list of known BIOS files", "recognized", recognized)
+		}
+	}
+}

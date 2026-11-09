@@ -3,21 +3,30 @@
 	import ActionButton from '#lib/components/ActionButton.svelte';
 	import UploadForm from '#lib/components/uploads/UploadForm.svelte';
 	import UploadQueueItem from '#lib/components/uploads/UploadQueueItem.svelte';
-	import { getUploadOptions } from '#lib/api/client.js';
+	import { getUploadOptions, listPlatformCatalog } from '#lib/api/client.js';
+	import type { BiosUploadOptions, Platform } from '#lib/api/types.js';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
 	import { groupDiscs } from '#lib/uploads/disc.js';
 	import { uploadQueue as queue } from '#lib/uploads/shared.js';
 
 	const t = useTranslate(i18n);
-	/** Picked discs (a sheet and its track files) upload as one; other files on their own. */
-	async function addFiles(files: File[], compressDiscs: boolean): Promise<void> {
+	/**
+	 * Picked discs (a sheet and its track files) upload as one; other files on their own. BIOS
+	 * files always upload one by one, never as a disc.
+	 */
+	async function addFiles(files: File[], compressDiscs: boolean, bios?: BiosUploadOptions): Promise<void> {
+		if (bios) {
+			queue.add(files, bios);
+			return;
+		}
 		const { discs, others } = await groupDiscs(files);
 		queue.add(others);
 		for (const disc of discs) queue.addDisc({ ...disc, compress: compressDiscs });
 	}
 
 	let compression = $state<{ available: boolean; byDefault: boolean }>();
+	let biosPlatforms = $state<Platform[]>([]);
 
 	const hasFinished = $derived(queue.items.some((item) => item.finished));
 
@@ -26,6 +35,9 @@
 		getUploadOptions()
 			.then((options) => (compression = { available: options.disc_compression, byDefault: options.disc_compression_default }))
 			.catch(() => (compression = { available: false, byDefault: false }));
+		listPlatformCatalog()
+			.then((catalog) => (biosPlatforms = catalog))
+			.catch(() => (biosPlatforms = []));
 	});
 </script>
 
@@ -41,7 +53,7 @@
 		<!-- Held until the options are known: the compression choice would push the form down. -->
 		{#if compression}
 			<div class="upload-workspace stack">
-				<UploadForm onupload={(files, compressDiscs) => void addFiles(files, compressDiscs)} {compression} />
+				<UploadForm onupload={(files, compressDiscs, bios) => void addFiles(files, compressDiscs, bios)} {compression} {biosPlatforms} />
 
 				{#if queue.items.length > 0}
 					<ul class="upload-queue stack" aria-label={t('uploads.queue.label', 'Upload queue')}>

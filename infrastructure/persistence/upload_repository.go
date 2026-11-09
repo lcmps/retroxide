@@ -48,6 +48,7 @@ func uploadModel(upload uploadsdomain.Upload) UploadModel {
 	return UploadModel{
 		ID: upload.ID, UploaderID: upload.UploaderID, OriginalFilename: upload.OriginalFilename,
 		Status: string(upload.Status), ErrorMessage: upload.ErrorMessage, ROMID: upload.ROMID,
+		BIOS: upload.BIOS, BIOSPlatform: upload.BIOSPlatform, BIOSID: upload.BIOSID,
 	}
 }
 
@@ -55,20 +56,8 @@ func uploadEntity(model UploadModel) uploadsdomain.Upload {
 	return uploadsdomain.Upload{
 		ID: model.ID, UploaderID: model.UploaderID, OriginalFilename: model.OriginalFilename,
 		Status: uploadsdomain.UploadStatus(model.Status), ErrorMessage: model.ErrorMessage, ROMID: model.ROMID,
+		BIOS: model.BIOS, BIOSPlatform: model.BIOSPlatform, BIOSID: model.BIOSID,
 	}
-}
-
-func (repositories *Repositories) FindUploadedFilename(ctx context.Context, romID string) (*string, error) {
-	var filenames []string
-	if err := repositories.DB.WithContext(ctx).Model(&UploadModel{}).
-		Where("rom_id = ?", romID).Order("id").Limit(1).
-		Pluck("original_filename", &filenames).Error; err != nil {
-		return nil, databaseError("finding uploaded filename", err)
-	}
-	if len(filenames) == 0 {
-		return nil, nil
-	}
-	return &filenames[0], nil
 }
 
 func (repositories *Repositories) FindROMIDByUploadID(ctx context.Context, uploadID string) (*string, error) {
