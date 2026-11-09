@@ -223,6 +223,9 @@ func (service *UploadService) CheckSessionDuplicate(ctx context.Context, request
 	if err != nil || existing == nil {
 		return err
 	}
+	if shown, err := service.libraryShows(ctx, *existing); err != nil || !shown {
+		return err
+	}
 	if service.audit != nil {
 		service.audit.DuplicateUpload(ctx, existing.ID, sha256)
 	}

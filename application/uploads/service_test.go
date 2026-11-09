@@ -20,6 +20,15 @@ type testROMRepository struct {
 	existing  *romdomain.ROMFile
 	saved     []romdomain.ROMFile
 	upsertErr error
+	// unused makes the existing file one no ROM uses, as a failed identification leaves it.
+	unused bool
+}
+
+func (repository *testROMRepository) CountROMsByROMFileID(context.Context, string) (uint64, error) {
+	if repository.unused {
+		return 0, nil
+	}
+	return 1, nil
 }
 
 func (repository *testROMRepository) FindROMFileBySHA256(_ context.Context, _ string) (*romdomain.ROMFile, error) {
@@ -364,5 +373,41 @@ func TestUploadServiceRefusesUploadsThatDoNotFitBeforeWritingThem(t *testing.T) 
 	service.policy.MaxUploadBytes = 10
 	if err := upload(1 << 30); fault.IsCode(err, fault.CodeInsufficientStorage) {
 		t.Fatalf("over-limit upload reported as a full disk")
+	}
+}
+
+// A file that no title uses is what a failed identification leaves behind. Uploading it again
+// must reach the library rather than be refused as a copy of something the library doesn't show.
+func TestUploadServiceIdentifiesAStoredFileNoTitleUsesAgain(t *testing.T) {
+	hasher := romhash.New()
+	romFileHash, err := hasher.Hash([]byte("abc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	romRepository := &testROMRepository{existing: &romdomain.ROMFile{ID: "rf-existing", Hash: romFileHash}, unused: true}
+	uploads := &testUploadRepository{}
+	storage := &testStorage{}
+	queue := &testQueue{}
+	service := NewUploadService(romRepository, uploads, storage, hasher, queue, &testAudit{}, UploadPolicy{
+		MaxUploadBytes:    1024,
+		AllowedExtensions: []string{"sfc"},
+	})
+
+	accepted, err := service.Create(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleUser}, UploadInput{
+		Filename: "game.sfc",
+		Content:  bytes.NewReader([]byte("abc")),
+	})
+	if err != nil {
+		t.Fatalf("Create() = %v, want the upload accepted", err)
+	}
+	if accepted.UploadID == "" || len(uploads.jobs) != 1 || uploads.jobs[0].Kind != jobsdomain.KindIdentifyROM || uploads.jobs[0].ROMFileID != "rf-existing" {
+		t.Fatalf("accepted = %+v, jobs = %+v; want identification queued for the stored file", accepted, uploads.jobs)
+	}
+	if uploads.saved[0].UploaderID != "user-1" || uploads.saved[0].OriginalFilename != "game.sfc" {
+		t.Fatalf("upload = %+v, want the new upload's owner and name", uploads.saved[0])
+	}
+	// The identical content is already stored: nothing new is written or recorded.
+	if storage.writes != 0 || storage.pending() != 0 || len(romRepository.saved) != 0 {
+		t.Fatalf("storage writes=%d pending=%d rom files saved=%d, want none", storage.writes, storage.pending(), len(romRepository.saved))
 	}
 }
