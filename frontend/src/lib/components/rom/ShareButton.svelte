@@ -61,9 +61,13 @@
 
 <style>
 	.share {
+		/* A row of its own under the ROM's actions, as wide as the page allows. */
+		grid-column: 1 / -1;
 		display: grid;
 		gap: 0.6rem;
 		justify-items: start;
+		width: 100%;
+		max-width: 40rem;
 		min-width: 0;
 	}
 

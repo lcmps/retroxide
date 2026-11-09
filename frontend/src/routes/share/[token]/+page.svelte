@@ -87,9 +87,11 @@
 					<p role="status">{t('share.page.already', 'This ROM is already in your library.')}</p>
 					<a href={resolve('/library')}>{t('share.page.openLibrary', 'Open your library')}</a>
 				{:else}
-					<ActionButton type="button" onclick={add} disabled={adding} aria-busy={adding}>
-						{adding ? t('share.page.adding', 'Adding...') : t('share.page.add', 'Add to my library')}
-					</ActionButton>
+					<div class="share-add">
+						<ActionButton type="button" onclick={add} disabled={adding} aria-busy={adding}>
+							{adding ? t('share.page.adding', 'Adding...') : t('share.page.add', 'Add to my library')}
+						</ActionButton>
+					</div>
 				{/if}
 			</div>
 		</article>
@@ -132,6 +134,10 @@
 		font-size: 0.9rem;
 		line-height: 1.5;
 		overflow-wrap: anywhere;
+	}
+
+	.share-add {
+		justify-self: start;
 	}
 
 	.muted {
