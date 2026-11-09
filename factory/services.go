@@ -16,6 +16,7 @@ import (
 	"github.com/lcmps/retroxide/application/jobs"
 	"github.com/lcmps/retroxide/application/libraries"
 	"github.com/lcmps/retroxide/application/rom"
+	"github.com/lcmps/retroxide/application/share"
 	"github.com/lcmps/retroxide/application/uploads"
 	"github.com/lcmps/retroxide/application/users"
 	"github.com/lcmps/retroxide/infrastructure/biosdat"
@@ -58,6 +59,8 @@ type Services struct {
 	// cannot be read, which leaves BIOS support off.
 	BIOS     *bios.Service
 	BIOSList *biosdat.Catalog
+	// Share makes and redeems single-use links that copy a ROM into another library.
+	Share *share.Service
 }
 
 func NewServices(settings config.Config, repositories *persistence.Repositories, queue *jobs.NotifyingQueue, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
@@ -98,6 +101,7 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 		Clients:       auth.NewClientService(repositories),
 		Authenticator: auth.NewAuthenticator(tokens, repositories, repositories),
 		Identifier:    persistence.NewIdentifier(repositories.DB).WithDiscs(discService),
+		Share:         share.NewService(repositories, storage),
 	}
 	if biosList != nil {
 		services.BIOSList = biosList
