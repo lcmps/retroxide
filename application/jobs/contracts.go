@@ -25,6 +25,10 @@ type Identifier interface {
 	Identify(context.Context, string, string) error
 }
 
+type FilenameCompleter interface {
+	CompleteWithFilename(context.Context, string, string) error
+}
+
 // UploadScraper fetches metadata for the ROM an upload created.
 type UploadScraper interface {
 	ScrapeUpload(ctx context.Context, uploadID string) error

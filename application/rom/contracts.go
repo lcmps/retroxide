@@ -12,7 +12,8 @@ import (
 
 type Repository interface {
 	UpsertROMFile(context.Context, romdomain.ROMFile) (romdomain.ROMFile, error)
-	SaveROM(context.Context, romdomain.ROM) error
+	// UpdateROM writes an existing ROM's metadata; a ROM removed since it was loaded is not found.
+	UpdateROM(context.Context, romdomain.ROM) error
 	// FindDiscTracks returns a disc's tracks in order; none for other files.
 	FindDiscTracks(ctx context.Context, romFileID string) ([]romdomain.DiscTrack, error)
 	// SetCoverThumbnail records a ROM's cover thumbnail, unless its cover has changed since.
@@ -23,9 +24,6 @@ type Repository interface {
 	FindROMFileByID(context.Context, string) (*romdomain.ROMFile, error)
 	FindROMFileBySHA256(context.Context, string) (*romdomain.ROMFile, error)
 	FindROMFileByROMID(context.Context, string) (*romdomain.ROMFile, error)
-	// FindUploadedFilename returns the original filename of the upload that created the ROM,
-	// or nil when no upload is linked to it.
-	FindUploadedFilename(ctx context.Context, romID string) (*string, error)
 	// FindROMIDByUploadID returns the ROM an upload created, or nil while it has none.
 	FindROMIDByUploadID(ctx context.Context, uploadID string) (*string, error)
 	// ListPlatforms counts ROMs per platform, restricted to one uploader when uploaderID is set.
@@ -34,6 +32,17 @@ type Repository interface {
 	DeleteROM(context.Context, string) error
 	DeleteROMFile(context.Context, string) error
 	HardDeleteROM(context.Context, string, func(string) error) error
+	// FindROMDiscs returns a ROM's discs ordered by number.
+	FindROMDiscs(ctx context.Context, romID string) ([]romdomain.ROMDisc, error)
+	// MergeROMs moves the source's discs, uploads and library entries onto the target and deletes
+	// the source; deletePath removes files nothing references afterwards.
+	MergeROMs(ctx context.Context, targetID, sourceID string, deletePath func(string) error) error
+	// SplitROMDisc moves one disc of a ROM with several onto a new ROM, newROMID.
+	SplitROMDisc(ctx context.Context, romID, romFileID, newROMID string) error
+	// ReorderROMDiscs numbers the discs in the order of romFileIDs, which must name each once.
+	ReorderROMDiscs(ctx context.Context, romID string, romFileIDs []string) error
+	// HardDeleteROMDisc removes one disc, and its file unless another ROM has it.
+	HardDeleteROMDisc(ctx context.Context, romID, romFileID string, deletePath func(string) error) error
 }
 
 // PlatformCount is how many ROMs carry a platform. Platform is the stored value as first seen;
@@ -104,6 +113,8 @@ type ListRequest struct {
 // Discs writes discs in their download formats and compresses them.
 type Discs interface {
 	Archive(ctx context.Context, romFile romdomain.ROMFile, base string, out io.Writer) error
+	// ArchiveDiscs writes every disc of a title in one zip, with a playlist named after title.
+	ArchiveDiscs(ctx context.Context, title string, discs []romdomain.ArchiveDisc, out io.Writer) error
 	ISO(ctx context.Context, romFile romdomain.ROMFile, out io.Writer) error
 	RequestCompression(ctx context.Context, romFile romdomain.ROMFile) error
 	CanCompressFile(ctx context.Context, romFile romdomain.ROMFile) bool
@@ -124,6 +135,8 @@ const (
 	DownloadTracks DownloadFormat = "tracks"
 	// DownloadISO is a single-track data disc as an ISO image.
 	DownloadISO DownloadFormat = "iso"
+	// DownloadAll is a zip of every disc of a title, with a playlist.
+	DownloadAll DownloadFormat = "all"
 )
 
 // Thumbnailer makes the small cover copies library grids show.
@@ -186,12 +199,14 @@ type API interface {
 	Update(context.Context, identity.Requester, string, UpdateROMRequest) (ROMDetailDTO, error)
 	Delete(context.Context, identity.Requester, string) error
 	Download(context.Context, identity.Requester, string) (DownloadOutput, error)
-	// DownloadAs downloads a ROM in one of the formats its details list.
-	DownloadAs(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat) (DownloadOutput, error)
-	// RequestCompression asks for a disc kept as tracks to be compressed to CHD.
-	RequestCompression(context.Context, identity.Requester, string) (ROMDetailDTO, error)
+	// DownloadAs downloads a ROM in one of the formats its details list. disc is the number of
+	// the disc to download, or 0 for none.
+	DownloadAs(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat, disc int) (DownloadOutput, error)
+	// RequestCompression asks for a disc kept as tracks to be compressed to CHD; disc 0 asks for
+	// every disc of a title that can be.
+	RequestCompression(ctx context.Context, requester identity.Requester, romID string, disc int) (ROMDetailDTO, error)
 	// DownloadFilename returns the name an accessible ROM is downloaded as.
-	DownloadFilename(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat) (string, error)
+	DownloadFilename(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat, disc int) (string, error)
 	UploadCover(context.Context, identity.Requester, string, []byte) (ROMDetailDTO, error)
 	OpenCover(context.Context, identity.Requester, string) (Image, error)
 	// OpenCoverThumbnail opens the small copy of the cover that library grids show.
@@ -200,6 +215,15 @@ type API interface {
 	OpenMedia(context.Context, identity.Requester, string, string) (Image, error)
 	// Platforms lists the platforms of the ROMs the requester can see.
 	Platforms(context.Context, identity.Requester) ([]PlatformDTO, error)
+	// MergeROM moves the source ROM's discs onto the target and deletes the source.
+	MergeROM(ctx context.Context, requester identity.Requester, targetID, sourceID string) (ROMDetailDTO, error)
+	// SplitDisc turns a disc into a ROM of its own and returns that ROM.
+	SplitDisc(ctx context.Context, requester identity.Requester, romID string, number int) (ROMDetailDTO, error)
+	// ReorderDiscs numbers the discs in the order of romFileIDs, which must name each once.
+	ReorderDiscs(ctx context.Context, requester identity.Requester, romID string, romFileIDs []string) (ROMDetailDTO, error)
+	// RemoveDisc deletes one disc of a ROM that has several; romFileID must be the file now
+	// numbered number, or the call is a conflict.
+	RemoveDisc(ctx context.Context, requester identity.Requester, romID string, number int, romFileID string) (ROMDetailDTO, error)
 	// PlatformCatalog lists every known platform, for choosing one when editing a ROM.
 	PlatformCatalog() []PlatformDTO
 }

@@ -104,6 +104,18 @@ func TestMySQLURLConvertsToDriverDSN(t *testing.T) {
 	if parsed, err := mysql.ParseDSN(optOut); err != nil || parsed.InterpolateParams {
 		t.Fatalf("interpolateParams=false should opt out: %+v, %v", parsed, err)
 	}
+	// MySQL counts only rows an UPDATE changed; every RowsAffected check here expects the rows it
+	// matched, as SQLite reports. A URL cannot turn that off.
+	if !parsed.ClientFoundRows {
+		t.Fatal("updates must report the rows they matched, as on SQLite")
+	}
+	forced, err := mysqlDSN("mysql://retro:secret@db.example.test:3307/library?clientFoundRows=false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed, err := mysql.ParseDSN(forced); err != nil || !parsed.ClientFoundRows {
+		t.Fatalf("clientFoundRows=false must not turn matched-row counts off: %+v, %v", parsed, err)
+	}
 	if _, err := mysqlDSN("mysql://retro@db.example.test/library?interpolateParams=maybe"); err == nil {
 		t.Fatal("an invalid interpolateParams value should be rejected")
 	}

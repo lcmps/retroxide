@@ -79,7 +79,7 @@ func (DiscTrackModel) TableName() string { return "disc_track" }
 type ROMModel struct {
 	ID              string  `gorm:"column:id;primaryKey;size:64"`
 	ROMFileID       string  `gorm:"column:rom_file_id;not null;size:67;index:idx_rom_rom_file_id"`
-	UploaderID      string  `gorm:"column:uploader_id;not null;default:system;size:64;index:idx_rom_uploader_id"`
+	UploaderID      string  `gorm:"column:uploader_id;not null;default:system;size:64;index:idx_rom_uploader_id;uniqueIndex:idx_rom_uploader_disc_group,priority:1"`
 	Title           string  `gorm:"column:title;not null;size:255"`
 	Platform        string  `gorm:"column:platform;not null;size:64;index:idx_rom_platform"`
 	Region          *string `gorm:"column:region;size:64"`
@@ -94,9 +94,19 @@ type ROMModel struct {
 	Description     *string `gorm:"column:description;type:text"`
 	TitleScreenPath *string `gorm:"column:title_screen_path;type:text"`
 	ScreenshotPath  *string `gorm:"column:screenshot_path;type:text"`
+	DiscGroup       *string `gorm:"column:disc_group;size:64;uniqueIndex:idx_rom_uploader_disc_group,priority:2"`
 }
 
 func (ROMModel) TableName() string { return "rom" }
+
+type ROMDiscModel struct {
+	ROMID     string `gorm:"column:rom_id;primaryKey;size:64;uniqueIndex:uq_rom_disc_file,priority:1"`
+	Number    int    `gorm:"column:number;primaryKey;autoIncrement:false"`
+	ROMFileID string `gorm:"column:rom_file_id;not null;size:67;uniqueIndex:uq_rom_disc_file,priority:2;index:idx_rom_disc_rom_file_id"`
+	Filename  string `gorm:"column:filename;not null;size:255"`
+}
+
+func (ROMDiscModel) TableName() string { return "rom_disc" }
 
 type JobQueueModel struct {
 	ID          uint64  `gorm:"column:id;primaryKey;autoIncrement"`

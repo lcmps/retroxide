@@ -58,19 +58,6 @@ func uploadEntity(model UploadModel) uploadsdomain.Upload {
 	}
 }
 
-func (repositories *Repositories) FindUploadedFilename(ctx context.Context, romID string) (*string, error) {
-	var filenames []string
-	if err := repositories.DB.WithContext(ctx).Model(&UploadModel{}).
-		Where("rom_id = ?", romID).Order("id").Limit(1).
-		Pluck("original_filename", &filenames).Error; err != nil {
-		return nil, databaseError("finding uploaded filename", err)
-	}
-	if len(filenames) == 0 {
-		return nil, nil
-	}
-	return &filenames[0], nil
-}
-
 func (repositories *Repositories) FindROMIDByUploadID(ctx context.Context, uploadID string) (*string, error) {
 	var romIDs []*string
 	if err := repositories.DB.WithContext(ctx).Model(&UploadModel{}).

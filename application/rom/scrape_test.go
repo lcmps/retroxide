@@ -15,10 +15,15 @@ type fakeScraper struct {
 	result *ScrapeResult
 	err    error
 	query  ScrapeQuery
+	// during runs while the lookup is in flight.
+	during func()
 }
 
 func (scraper *fakeScraper) Scrape(_ context.Context, query ScrapeQuery) (*ScrapeResult, error) {
 	scraper.query = query
+	if scraper.during != nil {
+		scraper.during()
+	}
 	return scraper.result, scraper.err
 }
 
@@ -310,5 +315,24 @@ func TestCoverThumbnailsAreMadeOnFirstRequestForOlderCovers(t *testing.T) {
 	service = NewService(repository, storage, romTestAudit{}, nil).WithThumbnails(thumbnailer)
 	if _, err := service.OpenCoverThumbnail(context.Background(), owner, "rom-1"); !fault.IsCode(err, fault.CodeNotFound) {
 		t.Fatalf("thumbnail without cover = %v, want not found", err)
+	}
+}
+
+func TestAScrapeFinishingAfterTheROMWasRemovedStoresNothing(t *testing.T) {
+	repository, storage := scrapeFixture(t, romdomain.ROMIdentity{Title: "smw", Platform: "snes", IdentifiedBy: romdomain.IdentifiedByFilename})
+	repository.uploadROMs = map[string]string{"upl-1": "rom-1"}
+	scraper := &fakeScraper{result: &ScrapeResult{Source: "hasheous", Title: "Super Mario World"}}
+	scraper.during = func() { delete(repository.roms, "rom-1") } // a merge or deletion commits meanwhile
+	service := NewService(repository, storage, romTestAudit{}, scraper)
+	ctx := context.Background()
+
+	if _, err := service.Scrape(ctx, owner, "rom-1"); !fault.IsCode(err, fault.CodeNotFound) {
+		t.Fatalf("Scrape() = %v, want not found", err)
+	}
+	if err := service.ScrapeUpload(ctx, "upl-1"); err != nil {
+		t.Fatalf("ScrapeUpload() = %v, want nil", err)
+	}
+	if len(repository.roms) != 0 {
+		t.Errorf("roms = %v, want none stored", repository.roms)
 	}
 }

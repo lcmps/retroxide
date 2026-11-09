@@ -68,6 +68,7 @@ func NewRouter(dependencies Dependencies, options Options) *gin.Engine {
 		_ = router.SetTrustedProxies(nil)
 	}
 	router.Use(
+		abortFailedDownload(),
 		gin.CustomRecovery(func(c *gin.Context, recovered any) {
 			slog.ErrorContext(c.Request.Context(), "http handler panic", "panic", recovered)
 			writeError(c, fault.Internal(errors.New("http handler panic")))

@@ -165,7 +165,7 @@ func discTrackEntity(model DiscTrackModel) (romdomain.DiscTrack, error) {
 func (repositories *Repositories) DeleteUnusedROMFile(ctx context.Context, romFileID string) error {
 	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var used int64
-		if err := tx.Model(&ROMModel{}).Where("rom_file_id = ?", romFileID).Count(&used).Error; err != nil || used > 0 {
+		if err := tx.Model(&ROMDiscModel{}).Where("rom_file_id = ?", romFileID).Count(&used).Error; err != nil || used > 0 {
 			return err
 		}
 		if err := tx.Where("rom_file_id = ?", romFileID).Delete(&DiscTrackModel{}).Error; err != nil {

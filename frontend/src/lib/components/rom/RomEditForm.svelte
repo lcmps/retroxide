@@ -11,9 +11,11 @@
 		rom: RomDetail;
 		onsaved: (rom: RomDetail) => void;
 		oncancel: () => void;
+		/** True while something else, such as a disc change, is changing the ROM. */
+		disabled?: boolean;
 	};
 
-	let { rom, onsaved, oncancel }: Props = $props();
+	let { rom, onsaved, oncancel, disabled = false }: Props = $props();
 
 	const t = useTranslate(i18n);
 	const id = $props.id();
@@ -148,7 +150,7 @@
 	{/if}
 
 	<div class="actions">
-		<ActionButton type="submit" disabled={saving || titleMissing} aria-busy={saving}>
+		<ActionButton type="submit" disabled={saving || titleMissing || disabled} aria-busy={saving}>
 			{saving ? t('common.status.saving', 'Saving...') : t('rom.edit.save', 'Save changes')}
 		</ActionButton>
 		<ActionButton type="button" variant="secondary" class="cancel" disabled={saving} onclick={oncancel}>

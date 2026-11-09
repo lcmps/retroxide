@@ -43,7 +43,7 @@ export function parseRomListResponse(value: unknown): RomListResponse {
 		const optionalUrl = (value: unknown) => typeof value === 'string' || value === null || value === undefined;
 		if (!optionalUrl(rom.cover_art_url) || !optionalUrl(rom.cover_thumb_url)) throw new Error('Invalid ROM list response');
 		const platformName = typeof rom.platform_name === 'string' && rom.platform_name ? rom.platform_name : rom.platform;
-		return { rom_id: rom.rom_id, title: rom.title, platform: rom.platform, platform_name: platformName, sha256: rom.sha256, cover_art_url: (rom.cover_art_url as string | null | undefined) ?? null, cover_thumb_url: (rom.cover_thumb_url as string | null | undefined) ?? null };
+		return { rom_id: rom.rom_id, title: rom.title, platform: rom.platform, platform_name: platformName, sha256: rom.sha256, cover_art_url: (rom.cover_art_url as string | null | undefined) ?? null, cover_thumb_url: (rom.cover_thumb_url as string | null | undefined) ?? null, disc_count: typeof rom.disc_count === 'number' && rom.disc_count >= 1 ? rom.disc_count : 1 };
 	});
 
 	return { item, next_cursor: payload.next_cursor };

@@ -83,6 +83,10 @@ func TestParseSheetRejectsWhatItCannotUse(t *testing.T) {
 		"no tracks":          {SheetCUE, "REM nothing\n"},
 		"wave file":          {SheetCUE, "FILE \"a.wav\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"},
 		"path in name":       {SheetCUE, "FILE \"../a.bin\" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"},
+		"dot name":           {SheetCUE, "FILE \".\" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"},
+		"dot dot name":       {SheetCUE, "FILE \"..\" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"},
+		"gdi dot name":       {SheetGDI, "1\n1 0 4 2352 . 0\n"},
+		"gdi dot dot name":   {SheetGDI, "1\n1 0 4 2352 .. 0\n"},
 		"no index":           {SheetCUE, "FILE \"a.bin\" BINARY\n  TRACK 01 AUDIO\n"},
 		"bad mode":           {SheetCUE, "FILE \"a.bin\" BINARY\n  TRACK 01 CDG\n    INDEX 01 00:00:00\n"},
 		"out of order":       {SheetCUE, "FILE \"a.bin\" BINARY\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n"},
@@ -100,5 +104,14 @@ func TestParseSheetRejectsWhatItCannotUse(t *testing.T) {
 	}
 	if _, err := sheet.Layout(map[string]int64{"Game (Track 1).bin": 2352, "Game (Track 2).bin": 1000}); !fault.IsCode(err, fault.CodeValidation) {
 		t.Errorf("partial sector: %v", err)
+	}
+}
+
+func TestParseSheetAllowsDotsInsideNames(t *testing.T) {
+	if _, err := ParseSheet(SheetCUE, "FILE \"a..b.bin\" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"); err != nil {
+		t.Errorf("CUE: %v", err)
+	}
+	if _, err := ParseSheet(SheetGDI, "1\n1 0 4 2352 ...bin 0\n"); err != nil {
+		t.Errorf("GDI: %v", err)
 	}
 }

@@ -94,12 +94,14 @@
 		<ul class="rom-gallery" aria-label={t('library.roms.title', 'ROM Catalog')} aria-busy={pager.loading}>
 			{#each pager.items as rom (rom.rom_id)}
 				{@const badge = platformBadge(rom.platform)}
+				{@const discs = rom.disc_count > 1 ? t('library.discCount', '{count} discs', { count: rom.disc_count }) : ''}
 				<li>
 					<!-- The cover is hidden from screen readers, so the link names the platform the badge shows. -->
-					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={rom.platform_name ? `${rom.title}, ${rom.platform_name}` : rom.title}>
+					<a class="rom-tile" href={resolve("/rom/[rom_id]", { rom_id: rom.rom_id })} aria-label={[rom.title, rom.platform_name, discs].filter(Boolean).join(", ")}>
 						<div class="rom-cover" aria-hidden="true">
 							<RomCover romId={rom.rom_id} coverArtUrl={rom.cover_art_url} coverThumbUrl={rom.cover_thumb_url} />
 							{#if badge}<div class="rom-platform">{badge}</div>{/if}
+							{#if discs}<div class="rom-discs">{discs}</div>{/if}
 						</div>
 						<Tooltip.Root>
 							<Tooltip.Trigger>
@@ -111,6 +113,7 @@
 								<Tooltip.Content class="rom-tooltip" sideOffset={6}>
 									<p class="rom-tooltip__title">{rom.title}</p>
 									<p class="rom-tooltip__platform">{rom.platform_name}</p>
+									{#if discs}<p class="rom-tooltip__platform">{discs}</p>{/if}
 								</Tooltip.Content>
 							</Tooltip.Portal>
 						</Tooltip.Root>
@@ -196,6 +199,25 @@
 		font-size: 0.5rem;
 		line-height: 1;
 		text-align: center;
+		white-space: nowrap;
+	}
+
+	/* Same plate as the platform's, at the top right so the two never meet. */
+	.rom-discs {
+		position: absolute;
+		top: 0.5625rem;
+		right: 0.5625rem;
+		max-width: calc(100% - 1.125rem);
+		padding: 0.3125rem 0.4375rem 0.25rem;
+		background: var(--pixel-bg);
+		box-shadow:
+			0 -2px 0 var(--pixel-accent-strong),
+			0 2px 0 var(--pixel-accent-strong),
+			-2px 0 0 var(--pixel-accent-strong),
+			2px 0 0 var(--pixel-accent-strong);
+		color: #ffffff;
+		font-size: 0.5rem;
+		line-height: 1;
 		white-space: nowrap;
 	}
 

@@ -19,6 +19,15 @@ import (
 type uploadROMRepository interface {
 	FindROMFileBySHA256(context.Context, string) (*romdomain.ROMFile, error)
 	UpsertROMFile(context.Context, romdomain.ROMFile) (romdomain.ROMFile, error)
+	// CountROMsByROMFileID counts the ROMs using a stored file as one of their discs.
+	CountROMsByROMFileID(context.Context, string) (uint64, error)
+}
+
+// libraryShows reports whether a stored file belongs to a ROM. One that doesn't is left by an
+// upload whose identification failed: the library never shows it, so it is not a duplicate.
+func (service *UploadService) libraryShows(ctx context.Context, romFile romdomain.ROMFile) (bool, error) {
+	uses, err := service.romRepository.CountROMsByROMFileID(ctx, romFile.ID)
+	return uses > 0, err
 }
 
 type uploadRecordRepository interface {
@@ -166,6 +175,16 @@ func (service *UploadService) accept(
 	if existing != nil {
 		if !existing.Hash.MatchesContent(hash) {
 			return UploadAcceptedDTO{}, false, fault.Internal(errors.New("sha256 lookup returned different hashes"))
+		}
+		shown, err := service.libraryShows(ctx, *existing)
+		if err != nil {
+			return UploadAcceptedDTO{}, false, err
+		}
+		if !shown {
+			// The same content is already stored, so this upload's copy is not kept: the stored
+			// file is identified again for this upload.
+			accepted, err := service.record(ctx, requester, filename, *existing)
+			return accepted, false, err
 		}
 		if service.audit != nil {
 			service.audit.DuplicateUpload(ctx, existing.ID, hash.SHA256)

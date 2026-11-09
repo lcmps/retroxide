@@ -131,7 +131,7 @@ func parseCUE(text string) (Sheet, error) {
 				return Sheet{}, invalidSheet("line %d: only BINARY track files are supported, not %s", line, kind)
 			}
 			file = strings.Join(fields[1:len(fields)-1], " ")
-			if file == "" || strings.ContainsAny(file, "/\\") {
+			if file == "" || file == "." || file == ".." || strings.ContainsAny(file, "/\\") {
 				return Sheet{}, invalidSheet("line %d: track files must be plain names in the same folder", line)
 			}
 		case "TRACK":
@@ -262,7 +262,7 @@ func parseGDI(text string) (Sheet, error) {
 			return Sheet{}, invalidSheet("line %d: unsupported track type %d", line, kind)
 		}
 		file := fields[4]
-		if strings.ContainsAny(file, "/\\") {
+		if file == "." || file == ".." || strings.ContainsAny(file, "/\\") {
 			return Sheet{}, invalidSheet("line %d: track files must be plain names in the same folder", line)
 		}
 		sheet.Tracks = append(sheet.Tracks, SheetTrack{Number: number, Mode: mode, SectorBytes: size, File: file})

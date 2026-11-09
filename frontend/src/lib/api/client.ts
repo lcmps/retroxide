@@ -623,8 +623,39 @@ export function getUploadOptions(): Promise<UploadOptions> {
 }
 
 /** Asks for a disc kept as tracks to be compressed to CHD in the background. */
-export function requestCompression(romId: string): Promise<RomDetail> {
-  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/compress`, { method: 'POST', withAuth: true });
+export function requestCompression(romId: string, disc?: number): Promise<RomDetail> {
+  const query = disc ? `?disc=${disc}` : '';
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/compress${query}`, { method: 'POST', withAuth: true });
+}
+
+/** Moves every disc of the source ROM onto this one and deletes the source. */
+export function mergeRom(romId: string, sourceRomId: string): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/merge`, {
+    method: 'POST',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_rom_id: sourceRomId })
+  });
+}
+
+/** Turns one disc into a ROM of its own; resolves with that new ROM. */
+export function splitDisc(romId: string, number: number): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/discs/${number}/split`, { method: 'POST', withAuth: true });
+}
+
+/** Numbers the discs in the order of the file IDs, which must name every disc. */
+export function reorderDiscs(romId: string, romFileIds: string[]): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/discs/order`, {
+    method: 'PUT',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rom_file_ids: romFileIds })
+  });
+}
+
+/** Permanently removes a disc and its files; the server refuses (409) if that number no longer is that file. */
+export function removeDisc(romId: string, number: number, romFileId: string): Promise<RomDetail> {
+  return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/discs/${number}?rom_file_id=${encodeURIComponent(romFileId)}`, { method: 'DELETE', withAuth: true });
 }
 
 export function getUploadSession(sessionId: string): Promise<UploadSession> {
@@ -702,8 +733,11 @@ export function uploadStatus(uploadId: string): Promise<UploadStatusResponse> {
  * Requests a signed, short-lived download link. Opening it lets the browser stream the file to
  * disk with its own download UI, instead of buffering the whole ROM in page memory.
  */
-export async function createDownloadLink(romId: string, format?: DownloadFormat): Promise<DownloadLink> {
-  const query = format ? `?format=${format}` : '';
+export async function createDownloadLink(romId: string, format?: DownloadFormat, disc?: number): Promise<DownloadLink> {
+  const params = new URLSearchParams();
+  if (format) params.set('format', format);
+  if (disc) params.set('disc', String(disc));
+  const query = params.size ? `?${params}` : '';
   const link = await requestJson<{ url: string; filename: string; expires_in: number }>(
     `/rom/${encodeURIComponent(romId)}/download-link${query}`,
     { method: 'POST', withAuth: true }
@@ -715,8 +749,8 @@ export async function createDownloadLink(romId: string, format?: DownloadFormat)
  * Starts a native browser download of a ROM, in one of the formats its details list (its
  * first when omitted), and returns the link it opened.
  */
-export async function downloadRom(romId: string, format?: DownloadFormat): Promise<DownloadLink> {
-  const link = await createDownloadLink(romId, format);
+export async function downloadRom(romId: string, format?: DownloadFormat, disc?: number): Promise<DownloadLink> {
+  const link = await createDownloadLink(romId, format, disc);
   const anchor = document.createElement('a');
   anchor.href = link.url;
   anchor.download = link.filename;

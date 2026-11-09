@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -217,6 +218,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"GET /api/v1/rom", "GET /api/v1/rom/:rom_id", "PATCH /api/v1/rom/:rom_id", "DELETE /api/v1/rom/:rom_id",
 		"GET /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/cover/thumb", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
 		"POST /api/v1/rom/:rom_id/download-link", "GET /api/v1/download",
+		"POST /api/v1/rom/:rom_id/merge", "PUT /api/v1/rom/:rom_id/discs/order", "POST /api/v1/rom/:rom_id/discs/:number/split", "DELETE /api/v1/rom/:rom_id/discs/:number",
 		"POST /api/v1/rom/:rom_id/scrape", "GET /api/v1/rom/:rom_id/media/:kind",
 		"GET /api/v1/library", "POST /api/v1/library", "GET /api/v1/library/:library_id",
 		"POST /api/v1/library/:library_id/item", "DELETE /api/v1/library/:library_id/item/:rom_id",
@@ -521,15 +523,22 @@ func (roms linkTestROMs) Get(_ context.Context, requester identity.Requester, ro
 	return rom.ROMDetailDTO{ROMID: romID}, nil
 }
 
-func (roms linkTestROMs) DownloadFilename(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat) (string, error) {
+func (roms linkTestROMs) DownloadFilename(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat, disc int) (string, error) {
 	if _, err := roms.Get(ctx, requester, romID); err != nil {
 		return "", err
+	}
+	if disc != 0 {
+		return fmt.Sprintf("Title of %s (Disc %d).nes", romID, disc), nil
 	}
 	return "Title of " + romID + ".nes", nil
 }
 
-func (roms linkTestROMs) DownloadAs(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat) (rom.DownloadOutput, error) {
-	return roms.Download(ctx, requester, romID)
+func (roms linkTestROMs) DownloadAs(ctx context.Context, requester identity.Requester, romID string, _ rom.DownloadFormat, disc int) (rom.DownloadOutput, error) {
+	output, err := roms.Download(ctx, requester, romID)
+	if disc != 0 {
+		output.Filename = fmt.Sprintf("Title of %s (Disc %d).nes", romID, disc)
+	}
+	return output, err
 }
 
 func (roms linkTestROMs) Download(ctx context.Context, requester identity.Requester, romID string) (rom.DownloadOutput, error) {
@@ -602,6 +611,49 @@ func TestRouterDownloadLinksStreamWithoutBearerTokenAndCheckAccess(t *testing.T)
 	}
 }
 
+func TestDownloadLinkCarriesTheDisc(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dependencies := Dependencies{
+		ROMs:          linkTestROMs{owner: "user-1"},
+		DownloadLinks: linkTestSigner{},
+		Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: "user-1", Role: identity.RoleUser}},
+	}
+	router := NewRouter(dependencies, Options{})
+	post := func(query string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/rom/rom-1/download-link?"+query, nil)
+		request.Header.Set("Authorization", "Bearer token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	response := post("disc=2&format=chd")
+	var link downloadLinkResponse
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &link) != nil {
+		t.Fatalf("create link = %d %s", response.Code, response.Body.String())
+	}
+	parsed, err := url.Parse(link.URL)
+	if err != nil || parsed.Query().Get("disc") != "2" || parsed.Query().Get("format") != "chd" || link.Filename != "Title of rom-1 (Disc 2).nes" {
+		t.Fatalf("link = %+v, %v", link, err)
+	}
+	download := httptest.NewRecorder()
+	router.ServeHTTP(download, httptest.NewRequest(http.MethodGet, link.URL, nil))
+	if got := download.Header().Get("Content-Disposition"); download.Code != http.StatusOK || got != `attachment; filename="Title of rom-1 (Disc 2).nes"` {
+		t.Fatalf("download via link = %d, Content-Disposition %q", download.Code, got)
+	}
+
+	for _, bad := range []string{"disc=abc", "disc=0", "disc=-1"} {
+		if response := post(bad); response.Code != http.StatusBadRequest {
+			t.Errorf("POST download-link?%s = %d %s, want a validation error", bad, response.Code, response.Body.String())
+		}
+	}
+	bad := httptest.NewRecorder()
+	router.ServeHTTP(bad, httptest.NewRequest(http.MethodGet, "/api/v1/download?token=user-1:rom-1&disc=abc", nil))
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("download?disc=abc = %d, want 400", bad.Code)
+	}
+}
+
 func TestAttachmentDispositionEncodesUnicodeAndStripsPaths(t *testing.T) {
 	tests := map[string]string{
 		"Super Mario Bros. 3.nes": `attachment; filename="Super Mario Bros. 3.nes"`,
@@ -651,5 +703,74 @@ func TestRouterAcceptsOnlyLocalesWithACatalog(t *testing.T) {
 	}
 	if code := patch(`{"locale":""}`); code != http.StatusOK {
 		t.Fatalf("clearing the locale = %d, want 200", code)
+	}
+}
+
+// discTestROMs records the disc operation each route asked for.
+type discTestROMs struct {
+	rom.API
+	calls *[]string
+}
+
+func (roms discTestROMs) record(call string, romID string) (rom.ROMDetailDTO, error) {
+	*roms.calls = append(*roms.calls, call)
+	return rom.ROMDetailDTO{ROMID: romID}, nil
+}
+
+func (roms discTestROMs) MergeROM(_ context.Context, _ identity.Requester, targetID, sourceID string) (rom.ROMDetailDTO, error) {
+	return roms.record("merge "+targetID+" "+sourceID, targetID)
+}
+
+func (roms discTestROMs) SplitDisc(_ context.Context, _ identity.Requester, romID string, number int) (rom.ROMDetailDTO, error) {
+	return roms.record(fmt.Sprintf("split %s %d", romID, number), "new-rom")
+}
+
+func (roms discTestROMs) ReorderDiscs(_ context.Context, _ identity.Requester, romID string, ids []string) (rom.ROMDetailDTO, error) {
+	return roms.record("reorder "+romID+" "+strings.Join(ids, ","), romID)
+}
+
+func (roms discTestROMs) RemoveDisc(_ context.Context, _ identity.Requester, romID string, number int, romFileID string) (rom.ROMDetailDTO, error) {
+	return roms.record(fmt.Sprintf("remove %s %d %s", romID, number, romFileID), romID)
+}
+
+func TestDiscRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var calls []string
+	router := NewRouter(Dependencies{
+		ROMs:          discTestROMs{calls: &calls},
+		Authenticator: routerTestAuthenticator{requester: identity.Requester{UserID: "user-1", Role: identity.RoleUser}},
+	}, Options{})
+	send := func(method, path, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer token")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	for _, test := range []struct{ method, path, body, call, romID string }{
+		{http.MethodPost, "/api/v1/rom/a/merge", `{"source_rom_id":"b"}`, "merge a b", "a"},
+		{http.MethodPost, "/api/v1/rom/a/discs/2/split", ``, "split a 2", "new-rom"},
+		{http.MethodPut, "/api/v1/rom/a/discs/order", `{"rom_file_ids":["f2","f1"]}`, "reorder a f2,f1", "a"},
+		{http.MethodDelete, "/api/v1/rom/a/discs/2?rom_file_id=f2", ``, "remove a 2 f2", "a"},
+	} {
+		calls = nil
+		response := send(test.method, test.path, test.body)
+		if response.Code != http.StatusOK || len(calls) != 1 || calls[0] != test.call || !strings.Contains(response.Body.String(), `"`+test.romID+`"`) {
+			t.Errorf("%s %s = %d %s; calls %v, want %q", test.method, test.path, response.Code, response.Body.String(), calls, test.call)
+		}
+	}
+	calls = nil
+	for _, test := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/rom/a/discs/two/split"},
+		{http.MethodDelete, "/api/v1/rom/a/discs/two?rom_file_id=f2"},
+		{http.MethodDelete, "/api/v1/rom/a/discs/2"},
+	} {
+		if response := send(test.method, test.path, ""); response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "validation") {
+			t.Errorf("%s %s = %d %s, want a validation error", test.method, test.path, response.Code, response.Body.String())
+		}
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %v, want none", calls)
 	}
 }

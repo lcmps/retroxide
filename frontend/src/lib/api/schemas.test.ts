@@ -38,6 +38,20 @@ describe('parseRomListResponse', () => {
 	});
 });
 
+describe('parseRomListResponse disc_count', () => {
+	const row = { rom_id: 'rom_1', title: 'Game', platform: 'psx', platform_name: 'PlayStation', sha256: 'abc' };
+
+	it('keeps disc_count from the ROM list', () => {
+		const parsed = parseRomListResponse({ item: [{ ...row, disc_count: 3 }], next_cursor: null });
+		expect(parsed.item[0].disc_count).toBe(3);
+	});
+
+	it('treats a missing disc_count as one disc', () => {
+		const parsed = parseRomListResponse({ item: [row], next_cursor: null });
+		expect(parsed.item[0].disc_count).toBe(1);
+	});
+});
+
 describe('parseUploadAcceptedResponse', () => {
 	it('accepts the processing response', () => {
 		expect(parseUploadAcceptedResponse({ upload_id: 'upl-1', status: 'processing' })).toEqual({

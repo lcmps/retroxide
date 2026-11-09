@@ -86,7 +86,7 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 			*field.target = optionalUnlessWhitespace(field.input)
 		}
 	}
-	if err := service.repository.SaveROM(ctx, *rom); err != nil {
+	if err := service.repository.UpdateROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
 	return service.detail(ctx, *rom)
@@ -96,48 +96,81 @@ func (service *Service) Delete(ctx context.Context, requester identity.Requester
 	if _, err := service.findAccessibleROM(ctx, requester, romID); err != nil {
 		return err
 	}
-	return service.repository.HardDeleteROM(ctx, romID, func(path string) error {
-		// The deletion has committed; a file left behind is reclaimed by the storage sweep.
+	return service.repository.HardDeleteROM(ctx, romID, service.deleteStoredFile(ctx))
+}
+
+// deleteStoredFile returns the callback a deletion runs, once committed, for each file nothing
+// references any more. A file left behind is reclaimed by the storage sweep.
+func (service *Service) deleteStoredFile(ctx context.Context) func(string) error {
+	return func(path string) error {
 		if err := service.storage.Delete(context.WithoutCancel(ctx), path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			slog.WarnContext(ctx, "could not delete stored file; the storage sweep will reclaim it", "path", path, "error", err)
 		}
 		return nil
-	})
+	}
 }
 
-// Download downloads a ROM in its first format: the one it was uploaded in.
+// Download downloads a ROM in its first format: the one it was uploaded in, or every disc of a
+// title in one zip.
 func (service *Service) Download(ctx context.Context, requester identity.Requester, romID string) (DownloadOutput, error) {
-	return service.DownloadAs(ctx, requester, romID, "")
+	return service.DownloadAs(ctx, requester, romID, "", 0)
 }
 
-// DownloadAs downloads a ROM in format, one of those its details list (empty for the first).
-func (service *Service) DownloadAs(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat) (DownloadOutput, error) {
-	rom, romFile, tracks, filename, err := service.downloadSubject(ctx, requester, romID)
+// DownloadAs downloads a ROM in format, one of those its details list (empty for the first). For
+// a title of several discs, disc picks the disc (0 for none), and format "all", the default
+// without a disc, is a zip of every disc.
+func (service *Service) DownloadAs(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat, disc int) (DownloadOutput, error) {
+	rom, subjects, err := service.downloadSubjects(ctx, requester, romID)
 	if err != nil {
 		return DownloadOutput{}, err
 	}
-	option, err := pickDownload(service.downloadOptions(*romFile, tracks, filename), format)
+	chosen, option, err := chooseDownload(subjects, format, disc)
 	if err != nil {
 		return DownloadOutput{}, err
 	}
-	base := strings.TrimSuffix(filename, path.Ext(filename))
+	primary := primaryDisc(*rom, subjects)
+	audited := primary
+	if chosen != nil {
+		audited = *chosen
+	}
 	served := func(ctx context.Context, bytesSent int64) {
 		if service.audit != nil {
-			service.audit.DownloadServed(ctx, rom.ID, romFile.ID, romFile.Hash.SHA256, uint64(max(bytesSent, 0)))
+			service.audit.DownloadServed(ctx, rom.ID, audited.file.ID, audited.file.Hash.SHA256, uint64(max(bytesSent, 0)))
 		}
 	}
+	if chosen == nil {
+		if service.discs == nil {
+			return DownloadOutput{}, fault.Validation("this server cannot archive discs")
+		}
+		title := downloadTitle(*rom, optionalFilename(primary.disc))
+		archived := make([]romdomain.ArchiveDisc, len(subjects))
+		for index, subject := range subjects {
+			archived[index] = romdomain.ArchiveDisc{
+				ROMFile: subject.file, Name: strings.TrimSuffix(subject.filename, path.Ext(subject.filename)),
+				Filename: subject.filename, AsTracks: subject.options[0].Format == DownloadTracks,
+			}
+		}
+		return DownloadOutput{
+			Filename: title + option.Extension, MIMEType: "application/zip", SHA256: primary.file.Hash.SHA256, Served: served,
+			Archive: func(out io.Writer) error {
+				return service.discs.ArchiveDiscs(context.WithoutCancel(ctx), title, archived, out)
+			},
+		}, nil
+	}
+	romFile := chosen.file
+	base := strings.TrimSuffix(chosen.filename, path.Ext(chosen.filename))
 	switch option.Format {
 	case DownloadTracks:
 		return DownloadOutput{
 			Filename: base + option.Extension, MIMEType: "application/zip", SHA256: romFile.Hash.SHA256, Served: served,
 			Archive: func(out io.Writer) error {
-				return service.discs.Archive(context.WithoutCancel(ctx), *romFile, base, out)
+				return service.discs.Archive(context.WithoutCancel(ctx), romFile, base, out)
 			},
 		}, nil
 	case DownloadISO:
 		return DownloadOutput{
 			Filename: base + option.Extension, MIMEType: "application/octet-stream", SHA256: romFile.Hash.SHA256, Served: served,
-			Archive: func(out io.Writer) error { return service.discs.ISO(context.WithoutCancel(ctx), *romFile, out) },
+			Archive: func(out io.Writer) error { return service.discs.ISO(context.WithoutCancel(ctx), romFile, out) },
 		}, nil
 	}
 	content, err := service.storage.Open(ctx, romFile.StoragePath)
@@ -150,28 +183,93 @@ func (service *Service) DownloadAs(ctx context.Context, requester identity.Reque
 	}, nil
 }
 
-// downloadSubject loads what a download needs: the ROM, its file and tracks, and its name.
-func (service *Service) downloadSubject(ctx context.Context, requester identity.Requester, romID string) (*romdomain.ROM, *romdomain.ROMFile, []romdomain.DiscTrack, string, error) {
+// discSubject is a disc of a ROM with what a download of it needs.
+type discSubject struct {
+	disc   romdomain.ROMDisc
+	file   romdomain.ROMFile
+	tracks []romdomain.DiscTrack
+	// filename is the name the disc downloads as in the format it was uploaded in.
+	filename string
+	options  []DownloadOptionDTO
+}
+
+// downloadSubjects loads an accessible ROM and its discs in number order.
+func (service *Service) downloadSubjects(ctx context.Context, requester identity.Requester, romID string) (*romdomain.ROM, []discSubject, error) {
 	rom, err := service.findAccessibleROM(ctx, requester, romID)
 	if err != nil {
-		return nil, nil, nil, "", err
+		return nil, nil, err
 	}
-	romFile, err := service.repository.FindROMFileByID(ctx, rom.ROMFileID)
+	subjects, err := service.loadDiscs(ctx, *rom)
 	if err != nil {
-		return nil, nil, nil, "", err
+		return nil, nil, err
 	}
-	if romFile == nil {
-		return nil, nil, nil, "", fault.Internal(fmt.Errorf("rom_file %s not found", rom.ROMFileID))
-	}
-	tracks, err := service.repository.FindDiscTracks(ctx, romFile.ID)
+	return rom, subjects, nil
+}
+
+func (service *Service) loadDiscs(ctx context.Context, rom romdomain.ROM) ([]discSubject, error) {
+	discs, err := service.repository.FindROMDiscs(ctx, rom.ID)
 	if err != nil {
-		return nil, nil, nil, "", err
+		return nil, err
 	}
-	filename, err := service.downloadFilename(ctx, *rom)
-	if err != nil {
-		return nil, nil, nil, "", err
+	if len(discs) == 0 {
+		discs = []romdomain.ROMDisc{{ROMID: rom.ID, ROMFileID: rom.ROMFileID, Number: 1}}
 	}
-	return rom, romFile, tracks, filename, nil
+	subjects := make([]discSubject, len(discs))
+	for index, disc := range discs {
+		romFile, err := service.repository.FindROMFileByID(ctx, disc.ROMFileID)
+		if err != nil {
+			return nil, err
+		}
+		if romFile == nil {
+			return nil, fault.Internal(fmt.Errorf("rom_file %s not found", disc.ROMFileID))
+		}
+		tracks, err := service.repository.FindDiscTracks(ctx, romFile.ID)
+		if err != nil {
+			return nil, err
+		}
+		filename := discDownloadName(rom, disc, len(discs))
+		subjects[index] = discSubject{
+			disc: disc, file: *romFile, tracks: tracks, filename: filename,
+			options: service.downloadOptions(*romFile, tracks, filename),
+		}
+	}
+	return subjects, nil
+}
+
+// primaryDisc is the disc whose file the ROM carries: the first, unless the ROM says otherwise.
+func primaryDisc(rom romdomain.ROM, subjects []discSubject) discSubject {
+	for _, subject := range subjects {
+		if subject.file.ID == rom.ROMFileID {
+			return subject
+		}
+	}
+	return subjects[0]
+}
+
+// chooseDownload picks what a request downloads: nil for every disc of a title, or a disc and
+// one of its formats. Without a disc number, a title of several discs offers only "all" and a
+// single disc is the one asked for.
+func chooseDownload(subjects []discSubject, format DownloadFormat, number int) (*discSubject, DownloadOptionDTO, error) {
+	if number == 0 {
+		if len(subjects) > 1 {
+			if format == "" || format == DownloadAll {
+				return nil, DownloadOptionDTO{Format: DownloadAll, Extension: ".zip"}, nil
+			}
+			return nil, DownloadOptionDTO{}, fault.Validation(fmt.Sprintf("choose a disc to download as %q", format))
+		}
+		number = subjects[0].disc.Number
+	}
+	for index := range subjects {
+		if subjects[index].disc.Number != number {
+			continue
+		}
+		option, err := pickDownload(subjects[index].options, format)
+		if err != nil {
+			return nil, DownloadOptionDTO{}, err
+		}
+		return &subjects[index], option, nil
+	}
+	return nil, DownloadOptionDTO{}, fault.NotFound()
 }
 
 // pickDownload returns the option for format, or the first for an empty format.
@@ -187,7 +285,7 @@ func pickDownload(options []DownloadOptionDTO, format DownloadFormat) (DownloadO
 	return DownloadOptionDTO{}, fault.Validation(fmt.Sprintf("this ROM does not download as %q", format))
 }
 
-// downloadOptions lists the formats a ROM downloads in, the one it was uploaded in first.
+// downloadOptions lists the formats a disc downloads in, the one it was uploaded in first.
 func (service *Service) downloadOptions(romFile romdomain.ROMFile, tracks []romdomain.DiscTrack, filename string) []DownloadOptionDTO {
 	extension := path.Ext(filename)
 	if (romFile.Format != romdomain.FormatCHD && romFile.Format != romdomain.FormatTracks) || service.discs == nil {
@@ -219,23 +317,43 @@ func (service *Service) downloadOptions(romFile romdomain.ROMFile, tracks []romd
 }
 
 // RequestCompression asks for a disc kept as tracks to be compressed to CHD in the background.
-func (service *Service) RequestCompression(ctx context.Context, requester identity.Requester, romID string) (ROMDetailDTO, error) {
-	rom, err := service.findAccessibleROM(ctx, requester, romID)
+// disc picks the disc; without one, every disc of a title that can compress is requested.
+func (service *Service) RequestCompression(ctx context.Context, requester identity.Requester, romID string, disc int) (ROMDetailDTO, error) {
+	rom, subjects, err := service.downloadSubjects(ctx, requester, romID)
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
 	if service.discs == nil {
 		return ROMDetailDTO{}, fault.Validation("only discs can be compressed")
 	}
-	romFile, err := service.repository.FindROMFileByID(ctx, rom.ROMFileID)
-	if err != nil {
-		return ROMDetailDTO{}, err
+	var requested []discSubject
+	switch {
+	case disc != 0:
+		found := false
+		for _, subject := range subjects {
+			if subject.disc.Number == disc {
+				requested, found = []discSubject{subject}, true
+			}
+		}
+		if !found {
+			return ROMDetailDTO{}, fault.NotFound()
+		}
+	case len(subjects) == 1:
+		requested = subjects
+	default:
+		for _, subject := range subjects {
+			if service.discs.CanCompressFile(ctx, subject.file) {
+				requested = append(requested, subject)
+			}
+		}
+		if len(requested) == 0 {
+			return ROMDetailDTO{}, fault.Validation("no disc of this title can be compressed")
+		}
 	}
-	if romFile == nil {
-		return ROMDetailDTO{}, fault.NotFound()
-	}
-	if err := service.discs.RequestCompression(ctx, *romFile); err != nil {
-		return ROMDetailDTO{}, err
+	for _, subject := range requested {
+		if err := service.discs.RequestCompression(ctx, subject.file); err != nil {
+			return ROMDetailDTO{}, err
+		}
 	}
 	if service.wakeCompressor != nil {
 		service.wakeCompressor()
@@ -244,25 +362,20 @@ func (service *Service) RequestCompression(ctx context.Context, requester identi
 }
 
 // DownloadFilename returns the name an accessible ROM downloads as in format (empty for the
-// first of its formats).
-func (service *Service) DownloadFilename(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat) (string, error) {
-	_, romFile, tracks, filename, err := service.downloadSubject(ctx, requester, romID)
+// first of its formats); disc is as for DownloadAs.
+func (service *Service) DownloadFilename(ctx context.Context, requester identity.Requester, romID string, format DownloadFormat, disc int) (string, error) {
+	rom, subjects, err := service.downloadSubjects(ctx, requester, romID)
 	if err != nil {
 		return "", err
 	}
-	option, err := pickDownload(service.downloadOptions(*romFile, tracks, filename), format)
+	chosen, option, err := chooseDownload(subjects, format, disc)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(filename, path.Ext(filename)) + option.Extension, nil
-}
-
-func (service *Service) downloadFilename(ctx context.Context, rom romdomain.ROM) (string, error) {
-	uploaded, err := service.repository.FindUploadedFilename(ctx, rom.ID)
-	if err != nil {
-		return "", err
+	if chosen == nil {
+		return downloadTitle(*rom, optionalFilename(primaryDisc(*rom, subjects).disc)) + option.Extension, nil
 	}
-	return downloadFilename(rom, uploaded), nil
+	return strings.TrimSuffix(chosen.filename, path.Ext(chosen.filename)) + option.Extension, nil
 }
 
 func (service *Service) UploadCover(ctx context.Context, requester identity.Requester, romID string, content []byte) (ROMDetailDTO, error) {
@@ -273,7 +386,7 @@ func (service *Service) UploadCover(ctx context.Context, requester identity.Requ
 	if err := service.storeCover(ctx, &rom.Identity, content); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	if err := service.repository.SaveROM(ctx, *rom); err != nil {
+	if err := service.repository.UpdateROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
 	return service.detail(ctx, *rom)
@@ -377,7 +490,7 @@ func (service *Service) scrape(ctx context.Context, rom *romdomain.ROM) (ROMDeta
 		}
 		*image.target = &storagePath
 	}
-	if err := service.repository.SaveROM(ctx, *rom); err != nil {
+	if err := service.repository.UpdateROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
 	return service.detail(ctx, *rom)
@@ -401,45 +514,60 @@ func (service *Service) findAccessibleROM(ctx context.Context, requester identit
 }
 
 func (service *Service) detail(ctx context.Context, rom romdomain.ROM) (ROMDetailDTO, error) {
-	romFile, err := service.repository.FindROMFileByID(ctx, rom.ROMFileID)
+	subjects, err := service.loadDiscs(ctx, rom)
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
-	if romFile == nil {
-		return ROMDetailDTO{}, fault.Internal(fmt.Errorf("rom_file %s not found", rom.ROMFileID))
+	primary := primaryDisc(rom, subjects)
+	detail := detailOf(rom, primary.file)
+	detail.Downloads = primary.options
+	detail.Disc = service.discDetail(ctx, primary)
+	if len(subjects) > 1 {
+		detail.Downloads = []DownloadOptionDTO{{Format: DownloadAll, Extension: ".zip"}}
 	}
-	detail := detailOf(rom, *romFile)
-	tracks, err := service.repository.FindDiscTracks(ctx, romFile.ID)
-	if err != nil {
-		return ROMDetailDTO{}, err
-	}
-	filename, err := service.downloadFilename(ctx, rom)
-	if err != nil {
-		return ROMDetailDTO{}, err
-	}
-	detail.Downloads = service.downloadOptions(*romFile, tracks, filename)
-	if romFile.Format == romdomain.FormatCHD || romFile.Format == romdomain.FormatTracks {
-		if len(tracks) > 0 {
-			disc := &DiscDTO{
-				Format: string(romFile.Format), Tracks: make([]DiscTrackDTO, len(tracks)),
-				CanCompress:          service.discs != nil && service.discs.CanCompressFile(ctx, *romFile),
-				CompressionRequested: romFile.CompressRequested,
-			}
-			if romFile.CompressRequested && service.discs != nil {
-				if percent, running := service.discs.CompressionProgress(romFile.ID); running {
-					disc.CompressionPercent = &percent
-				}
-			}
-			for index, track := range tracks {
-				disc.Tracks[index] = DiscTrackDTO{
-					Number: track.Number, Mode: track.Mode, Size: track.Size,
-					SHA1: track.Hash.SHA1, MD5: track.Hash.MD5, CRC32: track.Hash.CRC32,
-				}
-			}
-			detail.Disc = disc
+	detail.Discs = make([]DiscEntryDTO, len(subjects))
+	for index, subject := range subjects {
+		filename := subject.disc.Filename
+		if filename == "" {
+			filename = subject.filename
+		}
+		detail.Discs[index] = DiscEntryDTO{
+			Number: subject.disc.Number, ROMFileID: subject.file.ID, Filename: filename, Size: subject.file.Size,
+			Hash:      hashDTO(subject.file),
+			Disc:      service.discDetail(ctx, subject),
+			Downloads: subject.options,
 		}
 	}
 	return detail, nil
+}
+
+// discDetail describes a CD or GD-ROM image's tracks and compression; nil for other files.
+func (service *Service) discDetail(ctx context.Context, subject discSubject) *DiscDTO {
+	romFile := subject.file
+	if (romFile.Format != romdomain.FormatCHD && romFile.Format != romdomain.FormatTracks) || len(subject.tracks) == 0 {
+		return nil
+	}
+	disc := &DiscDTO{
+		Format: string(romFile.Format), Tracks: make([]DiscTrackDTO, len(subject.tracks)),
+		CanCompress:          service.discs != nil && service.discs.CanCompressFile(ctx, romFile),
+		CompressionRequested: romFile.CompressRequested,
+	}
+	if romFile.CompressRequested && service.discs != nil {
+		if percent, running := service.discs.CompressionProgress(romFile.ID); running {
+			disc.CompressionPercent = &percent
+		}
+	}
+	for index, track := range subject.tracks {
+		disc.Tracks[index] = DiscTrackDTO{
+			Number: track.Number, Mode: track.Mode, Size: track.Size,
+			SHA1: track.Hash.SHA1, MD5: track.Hash.MD5, CRC32: track.Hash.CRC32,
+		}
+	}
+	return disc
+}
+
+func hashDTO(romFile romdomain.ROMFile) ROMHashDTO {
+	return ROMHashDTO{SHA256: romFile.Hash.SHA256, SHA1: romFile.Hash.SHA1, MD5: romFile.Hash.MD5, CRC32: romFile.Hash.CRC32}
 }
 
 // detailOf maps a ROM and its content file to the detail response.
@@ -458,12 +586,7 @@ func detailOf(rom romdomain.ROM, romFile romdomain.ROMFile) ROMDetailDTO {
 		CoverArtURL:    imageURL(rom.ID, "cover", rom.Identity.CoverArtPath),
 		TitleScreenURL: imageURL(rom.ID, "media/"+MediaTitleScreen, rom.Identity.TitleScreenPath),
 		ScreenshotURL:  imageURL(rom.ID, "media/"+MediaScreenshot, rom.Identity.ScreenshotPath),
-		Hash: ROMHashDTO{
-			SHA256: romFile.Hash.SHA256,
-			SHA1:   romFile.Hash.SHA1,
-			MD5:    romFile.Hash.MD5,
-			CRC32:  romFile.Hash.CRC32,
-		},
+		Hash:           hashDTO(romFile),
 	}
 }
 

@@ -85,6 +85,7 @@ func Summarize(row romdomain.ROMWithFile) ROMSummaryDTO {
 		SHA256:        row.SHA256,
 		CoverArtURL:   imageURL(row.ROM.ID, "cover", row.ROM.Identity.CoverArtPath),
 		CoverThumbURL: coverThumbURL(row.ROM),
+		DiscCount:     row.DiscCount,
 	}
 }
 

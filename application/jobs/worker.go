@@ -29,8 +29,9 @@ const (
 // Handler processes one kind of job. A failed job is retried after RetryBase, doubled on each
 // attempt, and dead-lettered once maxAttempts attempts have failed.
 type Handler struct {
-	Handle    func(context.Context, jobsdomain.Payload) error
-	RetryBase time.Duration
+	Handle      func(context.Context, jobsdomain.Payload) error
+	OnExhausted func(context.Context, jobsdomain.Payload) error
+	RetryBase   time.Duration
 }
 
 // Handlers maps job kinds to their handlers. Jobs of a kind without a handler are dead-lettered.
@@ -82,19 +83,25 @@ func ROMPipeline(identifier Identifier, queue Enqueuer, scraper UploadScraper) H
 		return identifier.Identify(ctx, payload.UploadID, payload.ROMFileID)
 	}
 	handlers := Handlers{jobsdomain.KindIdentifyROM: {Handle: identify, RetryBase: identifyRetryBase}}
+	if completer, ok := identifier.(FilenameCompleter); ok {
+		handler := handlers[jobsdomain.KindIdentifyROM]
+		handler.OnExhausted = func(ctx context.Context, payload jobsdomain.Payload) error {
+			return completer.CompleteWithFilename(ctx, payload.UploadID, payload.ROMFileID)
+		}
+		handlers[jobsdomain.KindIdentifyROM] = handler
+	}
 	if scraper == nil {
 		return handlers
 	}
-	handlers[jobsdomain.KindIdentifyROM] = Handler{
-		Handle: func(ctx context.Context, payload jobsdomain.Payload) error {
-			if err := identify(ctx, payload); err != nil {
-				return err
-			}
-			// A retry after a failed enqueue is safe: identifying an identified upload is a no-op.
-			return queue.Enqueue(ctx, jobsdomain.Payload{Kind: jobsdomain.KindScrapeROM, UploadID: payload.UploadID, ROMFileID: payload.ROMFileID})
-		},
-		RetryBase: identifyRetryBase,
+	handler := handlers[jobsdomain.KindIdentifyROM]
+	handler.Handle = func(ctx context.Context, payload jobsdomain.Payload) error {
+		if err := identify(ctx, payload); err != nil {
+			return err
+		}
+		// A retry after a failed enqueue is safe: identifying an identified upload is a no-op.
+		return queue.Enqueue(ctx, jobsdomain.Payload{Kind: jobsdomain.KindScrapeROM, UploadID: payload.UploadID, ROMFileID: payload.ROMFileID})
 	}
+	handlers[jobsdomain.KindIdentifyROM] = handler
 	handlers[jobsdomain.KindScrapeROM] = Handler{
 		Handle: func(ctx context.Context, payload jobsdomain.Payload) error {
 			return scraper.ScrapeUpload(ctx, payload.UploadID)
@@ -158,6 +165,16 @@ func processJob(ctx context.Context, queue Queue, handlers Handlers, job jobsdom
 		nextAttempt := job.Payload.Attempt + 1
 		slog.WarnContext(ctx, "job failed", "kind", job.Payload.Kind, "upload_id", job.Payload.UploadID, "attempt", nextAttempt, "error", err)
 		if nextAttempt >= maxAttempts {
+			if handler.OnExhausted != nil {
+				if fallbackErr := callSafely("handling exhausted "+job.Payload.Kind+" job", func() error {
+					return handler.OnExhausted(ctx, job.Payload)
+				}); fallbackErr == nil {
+					completeJob(ctx, queue, job.ID)
+					return
+				} else {
+					err = errors.Join(err, fallbackErr)
+				}
+			}
 			if deadLetterErr := callSafely("dead-lettering exhausted job", func() error {
 				return queue.DeadLetter(ctx, job, nextAttempt, err.Error())
 			}); deadLetterErr != nil {
