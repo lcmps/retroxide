@@ -1,6 +1,6 @@
 import { checkUploadSessionDuplicate, createUploadSession, getUploadSession, sendUploadPart, uploadRom } from '#lib/api/client.js';
 import { ApiClientError } from '#lib/api/errors.js';
-import type { UploadAcceptedResponse } from '#lib/api/types.js';
+import type { BiosUploadOptions, UploadAcceptedResponse } from '#lib/api/types.js';
 import { hashFileInBackground } from './background-hash.js';
 
 /** Files from this size are sent in parts that survive a dropped connection. */
@@ -33,12 +33,12 @@ type Session = {
 
 /** The server calls a resumable upload needs, injectable for tests. */
 export type ResumableApi = {
-	/** Starts a session; with part, for one of a disc's files. */
-	createSession(file: File, part?: boolean): Promise<Session>;
+	/** Starts a session; with part, for one of a disc's files; with bios, for BIOS files. */
+	createSession(file: File, part?: boolean, bios?: BiosUploadOptions): Promise<Session>;
 	getSession(sessionId: string): Promise<Session>;
 	sendPart(sessionId: string, offset: number, part: Blob, onProgress: (loadedBytes: number) => void, signal?: AbortSignal): Promise<Session>;
 	/** Uploads a small file in one request. */
-	uploadWhole(file: File, onProgress: (loadedBytes: number, totalBytes: number) => void, signal?: AbortSignal): Promise<UploadAcceptedResponse>;
+	uploadWhole(file: File, onProgress: (loadedBytes: number, totalBytes: number) => void, signal?: AbortSignal, bios?: BiosUploadOptions): Promise<UploadAcceptedResponse>;
 	/** Ends the session with rom_already_exists if the library already has the file. */
 	checkDuplicate(sessionId: string, sha256: string): Promise<void>;
 };
@@ -60,11 +60,14 @@ export type ResumableCallbacks = {
 	onReconnecting?: (reconnecting: boolean) => void;
 	/** Stops the upload, which rejects with the signal's reason; a large file can still resume. */
 	signal?: AbortSignal;
+	/** Marks the upload as BIOS files for a platform. */
+	bios?: BiosUploadOptions;
 };
 
 /** Identifies a file across page loads, so adding it again resumes its upload. */
-function fingerprint(file: File, part = false): string {
-	return `${STORAGE_PREFIX}${part ? 'part:' : ''}${file.name}:${file.size}:${file.lastModified}`;
+function fingerprint(file: File, part = false, bios?: BiosUploadOptions): string {
+	const kind = part ? 'part:' : bios ? `bios:${bios.platform}:` : '';
+	return `${STORAGE_PREFIX}${kind}${file.name}:${file.size}:${file.lastModified}`;
 }
 
 function defaultStorage(): ResumableEnvironment['storage'] {
@@ -114,7 +117,7 @@ export async function uploadResumable(
 	environment: ResumableEnvironment = {}
 ): Promise<UploadAcceptedResponse> {
 	if (file.size < RESUMABLE_FROM_BYTES) {
-		return api.uploadWhole(file, callbacks.onProgress, callbacks.signal);
+		return api.uploadWhole(file, callbacks.onProgress, callbacks.signal, callbacks.bios);
 	}
 	const session = await transfer(file, api, false, callbacks, environment);
 	return session.upload as UploadAcceptedResponse;
@@ -138,10 +141,10 @@ async function transfer(
 	file: File,
 	api: ResumableApi,
 	part: boolean,
-	{ onProgress, onReconnecting, signal }: ResumableCallbacks,
+	{ onProgress, onReconnecting, signal, bios }: ResumableCallbacks,
 	{ storage = defaultStorage(), sleep = defaultSleep, waitUntilOnline = defaultWaitUntilOnline, hash = hashFileInBackground, now = defaultNow }: ResumableEnvironment
 ): Promise<Session> {
-	const key = fingerprint(file, part);
+	const key = fingerprint(file, part, bios);
 	const remember = (sessionId: string | null) => {
 		try {
 			if (sessionId) storage?.setItem(key, sessionId);
@@ -151,7 +154,7 @@ async function transfer(
 		}
 	};
 	const done = (current: Session) => Boolean(current.upload || current.part_id);
-	const create = () => api.createSession(file, part);
+	const create = () => api.createSession(file, part, bios);
 	/** Waits for a promise, or until the upload is cancelled. */
 	const orCancelled = <T>(waiting: Promise<T>): Promise<T> => {
 		if (!signal) return waiting;
@@ -187,7 +190,7 @@ async function transfer(
 		try {
 			await api.checkDuplicate(session.session_id, sha256);
 		} catch (error) {
-			if (error instanceof ApiClientError && error.code === 'rom_already_exists') {
+			if (error instanceof ApiClientError && (error.code === 'rom_already_exists' || error.code === 'bios_already_exists')) {
 				remember(null);
 				throw error;
 			}

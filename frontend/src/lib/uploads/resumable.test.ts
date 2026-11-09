@@ -180,7 +180,7 @@ describe('duplicate checks while uploading', () => {
 			const { signal } = new AbortController();
 			const onProgress = vi.fn();
 			await uploadResumable(new File(['rom!'], 'a.nes'), server.api, { onProgress, signal });
-			expect(server.api.uploadWhole).toHaveBeenCalledWith(expect.any(File), onProgress, signal);
+			expect(server.api.uploadWhole).toHaveBeenCalledWith(expect.any(File), onProgress, signal, undefined);
 		});
 
 		it('stops at the part in flight, keeps the session to resume, and does not retry', async () => {
@@ -304,5 +304,42 @@ describe('part sizes', () => {
 		});
 		await upload(server, size, now);
 		expect(partSizes(server, size)).toEqual([8, 16, 32, 4]);
+	});
+});
+
+describe('BIOS uploads', () => {
+	it('passes BIOS options to small and large uploads', async () => {
+		const small = fakeServer(4);
+		await uploadResumable(new File(['bios'], 'gba_bios.bin'), small.api, { onProgress: () => {}, bios: { platform: 'gba' } }, { ...instant, storage: memoryStorage() });
+		expect(small.api.uploadWhole).toHaveBeenCalledWith(expect.any(File), expect.any(Function), undefined, { platform: 'gba' });
+
+		const size = RESUMABLE_FROM_BYTES;
+		const large = fakeServer(size);
+		await uploadResumable(new File([new Uint8Array(size)], 'big.bin'), large.api, { onProgress: () => {}, bios: { platform: 'ps2' } }, { ...instant, storage: memoryStorage() });
+		expect(large.api.createSession).toHaveBeenCalledWith(expect.any(File), false, { platform: 'ps2' });
+	});
+
+	it('keeps a BIOS session apart from a game session of the same file', async () => {
+		const size = RESUMABLE_FROM_BYTES;
+		const server = fakeServer(size);
+		const file = new File([new Uint8Array(size)], 'big.bin', { lastModified: 3 });
+		const storage = memoryStorage({ [`retroxide.upload-session:big.bin:${size}:3`]: 'ups_game' });
+		await uploadResumable(file, server.api, { onProgress: () => {}, bios: { platform: 'ps2' } }, { ...instant, storage });
+		expect(server.api.getSession).not.toHaveBeenCalledWith('ups_game');
+	});
+
+	it('stops uploading a BIOS the server already has', async () => {
+		const size = 2 * MIN_PART_BYTES + 8 * MiB;
+		const server = fakeServer(size);
+		server.api.checkDuplicate = vi.fn(async () => {
+			throw new ApiClientError({ message: 'exists', code: 'bios_already_exists', status: 409 });
+		});
+		const storage = memoryStorage();
+		const file = new File([new Uint8Array(size)], 'known.bin');
+		await expect(uploadResumable(file, server.api, { onProgress: () => {}, bios: { platform: 'ps2' } }, { ...instant, storage, hash: async () => 'a'.repeat(64) })).rejects.toMatchObject({
+			code: 'bios_already_exists'
+		});
+		expect(server.parts).toEqual([0]); // stopped after the first of three parts
+		expect(storage.items.size).toBe(0);
 	});
 });

@@ -1,6 +1,9 @@
 import { browser } from '$app/env';
 
 import type {
+  Bios,
+  BiosLabels,
+  BiosUploadOptions,
   ApiError,
   DownloadLink,
   Appearance,
@@ -522,10 +525,17 @@ function abortWith(request: XMLHttpRequest, signal: AbortSignal | undefined, rej
   return false;
 }
 
+/** The path a single-request upload goes to; BIOS options ride in the query string. */
+export function uploadPath(bios?: BiosUploadOptions): string {
+  if (!bios) return '/upload';
+  return `/upload?${new URLSearchParams({ bios: 'true', platform: bios.platform })}`;
+}
+
 export function uploadRom(
   file: File,
   onProgress?: (loadedBytes: number, totalBytes: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  bios?: BiosUploadOptions
 ): Promise<UploadAcceptedResponse> {
   if (!browser) {
     return Promise.reject(new Error('Upload is only available in the browser.'));
@@ -538,7 +548,7 @@ export function uploadRom(
   const sendUpload = (): Promise<XMLHttpRequest> => new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     if (abortWith(request, signal, reject)) return;
-    request.open('POST', createApiUrl('/upload'));
+    request.open('POST', createApiUrl(uploadPath(bios)));
     request.responseType = 'text';
     request.setRequestHeader('Accept', 'application/json');
     const session = readStoredSession();
@@ -598,13 +608,51 @@ export type UploadSession = {
 };
 
 /** Starts an upload sent in parts; with part, the file is one of a disc's files. */
-export function createUploadSession(file: File, part = false): Promise<UploadSession> {
+/** The body that starts an upload sent in parts. */
+export function sessionRequestBody(file: File, part: boolean, bios?: BiosUploadOptions): Record<string, unknown> {
+  const body: Record<string, unknown> = { filename: file.name, size: file.size };
+  if (file.type) body.mime_type = file.type;
+  if (part) body.part = true;
+  if (bios) Object.assign(body, { bios: true, platform: bios.platform });
+  return body;
+}
+
+export function createUploadSession(file: File, part = false, bios?: BiosUploadOptions): Promise<UploadSession> {
   return requestJson<UploadSession>('/upload/session', {
     method: 'POST',
     withAuth: true,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filename: file.name, size: file.size, mime_type: file.type || undefined, part: part || undefined })
+    body: JSON.stringify(sessionRequestBody(file, part, bios))
   });
+}
+
+/** Lists a platform's BIOS files, which every user shares. */
+export async function listBios(platform: string): Promise<Bios[]> {
+  const response = await requestJson<{ items: Bios[] }>(`/bios?${new URLSearchParams({ platform })}`, { withAuth: true });
+  return response.items;
+}
+
+/** Sets the labels of a BIOS file the known list did not recognize. */
+export function labelBios(biosId: string, labels: BiosLabels): Promise<Bios> {
+  return requestJson<Bios>(`/bios/${encodeURIComponent(biosId)}`, {
+    method: 'PATCH',
+    withAuth: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(labels)
+  });
+}
+
+export function deleteBios(biosId: string): Promise<void> {
+  return requestNoContent(`/bios/${encodeURIComponent(biosId)}`, { method: 'DELETE', withAuth: true });
+}
+
+/** Starts a native browser download of a BIOS file, named as emulators expect it. */
+export async function downloadBios(biosId: string): Promise<DownloadLink> {
+  const link = await requestJson<{ url: string; filename: string; expires_in: number }>(
+    `/bios/${encodeURIComponent(biosId)}/download-link`,
+    { method: 'POST', withAuth: true }
+  );
+  return startDownload({ url: resolveApiLink(link.url), filename: link.filename, expiresIn: link.expires_in });
 }
 
 /** Stores a disc from its sheet and the uploaded parts holding its track files. */
@@ -750,7 +798,11 @@ export async function createDownloadLink(romId: string, format?: DownloadFormat,
  * first when omitted), and returns the link it opened.
  */
 export async function downloadRom(romId: string, format?: DownloadFormat, disc?: number): Promise<DownloadLink> {
-  const link = await createDownloadLink(romId, format, disc);
+  return startDownload(await createDownloadLink(romId, format, disc));
+}
+
+/** Opens a signed download link so the browser streams the file to disk itself. */
+function startDownload(link: DownloadLink): DownloadLink {
   const anchor = document.createElement('a');
   anchor.href = link.url;
   anchor.download = link.filename;

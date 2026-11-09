@@ -165,3 +165,20 @@ describe('UploadQueue', () => {
 		queue.cancel();
 	});
 });
+
+describe('BIOS uploads', () => {
+	it('hands each file its BIOS options', async () => {
+		const { send, pending } = controllableSend();
+		const queue = new UploadQueue(send, async (id) => completed(id), { concurrency: 2 });
+		queue.add([rom('scph5501.bin')], { platform: 'psx' });
+		queue.add([rom('game.nes')]);
+		await flush();
+		expect(send.mock.calls.map((call) => [call[0].name, call[4]])).toEqual([
+			['scph5501.bin', { platform: 'psx' }],
+			['game.nes', undefined]
+		]);
+		for (const transfer of pending) transfer.resolve({ upload_id: `upl_${transfer.file.name}`, status: 'processing' });
+		await flush();
+		queue.cancel();
+	});
+});
