@@ -109,6 +109,17 @@ func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]
 func (repositories *Repositories) DeleteUserTransferringData(ctx context.Context, userID, heirID string) (users.Transfer, error) {
 	var transfer users.Transfer
 	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// A disc group is unique per uploader, so a ROM whose group the heir already uses would
+		// collide on the move. It leaves the group instead and stops gathering new discs.
+		var heirGroups []string
+		if err := tx.Model(&ROMModel{}).Where("uploader_id = ? AND disc_group IS NOT NULL", heirID).Pluck("disc_group", &heirGroups).Error; err != nil {
+			return err
+		}
+		if len(heirGroups) > 0 {
+			if err := tx.Model(&ROMModel{}).Where("uploader_id = ? AND disc_group IN ?", userID, heirGroups).Update("disc_group", nil).Error; err != nil {
+				return err
+			}
+		}
 		for _, move := range []struct {
 			model  any
 			column string

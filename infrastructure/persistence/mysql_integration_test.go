@@ -295,6 +295,24 @@ func TestMySQLUserManagement(t *testing.T) {
 	exerciseUserManagement(t, ctx, NewRepositories(db), fmt.Sprintf("um%x", time.Now().UnixNano()))
 }
 
+func TestMySQLDeletingAUserWhoSharesADiscGroupWithTheHeir(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	exerciseDiscGroupTransfer(t, ctx, NewRepositories(db), fmt.Sprintf("dg%x", time.Now().UnixNano()))
+}
+
 func TestMySQLListROMsInSortOrder(t *testing.T) {
 	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
 	if mysqlURL == "" {

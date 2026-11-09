@@ -684,6 +684,52 @@ func exerciseUserManagement(t *testing.T, ctx context.Context, repositories *Rep
 	}
 }
 
+func TestDeletingAUserWhoSharesADiscGroupWithTheHeir(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	exerciseDiscGroupTransfer(t, ctx, repositories, "dg")
+}
+
+// exerciseDiscGroupTransfer deletes a user whose ROM is in a disc group the heir also uses: the
+// unique (uploader, disc group) index must not block the transfer.
+func exerciseDiscGroupTransfer(t *testing.T, ctx context.Context, repositories *Repositories, prefix string) {
+	t.Helper()
+	heirID, leaverID := prefix+"-heir", prefix+"-leaver"
+	for _, account := range []authdomain.User{
+		{ID: heirID, Email: heirID + "@example.test", PasswordHash: "h", Role: identity.RoleAdmin},
+		{ID: leaverID, Email: leaverID + "@example.test", PasswordHash: "h", Role: identity.RoleUser},
+	} {
+		if err := repositories.SaveUser(ctx, account); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		repositories.DB.Where("uploader_id IN ?", []string{heirID, leaverID}).Delete(&ROMModel{})
+		repositories.DB.Where("id LIKE ?", "file-"+prefix+"-%").Delete(&ROMFileModel{})
+		repositories.DB.Where("id IN ?", []string{heirID, leaverID}).Delete(&UserModel{})
+	})
+	shared, own := prefix+"-shared", prefix+"-own"
+	heirROM := seedDiscROM(t, repositories, ctx, prefix+"-heir-rom", heirID, &shared)
+	leaverROM := seedDiscROM(t, repositories, ctx, prefix+"-leaver-rom", leaverID, &shared)
+	keptROM := seedDiscROM(t, repositories, ctx, prefix+"-kept-rom", leaverID, &own)
+
+	transfer, err := repositories.DeleteUserTransferringData(ctx, leaverID, heirID)
+	if err != nil {
+		t.Fatalf("deleting a user who shares a disc group with the heir: %v", err)
+	}
+	if transfer.ROMs != 2 {
+		t.Fatalf("transfer = %+v, want 2 ROMs", transfer)
+	}
+	for id, want := range map[string]*string{heirROM.ID: &shared, leaverROM.ID: nil, keptROM.ID: &own} {
+		found, err := repositories.FindROMByID(ctx, id)
+		if err != nil || found == nil || found.UploaderID != heirID {
+			t.Fatalf("ROM %s after the transfer = %+v, %v; want the heir's", id, found, err)
+		}
+		if (want == nil) != (found.DiscGroup == nil) || (want != nil && *found.DiscGroup != *want) {
+			t.Fatalf("ROM %s disc group = %v, want %v", id, found.DiscGroup, want)
+		}
+	}
+}
+
 func TestRepositoriesListROMsInSortOrder(t *testing.T) {
 	repositories, ctx := openTestRepositories(t)
 	exerciseROMSorting(t, ctx, repositories, "user-1")
