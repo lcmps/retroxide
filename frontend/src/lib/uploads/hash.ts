@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
-/** How much of the file is read and hashed between pauses, keeping the page responsive. */
+/** How much of the file is read and hashed at a time, so memory use stays bounded. */
 const SLICE_BYTES = 4 * 1024 * 1024;
 
 /**
