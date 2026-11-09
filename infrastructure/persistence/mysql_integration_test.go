@@ -16,12 +16,15 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/lcmps/retroxide/application/discs"
 	"github.com/lcmps/retroxide/application/uploads"
 	authdomain "github.com/lcmps/retroxide/domain/auth"
 	"github.com/lcmps/retroxide/domain/identity"
 	jobsdomain "github.com/lcmps/retroxide/domain/jobs"
 	librariesdomain "github.com/lcmps/retroxide/domain/libraries"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
+	uploadsdomain "github.com/lcmps/retroxide/domain/uploads"
+	"github.com/lcmps/retroxide/infrastructure/discimage"
 	"github.com/lcmps/retroxide/infrastructure/hash"
 	"github.com/lcmps/retroxide/infrastructure/storage"
 	"time"
@@ -429,5 +432,63 @@ func TestMySQLConcurrentDiscsEndUpInOneTitle(t *testing.T) {
 		if err != nil || stored == nil || string(stored.Status) != "completed" || stored.ROMID == nil || *stored.ROMID != roms[0].ID {
 			t.Fatalf("upload = %+v, %v", stored, err)
 		}
+	}
+}
+
+// An update that writes the values a row already has must not read as a missing row on MySQL,
+// which by default counts only rows an update changed. Identifying a plain upload does exactly
+// that: the file is recorded as a plain file, then indexing records it as one again.
+func TestMySQLIdentifiesAPlainFileUpload(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	repositories := NewRepositories(db)
+	userID := fmt.Sprintf("plain-%x", time.Now().UnixNano())
+	defer func() {
+		if err := db.WithContext(ctx).Where("id = ?", userID).Delete(&UserModel{}).Error; err != nil {
+			t.Errorf("cleaning integration user: %v", err)
+		}
+	}()
+	if err := repositories.SaveUser(ctx, authdomain.User{ID: userID, Email: userID + "@example.test", PasswordHash: "integration-hash", Role: identity.RoleUser}); err != nil {
+		t.Fatal(err)
+	}
+	files := storage.New(t.TempDir())
+	uploader := uploads.NewUploadService(repositories, repositories, files, hash.New(), nil, nil, uploads.UploadPolicy{MaxUploadBytes: 1 << 20, AllowedExtensions: []string{"iso"}})
+	content := []byte(userID + " is a disc image that is not a CHD")
+	accepted, err := uploader.Create(ctx, identity.Requester{UserID: userID, Role: identity.RoleUser}, uploads.UploadInput{Filename: "Plain Game (USA).iso", ExpectedSize: int64(len(content)), Content: strings.NewReader(string(content))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job JobQueueModel
+	if err := db.WithContext(ctx).Where("upload_id = ?", accepted.UploadID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	defer db.WithContext(ctx).Delete(&JobQueueModel{}, job.ID)
+	// Wired as production wires it: discs are indexed before the ROM is recorded.
+	identifier := NewIdentifier(db).WithDiscs(discs.NewService(repositories, files, hash.New(), discimage.NewImages(hash.New()), nil))
+	if err := identifier.Identify(ctx, job.UploadID, job.ROMFileID); err != nil {
+		t.Fatalf("identifying a plain upload on MySQL: %v", err)
+	}
+	upload, err := repositories.FindUpload(ctx, job.UploadID)
+	if err != nil || upload == nil || upload.Status != uploadsdomain.UploadStatusCompleted || upload.ROMID == nil {
+		t.Fatalf("upload after identification = %+v, %v; want completed with a ROM", upload, err)
+	}
+	// Saving the same values again, as a retry or a later save does, still succeeds.
+	if err := repositories.SaveDisc(ctx, job.ROMFileID, romdomain.FormatFile, nil, nil); err != nil {
+		t.Fatalf("re-saving an unchanged disc: %v", err)
+	}
+	if err := repositories.SaveUpload(ctx, *upload); err != nil {
+		t.Fatalf("re-saving an unchanged upload: %v", err)
 	}
 }

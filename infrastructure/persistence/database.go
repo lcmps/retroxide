@@ -191,6 +191,12 @@ func mysqlDSN(rawURL string) (string, error) {
 		}
 		config.Params[key] = value
 	}
+	// By default MySQL reports only the rows an UPDATE changed, so writing a row's own values
+	// back reads as zero rows, and the repositories' "no rows means not found" checks would
+	// fail on MySQL alone. Counting matched rows, as SQLite does, keeps both databases the same,
+	// so a URL cannot turn it off.
+	delete(config.Params, "clientFoundRows")
+	config.ClientFoundRows = true
 	return config.FormatDSN(), nil
 }
 
