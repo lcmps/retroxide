@@ -92,7 +92,8 @@
 {#if entries.length > 0}
 	<section class="bios-panel" aria-label={t('library.bios.title', 'BIOS files')}>
 		<button type="button" class="bios-toggle" aria-expanded={open} onclick={() => (open = !open)}>
-			<span aria-hidden="true">{open ? '▾' : '▸'}</span>
+			<!-- The pixel font has no triangle glyphs, so plain characters mark the state. -->
+			<span aria-hidden="true">{open ? '-' : '+'}</span>
 			{t('library.bios.summary', 'BIOS · {count} files', { count: summary.count })}
 			{#if summary.needsLabel > 0}
 				<span class="bios-hint">{t('library.bios.needsLabel', '· {count} needs a label', { count: summary.needsLabel })}</span>
