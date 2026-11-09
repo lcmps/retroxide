@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hashFileInBackground } from './background-hash.js';
-import { hashFile } from './hash.js';
 
 /** A stand-in Worker; each test decides how it answers the posted file. */
 class FakeWorker {
@@ -39,8 +38,10 @@ afterEach(() => {
 });
 
 describe('hashFileInBackground', () => {
-	it('hashes on the main thread where workers are unavailable', async () => {
-		await expect(hashFileInBackground(content)).resolves.toBe(await hashFile(content));
+	// The page's CSP blocks WebAssembly outside workers, and the server catches duplicates anyway,
+	// so without a worker the upload just skips the early check.
+	it('rejects where workers are unavailable', async () => {
+		await expect(hashFileInBackground(content)).rejects.toThrow('workers are unavailable');
 	});
 
 	it('hashes in a module worker and ends it with the answer', async () => {
@@ -61,11 +62,11 @@ describe('hashFileInBackground', () => {
 		expect(worker().terminated).toBe(true);
 	});
 
-	it('falls back to the main thread when the worker cannot start', async () => {
+	it('rejects when the worker cannot start', async () => {
 		const worker = useFakeWorker();
 		const hashing = hashFileInBackground(content);
 		worker().fail();
-		await expect(hashing).resolves.toBe(await hashFile(content));
+		await expect(hashing).rejects.toThrow('failed to load');
 		expect(worker().terminated).toBe(true);
 	});
 
