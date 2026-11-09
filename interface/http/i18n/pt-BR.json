@@ -505,5 +505,21 @@
   "library.bios.label": "Identificar",
   "library.bios.confirmDelete": "Excluir",
   "library.bios.saveLabel": "Salvar",
-  "library.bios.error": "Não deu certo. Tente novamente."
+  "library.bios.error": "Não deu certo. Tente novamente.",
+  "share.button": "Compartilhar",
+  "share.creating": "Criando link...",
+  "share.hint": "Qualquer pessoa com conta pode usar este link uma vez.",
+  "share.copy": "Copiar",
+  "share.copied": "Copiado",
+  "share.linkLabel": "Link de compartilhamento",
+  "share.error": "Não foi possível criar o link de compartilhamento.",
+  "share.page.title": "ROM compartilhada",
+  "share.page.loading": "Carregando...",
+  "share.page.used": "Este link já foi usado ou não existe.",
+  "share.page.discs": "{count} discos",
+  "share.page.already": "Esta ROM já está na sua biblioteca.",
+  "share.page.openLibrary": "Abrir sua biblioteca",
+  "share.page.add": "Adicionar à minha biblioteca",
+  "share.page.adding": "Adicionando...",
+  "share.page.error": "Não foi possível adicionar esta ROM. Tente novamente."
 }

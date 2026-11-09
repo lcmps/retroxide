@@ -462,5 +462,21 @@
   "library.bios.label": "Label",
   "library.bios.confirmDelete": "Delete it",
   "library.bios.saveLabel": "Save",
-  "library.bios.error": "That did not work. Please try again."
+  "library.bios.error": "That did not work. Please try again.",
+  "share.button": "Share",
+  "share.creating": "Creating link...",
+  "share.hint": "Anyone signed in can use this link once.",
+  "share.copy": "Copy",
+  "share.copied": "Copied",
+  "share.linkLabel": "Share link",
+  "share.error": "Could not create a share link.",
+  "share.page.title": "Shared ROM",
+  "share.page.loading": "Loading...",
+  "share.page.used": "This link has already been used or does not exist.",
+  "share.page.discs": "{count} discs",
+  "share.page.already": "This ROM is already in your library.",
+  "share.page.openLibrary": "Open your library",
+  "share.page.add": "Add to my library",
+  "share.page.adding": "Adding...",
+  "share.page.error": "Could not add this ROM. Please try again."
 }

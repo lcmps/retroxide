@@ -15,6 +15,7 @@ const (
 	CodeConflict             Code = "conflict"
 	CodeROMAlreadyExists     Code = "rom_already_exists"
 	CodeBIOSAlreadyExists    Code = "bios_already_exists"
+	CodeAlreadyInLibrary     Code = "already_in_library"
 	CodeUploadTooLarge       Code = "upload_too_large"
 	CodeUnsupportedUpload    Code = "upload_type_not_allowed"
 	CodeUnsupportedMediaType Code = "unsupported_media_type"
@@ -59,6 +60,11 @@ func BIOSAlreadyExists(biosID, sha256 string) *Error {
 		appError.SHA256 = &sha256
 	}
 	return appError
+}
+
+// AlreadyInLibrary reports that the requester already has a ROM a share link offers.
+func AlreadyInLibrary() *Error {
+	return &Error{Code: CodeAlreadyInLibrary, Message: "this rom is already in your library"}
 }
 
 func UploadTooLarge(actualBytes, maxBytes int64) *Error {

@@ -15,6 +15,7 @@ import (
 	"github.com/lcmps/retroxide/application/libraries"
 	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/application/settings"
+	"github.com/lcmps/retroxide/application/share"
 	"github.com/lcmps/retroxide/application/uploads"
 	"github.com/lcmps/retroxide/application/users"
 	"github.com/lcmps/retroxide/domain/identity"
@@ -37,6 +38,7 @@ type Dependencies struct {
 	Uploads       uploads.Service
 	ROMs          rom.API
 	BIOS          bios.API
+	Share         share.API
 	Libraries     libraries.API
 	Sessions      auth.SessionAPI
 	Clients       auth.ClientAPI

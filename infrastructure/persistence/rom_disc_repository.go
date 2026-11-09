@@ -177,6 +177,10 @@ func (repositories *Repositories) MergeROMs(ctx context.Context, targetID, sourc
 		if err := tx.Where("rom_id = ?", sourceID).Delete(&LibraryItemModel{}).Error; err != nil {
 			return err
 		}
+		// Share links follow the title: unused ones now offer the merged game.
+		if err := tx.Model(&ROMShareLinkModel{}).Where("rom_id = ?", sourceID).Update("rom_id", targetID).Error; err != nil {
+			return err
+		}
 		if err := tx.Delete(&source).Error; err != nil {
 			return err
 		}

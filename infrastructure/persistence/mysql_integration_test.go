@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
 	"os"
 	"slices"
@@ -527,4 +528,49 @@ func TestMySQLBIOSFiles(t *testing.T) {
 	}
 	defer sqlDB.Close()
 	exerciseBIOS(t, ctx, NewRepositories(db), fmt.Sprintf("bios%x", time.Now().UnixNano()))
+}
+
+func TestMySQLShareLinks(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	repositories := NewRepositories(db)
+	prefix := fmt.Sprintf("sl%x", time.Now().UnixNano())
+	exerciseShareLinks(t, ctx, repositories, prefix)
+	exerciseShareMerge(t, ctx, repositories, prefix+"m")
+
+	// Two people redeeming one link at once: exactly one gets the ROM.
+	original := seedDiscROM(t, repositories, ctx, prefix+"-race", prefix+"-owner", nil)
+	createLink(t, repositories, ctx, prefix+"-race-token", original.ID, prefix+"-owner")
+	var wait sync.WaitGroup
+	results := make([]error, 2)
+	for index := range results {
+		wait.Go(func() {
+			_, results[index] = repositories.RedeemShareLink(ctx, shareHash(prefix+"-race-token"), fmt.Sprintf("%s-racer%d", prefix, index), fmt.Sprintf("%s-race-copy%d", prefix, index))
+		})
+	}
+	wait.Wait()
+	succeeded := 0
+	for _, err := range results {
+		switch {
+		case err == nil:
+			succeeded++
+		case !fault.IsCode(err, fault.CodeNotFound):
+			t.Fatalf("losing redeem = %v, want not found", err)
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("%d redeems succeeded, want exactly 1 (%v)", succeeded, results)
+	}
 }

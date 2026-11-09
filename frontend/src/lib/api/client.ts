@@ -2,6 +2,7 @@ import { browser } from '$app/env';
 
 import type {
   Bios,
+  SharePreview,
   BiosLabels,
   BiosUploadOptions,
   ApiError,
@@ -624,6 +625,26 @@ export function createUploadSession(file: File, part = false, bios?: BiosUploadO
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(sessionRequestBody(file, part, bios))
   });
+}
+
+/** Creates a single-use link that adds a copy of the ROM to whoever opens it first. */
+export function createShareLink(romId: string): Promise<{ url: string }> {
+  return requestJson<{ url: string }>(`/rom/${encodeURIComponent(romId)}/share`, { method: 'POST', withAuth: true });
+}
+
+/** Shows what a share link offers, without using it up. */
+export function getSharePreview(token: string): Promise<SharePreview> {
+  return requestJson<SharePreview>(`/share/${encodeURIComponent(token)}`, { withAuth: true });
+}
+
+export async function fetchShareCover(token: string): Promise<Blob> {
+  const response = await requestResponse(`/share/${encodeURIComponent(token)}/cover`, { withAuth: true });
+  return response.blob();
+}
+
+/** Uses up a share link, adding the ROM to the signed-in person's library. */
+export function redeemShareLink(token: string): Promise<{ rom_id: string }> {
+  return requestJson<{ rom_id: string }>(`/share/${encodeURIComponent(token)}`, { method: 'POST', withAuth: true });
 }
 
 /** Lists a platform's BIOS files, which every user shares. */

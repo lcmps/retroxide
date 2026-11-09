@@ -43,6 +43,9 @@ func NewRouter(settings config.Config, services *Services, logger *slog.Logger) 
 	if services.BIOS != nil {
 		dependencies.BIOS = services.BIOS
 	}
+	if services.Share != nil {
+		dependencies.Share = services.Share
+	}
 	return httpadapter.NewRouter(dependencies, httpadapter.Options{
 		MaxUploadBytes: settings.MaxUploadBytes,
 		CORSOrigins:    settings.CORSAllowedOrigins,

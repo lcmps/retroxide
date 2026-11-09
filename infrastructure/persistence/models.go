@@ -209,6 +209,18 @@ type BIOSModel struct {
 
 func (BIOSModel) TableName() string { return "bios" }
 
+// ROMShareLinkModel is a single-use link adding a copy of a ROM to another user's library.
+type ROMShareLinkModel struct {
+	TokenHash string  `gorm:"column:token_hash;primaryKey;size:64"`
+	ROMID     string  `gorm:"column:rom_id;not null;size:64"`
+	CreatedBy string  `gorm:"column:created_by;not null;size:64"`
+	CreatedAt string  `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP;autoCreateTime:false"`
+	UsedBy    *string `gorm:"column:used_by;size:64"`
+	UsedAt    *string `gorm:"column:used_at"`
+}
+
+func (ROMShareLinkModel) TableName() string { return "rom_share_link" }
+
 type SchemaMigrationModel struct {
 	Version   uint64 `gorm:"column:version;primaryKey"`
 	Name      string `gorm:"column:name;not null;size:255"`

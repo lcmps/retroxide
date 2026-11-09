@@ -4,6 +4,7 @@
   import { resolve } from '$app/paths';
   import { Dialog } from 'bits-ui';
   import ActionButton from '#lib/components/ActionButton.svelte';
+  import ShareButton from '#lib/components/rom/ShareButton.svelte';
   import RomEditForm from '#lib/components/rom/RomEditForm.svelte';
   import { platforms } from '#lib/platforms/catalog.svelte.js';
   import { tick, untrack } from 'svelte';
@@ -467,6 +468,8 @@
           </Dialog.Portal>
         </Dialog.Root>
       </div>
+      <!-- Only the ROM's uploader or an admin can open this page, which is exactly who may share it. -->
+      <ShareButton romId={rom.rom_id} />
     </article>
   {:else}
     <h1 id="rom-title">{t('rom.title', 'ROM Detail')}</h1>

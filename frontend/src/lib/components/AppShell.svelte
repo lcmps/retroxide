@@ -8,6 +8,7 @@
 	import type { Snippet } from "svelte";
 	import { getProfile, i18n, logger, logoutSession } from "#lib";
 	import { uploadQueue } from "#lib/uploads/shared.js";
+	import { loginPathFor } from "#lib/share/paths.js";
 	import { useTranslate } from "#lib/i18n/helpers.js";
 	import { setUserFont } from "#lib/appearance.js";
 	import { platforms } from "#lib/platforms/catalog.svelte.js";
@@ -127,7 +128,8 @@
 		const handleSessionExpired = () => {
 			uploadQueue.cancel();
 			setUserFont(null);
-			void goto(resolve("/login"), { replace: true });
+			// Someone opening a share link with an expired session comes back to it after signing in.
+			void goto(`${resolve("/login")}${loginPathFor(page.url.pathname).slice("/login".length)}`, { replace: true });
 		};
 		window.addEventListener(
 			"retroxide:session-expired",

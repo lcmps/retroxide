@@ -156,6 +156,10 @@ ALTER TABLE upload ADD COLUMN bios_platform TEXT;
 ALTER TABLE upload ADD COLUMN bios_id TEXT;
 ALTER TABLE upload_session ADD COLUMN bios INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE upload_session ADD COLUMN bios_platform TEXT;`},
+	// 26: share links. A link adds a copy of one ROM to the library of whoever redeems it, once;
+	// only the SHA-256 of its token is kept.
+	{26, "add_rom_share_links", `CREATE TABLE rom_share_link (token_hash TEXT PRIMARY KEY, rom_id TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, used_by TEXT, used_at TEXT);
+CREATE INDEX idx_rom_share_link_rom_id ON rom_share_link(rom_id);`},
 }
 
 var mysqlMigrations = []migration{
@@ -267,6 +271,7 @@ INSERT INTO rom_disc (rom_id, rom_file_id, number, filename)
 	{25, "add_bios", `CREATE TABLE bios (id VARCHAR(64) PRIMARY KEY, rom_file_id VARCHAR(67) NOT NULL, uploader_id VARCHAR(64) NOT NULL, platform VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, expected_path TEXT NULL, recognized BOOLEAN NOT NULL DEFAULT FALSE, region VARCHAR(64) NULL, version VARCHAR(64) NULL, model VARCHAR(64) NULL, release_date VARCHAR(16) NULL, note VARCHAR(255) NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_bios_rom_file (rom_file_id), KEY idx_bios_platform (platform), KEY idx_bios_uploader_id (uploader_id), CONSTRAINT fk_bios_rom_file FOREIGN KEY (rom_file_id) REFERENCES rom_file(id));
 ALTER TABLE upload ADD COLUMN bios BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN bios_platform VARCHAR(64) NULL, ADD COLUMN bios_id VARCHAR(64) NULL;
 ALTER TABLE upload_session ADD COLUMN bios BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN bios_platform VARCHAR(64) NULL;`},
+	{26, "add_rom_share_links", `CREATE TABLE rom_share_link (token_hash CHAR(64) PRIMARY KEY, rom_id VARCHAR(64) NOT NULL, created_by VARCHAR(64) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, used_by VARCHAR(64) NULL, used_at TIMESTAMP NULL, KEY idx_rom_share_link_rom_id (rom_id), CONSTRAINT fk_rom_share_link_rom FOREIGN KEY (rom_id) REFERENCES rom(id));`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {

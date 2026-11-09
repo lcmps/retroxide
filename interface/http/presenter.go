@@ -60,7 +60,7 @@ func httpStatusForError(code fault.Code) int {
 		return http.StatusForbidden
 	case fault.CodeNotFound:
 		return http.StatusNotFound
-	case fault.CodeConflict, fault.CodeROMAlreadyExists, fault.CodeBIOSAlreadyExists:
+	case fault.CodeConflict, fault.CodeROMAlreadyExists, fault.CodeBIOSAlreadyExists, fault.CodeAlreadyInLibrary:
 		return http.StatusConflict
 	case fault.CodeUploadTooLarge:
 		return http.StatusRequestEntityTooLarge

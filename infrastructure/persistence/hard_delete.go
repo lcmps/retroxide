@@ -56,6 +56,10 @@ func (repositories *Repositories) HardDeleteROM(ctx context.Context, romID strin
 		if err := tx.Where("rom_id = ?", romID).Delete(&LibraryItemModel{}).Error; err != nil {
 			return err
 		}
+		// Unused links can no longer be redeemed; used ones were only a record.
+		if err := tx.Where("rom_id = ?", romID).Delete(&ROMShareLinkModel{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("rom_id = ?", romID).Delete(&ROMDiscModel{}).Error; err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@
 	import { browser } from '$app/env';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { loginPathFor } from '#lib/share/paths.js';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { Tooltip } from 'bits-ui';
@@ -17,7 +18,7 @@
 
 	let { children } = $props();
 
-	const shellPrefixes = ['/library', '/uploads', '/downloads', '/rom', '/profile', '/users'];
+	const shellPrefixes = ['/library', '/uploads', '/downloads', '/rom', '/profile', '/users', '/share'];
 
 	const activePath = $derived(page.url.pathname);
 	const useShell = $derived(
@@ -42,7 +43,8 @@
 			return;
 		}
 		if (useShell && !isAuthenticated) {
-			void goto(resolve('/login'), { replace: true });
+			// Someone opening a share link signed out comes back to it after signing in.
+			void goto(`${resolve('/login')}${loginPathFor(activePath).slice('/login'.length)}`, { replace: true });
 		}
 	}
 
