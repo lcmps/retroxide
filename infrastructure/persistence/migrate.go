@@ -145,6 +145,17 @@ CREATE TABLE rom_disc (rom_id TEXT NOT NULL, rom_file_id TEXT NOT NULL, number I
 CREATE INDEX idx_rom_disc_rom_file_id ON rom_disc(rom_file_id);
 INSERT INTO rom_disc (rom_id, rom_file_id, number, filename)
   SELECT r.id, r.rom_file_id, 1, COALESCE((SELECT u.original_filename FROM upload u WHERE u.rom_id = r.id ORDER BY u.id LIMIT 1), '') FROM rom r;`},
+	// 25: BIOS files, shared by every user and stored like ROMs as a rom_file, one entry per
+	// file. Uploads (and upload sessions) can be marked as BIOS files for a platform, and an
+	// upload identified as a BIOS points at its entry.
+	{25, "add_bios", `CREATE TABLE bios (id TEXT PRIMARY KEY, rom_file_id TEXT NOT NULL UNIQUE REFERENCES rom_file(id), uploader_id TEXT NOT NULL, platform TEXT NOT NULL, filename TEXT NOT NULL, expected_path TEXT, recognized INTEGER NOT NULL DEFAULT 0, region TEXT, version TEXT, model TEXT, release_date TEXT, note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX idx_bios_platform ON bios(platform);
+CREATE INDEX idx_bios_uploader_id ON bios(uploader_id);
+ALTER TABLE upload ADD COLUMN bios INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE upload ADD COLUMN bios_platform TEXT;
+ALTER TABLE upload ADD COLUMN bios_id TEXT;
+ALTER TABLE upload_session ADD COLUMN bios INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE upload_session ADD COLUMN bios_platform TEXT;`},
 }
 
 var mysqlMigrations = []migration{
@@ -253,6 +264,9 @@ CREATE TABLE rom_disc (rom_id VARCHAR(64) NOT NULL, rom_file_id VARCHAR(67) NOT 
 CREATE INDEX idx_rom_disc_rom_file_id ON rom_disc(rom_file_id);
 INSERT INTO rom_disc (rom_id, rom_file_id, number, filename)
   SELECT r.id, r.rom_file_id, 1, COALESCE((SELECT u.original_filename FROM upload u WHERE u.rom_id = r.id ORDER BY u.id LIMIT 1), '') FROM rom r;`},
+	{25, "add_bios", `CREATE TABLE bios (id VARCHAR(64) PRIMARY KEY, rom_file_id VARCHAR(67) NOT NULL, uploader_id VARCHAR(64) NOT NULL, platform VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, expected_path TEXT NULL, recognized BOOLEAN NOT NULL DEFAULT FALSE, region VARCHAR(64) NULL, version VARCHAR(64) NULL, model VARCHAR(64) NULL, release_date VARCHAR(16) NULL, note VARCHAR(255) NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_bios_rom_file (rom_file_id), KEY idx_bios_platform (platform), KEY idx_bios_uploader_id (uploader_id), CONSTRAINT fk_bios_rom_file FOREIGN KEY (rom_file_id) REFERENCES rom_file(id));
+ALTER TABLE upload ADD COLUMN bios BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN bios_platform VARCHAR(64) NULL, ADD COLUMN bios_id VARCHAR(64) NULL;
+ALTER TABLE upload_session ADD COLUMN bios BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN bios_platform VARCHAR(64) NULL;`},
 }
 
 func RunMigrations(ctx context.Context, db *gorm.DB) error {
