@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	jobsdomain "github.com/lcmps/retroxide/domain/jobs"
 	"sync"
 	"sync/atomic"
@@ -15,11 +16,12 @@ func identifyPool(workers int, identifier Identifier, notifier *Notifier) Pool {
 }
 
 type workerTestQueue struct {
-	job         *jobsdomain.Job
-	claimCount  atomic.Int32
-	completed   atomic.Int32
-	rescheduled atomic.Int32
-	lastAttempt atomic.Uint32
+	job          *jobsdomain.Job
+	claimCount   atomic.Int32
+	completed    atomic.Int32
+	rescheduled  atomic.Int32
+	lastAttempt  atomic.Uint32
+	deadLettered atomic.Int32
 }
 
 func (*workerTestQueue) Enqueue(context.Context, jobsdomain.Payload) error { return nil }
@@ -42,7 +44,10 @@ func (queue *workerTestQueue) Reschedule(_ context.Context, _ string, attempt ui
 	queue.rescheduled.Add(1)
 	return nil
 }
-func (*workerTestQueue) DeadLetter(context.Context, jobsdomain.Job, uint8, string) error { return nil }
+func (queue *workerTestQueue) DeadLetter(context.Context, jobsdomain.Job, uint8, string) error {
+	queue.deadLettered.Add(1)
+	return nil
+}
 func (*workerTestQueue) ListDeadLetter(context.Context, int, *string) (jobsdomain.DeadLetterPage, error) {
 	return jobsdomain.DeadLetterPage{}, nil
 }
@@ -63,6 +68,80 @@ func (identifier workerTestIdentifier) Identify(ctx context.Context, _, _ string
 }
 
 type panickingIdentifier struct{}
+
+type fallbackTestIdentifier struct {
+	attempts    int
+	fallbacks   int
+	succeedAt   int
+	fallbackErr error
+}
+
+func (identifier *fallbackTestIdentifier) Identify(context.Context, string, string) error {
+	identifier.attempts++
+	if identifier.attempts == identifier.succeedAt {
+		return nil
+	}
+	return errors.New("cannot identify ROM")
+}
+
+func (identifier *fallbackTestIdentifier) CompleteWithFilename(context.Context, string, string) error {
+	identifier.fallbacks++
+	return identifier.fallbackErr
+}
+
+func TestROMPipelineFallsBackAfterThreeIdentificationFailures(t *testing.T) {
+	identifier := &fallbackTestIdentifier{}
+	queue := &workerTestQueue{}
+	enqueuer := &recordingEnqueuer{}
+	handlers := ROMPipeline(identifier, enqueuer, &recordingScraper{})
+	job := jobsdomain.Job{ID: "job-1", Payload: jobsdomain.Payload{Kind: jobsdomain.KindIdentifyROM, UploadID: "upl-1", ROMFileID: "rf-1"}}
+	for attempt := range uint8(3) {
+		job.Payload.Attempt = attempt
+		processJob(context.Background(), queue, handlers, job)
+		if attempt < 2 && identifier.fallbacks != 0 {
+			t.Fatal("filename fallback ran before three failures")
+		}
+	}
+	if identifier.attempts != 3 || identifier.fallbacks != 1 {
+		t.Fatalf("identification attempts=%d fallbacks=%d, want 3 and 1", identifier.attempts, identifier.fallbacks)
+	}
+	if queue.rescheduled.Load() != 2 || queue.completed.Load() != 1 {
+		t.Fatalf("rescheduled=%d completed=%d, want 2 and 1", queue.rescheduled.Load(), queue.completed.Load())
+	}
+	if len(enqueuer.payloads) != 0 {
+		t.Fatalf("fallback enqueued metadata scrapes: %+v", enqueuer.payloads)
+	}
+	if queue.deadLettered.Load() != 0 {
+		t.Fatal("successfully completed filename fallback was dead-lettered")
+	}
+}
+
+func TestROMPipelineDeadLettersFailedFilenameFallback(t *testing.T) {
+	identifier := &fallbackTestIdentifier{fallbackErr: errors.New("cannot save ROM")}
+	queue := &workerTestQueue{}
+	job := jobsdomain.Job{ID: "job-1", Payload: jobsdomain.Payload{
+		Kind: jobsdomain.KindIdentifyROM, UploadID: "upl-1", ROMFileID: "rf-1", Attempt: 2,
+	}}
+	processJob(context.Background(), queue, ROMPipeline(identifier, nil, nil), job)
+	if identifier.fallbacks != 1 || queue.deadLettered.Load() != 1 || queue.completed.Load() != 1 {
+		t.Fatalf("fallbacks=%d dead-lettered=%d completed=%d, want 1 each", identifier.fallbacks, queue.deadLettered.Load(), queue.completed.Load())
+	}
+}
+
+func TestROMPipelineDoesNotFallBackWhenThirdAttemptSucceeds(t *testing.T) {
+	identifier := &fallbackTestIdentifier{succeedAt: 3}
+	queue := &workerTestQueue{}
+	enqueuer := &recordingEnqueuer{}
+	handlers := ROMPipeline(identifier, enqueuer, &recordingScraper{})
+	job := jobsdomain.Job{ID: "job-1", Payload: jobsdomain.Payload{Kind: jobsdomain.KindIdentifyROM, UploadID: "upl-1", ROMFileID: "rf-1"}}
+	for attempt := range uint8(3) {
+		job.Payload.Attempt = attempt
+		processJob(context.Background(), queue, handlers, job)
+	}
+	if identifier.fallbacks != 0 || len(enqueuer.payloads) != 1 || queue.deadLettered.Load() != 0 {
+		t.Fatalf("fallbacks=%d scrapes=%d dead-lettered=%d, want 0, 1, 0", identifier.fallbacks, len(enqueuer.payloads), queue.deadLettered.Load())
+	}
+}
 
 func (panickingIdentifier) Identify(context.Context, string, string) error {
 	panic("identify panic")

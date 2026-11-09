@@ -58,3 +58,4 @@ type Service interface {
 }
 
 var _ jobs.Identifier = (*IdentifyService)(nil)
+var _ jobs.FilenameCompleter = (*IdentifyService)(nil)

@@ -35,12 +35,28 @@ func NewIdentifyService(uploadRepository identifyUploadRepository, romRepository
 }
 
 func (service *IdentifyService) Identify(ctx context.Context, uploadID, romFileID string) error {
+	return service.identify(ctx, uploadID, romFileID, false)
+}
+
+func (service *IdentifyService) CompleteWithFilename(ctx context.Context, uploadID, romFileID string) error {
+	return service.identify(ctx, uploadID, romFileID, true)
+}
+
+func (service *IdentifyService) identify(ctx context.Context, uploadID, romFileID string, filenameOnly bool) error {
 	upload, err := service.uploadRepository.FindUpload(ctx, uploadID)
 	if err != nil {
 		return err
 	}
 	if upload == nil {
 		return fault.NotFound()
+	}
+	if upload.Status == uploadsdomain.UploadStatusCompleted {
+		return nil
+	}
+	if upload.Status == uploadsdomain.UploadStatusFailed {
+		if err := upload.TransitionTo(uploadsdomain.UploadStatusProcessing); err != nil {
+			return fault.Internal(err)
+		}
 	}
 	romFile, err := service.romRepository.FindROMFileByID(ctx, romFileID)
 	if err != nil {
@@ -58,13 +74,15 @@ func (service *IdentifyService) Identify(ctx context.Context, uploadID, romFileI
 		return fault.NotFound()
 	}
 
-	romID, err := service.attachOrCreate(ctx, upload, romFileID)
+	romID, err := service.attachOrCreate(ctx, upload, romFileID, filenameOnly)
 	if err != nil {
-		if transitionErr := upload.TransitionTo(uploadsdomain.UploadStatusFailed); transitionErr == nil {
-			message := err.Error()
-			upload.ErrorMessage = &message
-			if saveErr := service.uploadRepository.SaveUpload(ctx, *upload); saveErr != nil {
-				slog.ErrorContext(ctx, "failed to persist failed upload status", "upload_id", uploadID, "error", saveErr)
+		if filenameOnly {
+			if transitionErr := upload.TransitionTo(uploadsdomain.UploadStatusFailed); transitionErr == nil {
+				message := err.Error()
+				upload.ErrorMessage = &message
+				if saveErr := service.uploadRepository.SaveUpload(ctx, *upload); saveErr != nil {
+					slog.ErrorContext(ctx, "failed to persist failed upload status", "upload_id", uploadID, "error", saveErr)
+				}
 			}
 		}
 		return err
@@ -81,10 +99,14 @@ func (service *IdentifyService) Identify(ctx context.Context, uploadID, romFileI
 // marks it as a disc joins the uploader's ROM for the same release when one exists and the disc
 // number is free; otherwise it becomes a new ROM. A unique-index conflict from a concurrent
 // upload of another disc is returned, so the job's retry finds the ROM that won.
-func (service *IdentifyService) attachOrCreate(ctx context.Context, upload *uploadsdomain.Upload, romFileID string) (string, error) {
+func (service *IdentifyService) attachOrCreate(ctx context.Context, upload *uploadsdomain.Upload, romFileID string, filenameOnly bool) (string, error) {
 	identity := InferIdentityFromFilename(upload.OriginalFilename)
 	stem, _ := splitFilename(upload.OriginalFilename)
 	disc, marked := romdomain.ParseDiscName(stem)
+	if filenameOnly {
+		identity.Title = upload.OriginalFilename
+		marked = false
+	}
 	number := 1
 	var group *string
 	if marked {

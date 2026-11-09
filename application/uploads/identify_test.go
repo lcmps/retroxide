@@ -213,6 +213,67 @@ func TestIdentifyServiceMarksUploadFailedWhenROMFileIsMissing(t *testing.T) {
 	}
 }
 
+func TestIdentifyServiceKeepsRetryableFailuresProcessing(t *testing.T) {
+	uploads := &identifyTestUploadRepository{upload: &uploadsdomain.Upload{
+		ID: "upl-1", UploaderID: "user-1", OriginalFilename: "game.sfc", Status: uploadsdomain.UploadStatusProcessing,
+	}}
+	roms := &identifyTestROMRepository{anyFile: true, err: errors.New("temporary database failure")}
+	if err := NewIdentifyService(uploads, roms).Identify(context.Background(), "upl-1", "rf-1"); err == nil {
+		t.Fatal("Identify() succeeded despite a repository failure")
+	}
+	for _, saved := range uploads.saved {
+		if saved.Status != uploadsdomain.UploadStatusProcessing {
+			t.Fatalf("upload status = %s, want processing so identification can retry", saved.Status)
+		}
+	}
+}
+
+func TestIdentifyServiceCompletesWithOriginalFilename(t *testing.T) {
+	message := "identification failed"
+	uploads := &identifyTestUploadRepository{upload: &uploadsdomain.Upload{
+		ID: "upl-1", UploaderID: "user-1", OriginalFilename: "Unknown Game (USA) (Disc 2).bin",
+		Status: uploadsdomain.UploadStatusProcessing, ErrorMessage: &message,
+	}}
+	roms := &identifyTestROMRepository{anyFile: true}
+	completer := NewIdentifyService(uploads, roms)
+	if err := completer.CompleteWithFilename(context.Background(), "upl-1", "rf-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(roms.roms) != 1 || roms.roms[0].Identity.Title != uploads.upload.OriginalFilename || roms.roms[0].DiscGroup != nil {
+		t.Fatalf("fallback ROMs = %+v, want a standalone ROM titled with the original filename", roms.roms)
+	}
+	if len(uploads.saved) != 1 || uploads.saved[0].Status != uploadsdomain.UploadStatusCompleted || uploads.saved[0].ErrorMessage != nil || uploads.saved[0].ROMID == nil {
+		t.Fatalf("fallback upload state = %+v", uploads.saved)
+	}
+}
+
+func TestIdentifyServiceDoesNotRecreateCompletedROM(t *testing.T) {
+	romID := "rom-existing"
+	uploads := &identifyTestUploadRepository{upload: &uploadsdomain.Upload{
+		ID: "upl-1", OriginalFilename: "game.sfc", Status: uploadsdomain.UploadStatusCompleted, ROMID: &romID,
+	}}
+	roms := &identifyTestROMRepository{anyFile: true}
+	if err := NewIdentifyService(uploads, roms).Identify(context.Background(), "upl-1", "rf-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(roms.roms) != 0 || len(uploads.saved) != 0 {
+		t.Fatalf("completed upload recreated: ROMs=%d uploads=%d", len(roms.roms), len(uploads.saved))
+	}
+}
+
+func TestIdentifyServiceMarksFailedFilenameFallbackTerminal(t *testing.T) {
+	uploads := &identifyTestUploadRepository{upload: &uploadsdomain.Upload{
+		ID: "upl-1", OriginalFilename: "game.sfc", Status: uploadsdomain.UploadStatusProcessing,
+	}}
+	roms := &identifyTestROMRepository{anyFile: true, err: errors.New("cannot save ROM")}
+	if err := NewIdentifyService(uploads, roms).CompleteWithFilename(context.Background(), "upl-1", "rf-1"); err == nil {
+		t.Fatal("fallback succeeded despite a repository failure")
+	}
+	if len(uploads.saved) != 1 || uploads.saved[0].Status != uploadsdomain.UploadStatusFailed || uploads.saved[0].ErrorMessage == nil {
+		t.Fatalf("failed fallback upload state = %+v", uploads.saved)
+	}
+}
+
 // discUpload identifies one uploaded file and returns the ROM it ended up in.
 func discUpload(t *testing.T, roms *identifyTestROMRepository, uploader, filename, fileID string) romdomain.ROM {
 	t.Helper()
