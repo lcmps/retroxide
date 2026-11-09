@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClientError } from '#lib/api/errors.js';
-import { PART_BYTES, RESUMABLE_FROM_BYTES, uploadResumable, type ResumableApi } from './resumable.js';
+import { MIN_PART_BYTES, PART_SECONDS, RESUMABLE_FROM_BYTES, uploadResumable, type ResumableApi } from './resumable.js';
 
 const MiB = 1024 * 1024;
 
@@ -50,7 +50,8 @@ function memoryStorage(initial: Record<string, string> = {}) {
 
 // Hashing never finishes unless a test says so, so other tests see no duplicate checks.
 const never = () => new Promise<string>(() => {});
-const instant = { sleep: async () => {}, waitUntilOnline: async () => {}, hash: never };
+// A clock that never moves, so parts stay at their starting size unless a test sets a pace.
+const instant = { sleep: async () => {}, waitUntilOnline: async () => {}, hash: never, now: () => 0 };
 
 describe('resumable uploads', () => {
 	it('sends small files in one request', async () => {
@@ -61,7 +62,7 @@ describe('resumable uploads', () => {
 	});
 
 	it('sends large files in parts and retries a dropped part where it stopped', async () => {
-		const size = RESUMABLE_FROM_BYTES + 3 * MiB;
+		const size = 2 * MIN_PART_BYTES + 3 * MiB;
 		const server = fakeServer(size);
 		const storage = memoryStorage();
 		const reconnecting: boolean[] = [];
@@ -73,7 +74,7 @@ describe('resumable uploads', () => {
 			onReconnecting: (value) => reconnecting.push(value)
 		}, { ...instant, storage });
 		expect(accepted.upload_id).toBe('upl_1');
-		expect(server.parts).toEqual([0, PART_BYTES, 2 * PART_BYTES]);
+		expect(server.parts).toEqual([0, MIN_PART_BYTES, 2 * MIN_PART_BYTES]);
 		expect(reconnecting).toContain(true);
 		expect(reconnecting.at(-1)).toBe(false);
 		expect(progress.at(-1)).toBe(size);
@@ -81,14 +82,14 @@ describe('resumable uploads', () => {
 	});
 
 	it('resumes a session remembered from an earlier page load', async () => {
-		const size = RESUMABLE_FROM_BYTES + MiB;
+		const size = 2 * MIN_PART_BYTES + MiB;
 		const server = fakeServer(size);
-		server.setReceived(2 * PART_BYTES);
+		server.setReceived(2 * MIN_PART_BYTES);
 		const file = new File([new Uint8Array(size)], 'big.iso', { lastModified: 7 });
 		const storage = memoryStorage({ [`retroxide.upload-session:big.iso:${size}:7`]: 'ups_earlier' });
 		await uploadResumable(file, server.api, { onProgress: () => {} }, { ...instant, storage });
 		expect(server.api.createSession).not.toHaveBeenCalled();
-		expect(server.parts).toEqual([2 * PART_BYTES]);
+		expect(server.parts).toEqual([2 * MIN_PART_BYTES]);
 	});
 
 	it('starts over when the session expired, and stops on final errors', async () => {
@@ -119,7 +120,7 @@ describe('resumable uploads', () => {
 
 describe('duplicate checks while uploading', () => {
 	it('stops uploading a ROM the library already has once the file is hashed', async () => {
-		const size = RESUMABLE_FROM_BYTES + 8 * MiB;
+		const size = 2 * MIN_PART_BYTES + 8 * MiB;
 		const server = fakeServer(size);
 		let finishHash: (digest: string) => void = () => {};
 		const hashed = new Promise<string>((resolve) => (finishHash = resolve));
@@ -143,7 +144,7 @@ describe('duplicate checks while uploading', () => {
 	});
 
 	it('uploads new ROMs in full, checks once, and stops hashing when done', async () => {
-		const size = RESUMABLE_FROM_BYTES + 8 * MiB;
+		const size = 2 * MIN_PART_BYTES + 8 * MiB;
 		const server = fakeServer(size);
 		let aborted = false;
 		const hash = (_file: File, signal: AbortSignal) => {
@@ -169,7 +170,8 @@ describe('duplicate checks while uploading', () => {
 	});
 
 	describe('cancelling', () => {
-		const large = () => new File([new Uint8Array(RESUMABLE_FROM_BYTES)], 'big.bin');
+		// Large enough to be sent in parts, and to need more than one.
+		const large = () => new File([new Uint8Array(Math.max(RESUMABLE_FROM_BYTES, MIN_PART_BYTES + MiB))], 'big.bin');
 		const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 		const noHash = async () => '';
 
@@ -246,5 +248,61 @@ describe('duplicate checks while uploading', () => {
 			await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
 			expect(server.api.sendPart).not.toHaveBeenCalled();
 		});
+	});
+});
+
+describe('part sizes', () => {
+	/** Delivers every part at bytesPerSecond, moving the returned clock on as it does. */
+	function atSpeed(server: ReturnType<typeof fakeServer>, bytesPerSecond: number): () => number {
+		let milliseconds = 0;
+		const send = server.api.sendPart;
+		server.api.sendPart = vi.fn(async (...args: Parameters<ResumableApi['sendPart']>) => {
+			milliseconds += (args[2].size / bytesPerSecond) * 1000;
+			return send(...args);
+		});
+		return () => milliseconds;
+	}
+
+	/** The size of each part the server received, in MiB. */
+	function partSizes(server: ReturnType<typeof fakeServer>, size: number): number[] {
+		return server.parts.map((offset, index) => ((server.parts[index + 1] ?? size) - offset) / MiB);
+	}
+
+	const upload = (server: ReturnType<typeof fakeServer>, size: number, now: () => number) =>
+		uploadResumable(new File([new Uint8Array(size)], 'paced.iso'), server.api, { onProgress: () => {} }, { ...instant, storage: memoryStorage(), now });
+
+	it('grows parts on a fast link up to the largest the server accepts', async () => {
+		const size = (8 + 64 + 64 + 5) * MiB;
+		const server = fakeServer(size);
+		await upload(server, size, atSpeed(server, 1024 * MiB));
+		expect(partSizes(server, size)).toEqual([8, 64, 64, 5]);
+	});
+
+	it('sizes parts to take about PART_SECONDS each', async () => {
+		const size = (8 + 16 + 16 + 3) * MiB;
+		const server = fakeServer(size);
+		await upload(server, size, atSpeed(server, (16 * MiB) / PART_SECONDS));
+		expect(partSizes(server, size)).toEqual([8, 16, 16, 3]);
+	});
+
+	it('keeps parts at the smallest size on a slow link', async () => {
+		const size = 3 * MIN_PART_BYTES;
+		const server = fakeServer(size);
+		await upload(server, size, atSpeed(server, MiB / 8));
+		expect(partSizes(server, size)).toEqual([8, 8, 8]);
+	});
+
+	it('halves the part after a failure, then grows again', async () => {
+		const size = (8 + 16 + 32 + 4) * MiB;
+		const server = fakeServer(size);
+		const now = atSpeed(server, (32 * MiB) / PART_SECONDS);
+		const paced = server.api.sendPart;
+		let calls = 0;
+		server.api.sendPart = vi.fn(async (...args: Parameters<ResumableApi['sendPart']>) => {
+			if (++calls === 2) server.failNext(new ApiClientError({ message: 'offline' }));
+			return paced(...args);
+		});
+		await upload(server, size, now);
+		expect(partSizes(server, size)).toEqual([8, 16, 32, 4]);
 	});
 });
