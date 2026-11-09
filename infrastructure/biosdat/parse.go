@@ -66,15 +66,18 @@ var (
 )
 
 // Parse reads a System.dat and returns its BIOS files on catalog platforms, labelled by
-// biosdomain.Decode. A list with no such files is an error: a truncated download or an error
-// page must never replace a working list.
+// biosdomain.Decode. A list that is cut short or has no such files is an error: a truncated
+// download or an error page must never replace a working list.
 func Parse(reader io.Reader) ([]biosdomain.Known, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
 	var entries []biosdomain.Known
-	platform := ""
+	platform, last := "", ""
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			last = line
+		}
 		switch {
 		case strings.HasPrefix(line, "comment "):
 			platform = sectionPlatforms[unquote(strings.TrimPrefix(line, "comment "))]
@@ -86,6 +89,10 @@ func Parse(reader io.Reader) ([]biosdomain.Known, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading the BIOS list: %w", err)
+	}
+	// The list ends by closing its game block; a download cut short does not.
+	if last != ")" {
+		return nil, errors.New("the BIOS list is incomplete")
 	}
 	if len(entries) == 0 {
 		return nil, errors.New("the BIOS list has no BIOS files for known platforms")
