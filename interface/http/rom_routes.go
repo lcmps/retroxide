@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/lcmps/retroxide/application/bios"
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/domain/identity"
@@ -26,12 +27,14 @@ const downloadLinkPath = "/api/v1/download"
 
 type romHandler struct {
 	roms  rom.API
+	bios  bios.API
 	links DownloadLinks
 }
 
-func registerROMRoutes(api *gin.RouterGroup, roms rom.API, links DownloadLinks) {
-	handler := romHandler{roms: roms, links: links}
-	api.GET(strings.TrimPrefix(downloadLinkPath, api.BasePath()), requireService(roms != nil && links != nil), handler.downloadWithLink)
+func registerROMRoutes(api *gin.RouterGroup, roms rom.API, biosService bios.API, links DownloadLinks) {
+	handler := romHandler{roms: roms, bios: biosService, links: links}
+	// Signed links serve ROM and BIOS downloads alike, told apart by the ID they carry.
+	api.GET(strings.TrimPrefix(downloadLinkPath, api.BasePath()), requireService(links != nil && (roms != nil || biosService != nil)), handler.downloadWithLink)
 
 	api.GET("/platforms", requireService(roms != nil), handler.platforms)
 	api.GET("/platforms/catalog", requireService(roms != nil), handler.platformCatalog)
@@ -289,6 +292,14 @@ func (handler romHandler) downloadWithLink(c *gin.Context) {
 		return
 	}
 	// Access is checked again at download time, against the requester the link was issued to.
+	if strings.HasPrefix(romID, biosIDPrefix) && handler.bios != nil {
+		biosHandler{bios: handler.bios}.stream(c, requester, romID)
+		return
+	}
+	if handler.roms == nil {
+		writeError(c, fault.NotFound())
+		return
+	}
 	handler.streamDownload(c, requester, romID)
 }
 

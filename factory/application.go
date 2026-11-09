@@ -78,12 +78,16 @@ func assembleApplication(ctx context.Context, settings config.Config, logger *sl
 		Maintenance: func(ctx context.Context) {
 			var chores sync.WaitGroup
 			chores.Go(func() { runDiscCompression(ctx, logger, services.Discs, services.DiscsUploaded) })
-			runMaintenance(ctx, logger,
+			tasks := []maintenanceTask{
 				indexPendingFiles(services.Discs),
 				expireUploadSessions(services.Uploads),
 				expireUploadParts(repositories),
 				sweepUnreferencedFiles(repositories, storage),
-			)
+			}
+			if services.BIOSList != nil {
+				tasks = append(tasks, refreshBIOSList(services.BIOSList, services.BIOS))
+			}
+			runMaintenance(ctx, logger, tasks...)
 			chores.Wait()
 		},
 	}, nil

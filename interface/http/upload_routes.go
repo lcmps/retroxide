@@ -125,6 +125,11 @@ func (handler uploadHandler) create(c *gin.Context) {
 	if input.Filename == "" {
 		input.Filename = defaultUploadFilename
 	}
+	// The file part streams, so the BIOS options travel in the query string rather than as form
+	// fields that would have to come first.
+	if bios, _ := strconv.ParseBool(c.Query("bios")); bios {
+		input.BIOS = uploads.BIOSOptions{Enabled: true, Platform: c.Query("platform")}
+	}
 	if mimeType := part.Header.Get("Content-Type"); mimeType != "" {
 		input.MIMEType = &mimeType
 	}

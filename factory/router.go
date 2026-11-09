@@ -23,7 +23,7 @@ func NewRouter(settings config.Config, services *Services, logger *slog.Logger) 
 	if err != nil {
 		return nil, fault.Internal(fmt.Errorf("loading locale catalogs: %w", err))
 	}
-	return httpadapter.NewRouter(httpadapter.Dependencies{
+	dependencies := httpadapter.Dependencies{
 		Uploads:       services.Uploads,
 		ROMs:          services.ROMs,
 		Libraries:     services.Libraries,
@@ -38,7 +38,12 @@ func NewRouter(settings config.Config, services *Services, logger *slog.Logger) 
 		Logger:        logger,
 		Metrics:       metricsHandler(settings, services),
 		CountResponse: services.Metrics.CountResponse,
-	}, httpadapter.Options{
+	}
+	// A nil *bios.Service must stay a nil interface, so the routes answer as unavailable.
+	if services.BIOS != nil {
+		dependencies.BIOS = services.BIOS
+	}
+	return httpadapter.NewRouter(dependencies, httpadapter.Options{
 		MaxUploadBytes: settings.MaxUploadBytes,
 		CORSOrigins:    settings.CORSAllowedOrigins,
 		TrustedProxies: settings.TrustedProxies,

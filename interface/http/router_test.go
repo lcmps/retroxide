@@ -218,6 +218,7 @@ func TestRouterRegistersEveryMountedRustRoute(t *testing.T) {
 		"GET /api/v1/rom", "GET /api/v1/rom/:rom_id", "PATCH /api/v1/rom/:rom_id", "DELETE /api/v1/rom/:rom_id",
 		"GET /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/cover/thumb", "POST /api/v1/rom/:rom_id/cover", "GET /api/v1/rom/:rom_id/download",
 		"POST /api/v1/rom/:rom_id/download-link", "GET /api/v1/download",
+		"GET /api/v1/bios", "GET /api/v1/bios/:bios_id", "PATCH /api/v1/bios/:bios_id", "DELETE /api/v1/bios/:bios_id", "GET /api/v1/bios/:bios_id/download", "POST /api/v1/bios/:bios_id/download-link",
 		"POST /api/v1/rom/:rom_id/merge", "PUT /api/v1/rom/:rom_id/discs/order", "POST /api/v1/rom/:rom_id/discs/:number/split", "DELETE /api/v1/rom/:rom_id/discs/:number",
 		"POST /api/v1/rom/:rom_id/scrape", "GET /api/v1/rom/:rom_id/media/:kind",
 		"GET /api/v1/library", "POST /api/v1/library", "GET /api/v1/library/:library_id",

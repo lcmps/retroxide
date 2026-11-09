@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"github.com/lcmps/retroxide/application/auth"
+	"github.com/lcmps/retroxide/application/bios"
 	"github.com/lcmps/retroxide/application/jobs"
 	"github.com/lcmps/retroxide/application/libraries"
 	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/application/uploads"
 	"github.com/lcmps/retroxide/application/users"
+	"github.com/lcmps/retroxide/infrastructure/biosdat"
 	"github.com/lcmps/retroxide/infrastructure/config"
 	hashadapter "github.com/lcmps/retroxide/infrastructure/hash"
 	"github.com/lcmps/retroxide/infrastructure/observability"
@@ -52,6 +54,10 @@ type Services struct {
 	Discs *discs.Service
 	// DiscsUploaded is signalled when a disc is stored as tracks, to start compressing it.
 	DiscsUploaded chan struct{}
+	// BIOS serves BIOS files, and BIOSList recognizes them; both are nil when the bundled list
+	// cannot be read, which leaves BIOS support off.
+	BIOS     *bios.Service
+	BIOSList *biosdat.Catalog
 }
 
 func NewServices(settings config.Config, repositories *persistence.Repositories, queue *jobs.NotifyingQueue, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
@@ -69,7 +75,11 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 		default: // a wake-up is already pending
 		}
 	}
-	return &Services{
+	biosList, err := biosdat.NewCatalog(filepath.Join(settings.StorageRoot, ".cache", "bios"), biosdat.DefaultSource, &http.Client{Timeout: scraperTimeout})
+	if err != nil {
+		logger.Error("BIOS support is off: the bundled list of known BIOS files cannot be read", "error", err)
+	}
+	services := &Services{
 		Discs:         discService,
 		DiscsUploaded: discsUploaded,
 		Uploads: uploads.NewUploadService(
@@ -89,4 +99,11 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 		Authenticator: auth.NewAuthenticator(tokens, repositories, repositories),
 		Identifier:    persistence.NewIdentifier(repositories.DB).WithDiscs(discService),
 	}
+	if biosList != nil {
+		services.BIOSList = biosList
+		services.BIOS = bios.NewService(repositories, storage, biosList)
+		services.Uploads.WithBIOS(biosList, repositories)
+		services.Identifier.WithBIOS(biosList)
+	}
+	return services
 }
