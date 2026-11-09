@@ -41,6 +41,7 @@ type Transfer struct {
 	ROMs      uint64
 	Libraries uint64
 	Uploads   uint64
+	BIOS      uint64
 }
 
 type Store interface {
@@ -104,6 +105,7 @@ type DeleteResponse struct {
 	TransferredROMs      uint64 `json:"transferred_roms"`
 	TransferredLibraries uint64 `json:"transferred_libraries"`
 	TransferredUploads   uint64 `json:"transferred_uploads"`
+	TransferredBIOS      uint64 `json:"transferred_bios"`
 }
 
 type API interface {
@@ -236,7 +238,7 @@ func (service *Service) Delete(ctx context.Context, requester identity.Requester
 	if err != nil {
 		return DeleteResponse{}, err
 	}
-	return DeleteResponse{TransferredROMs: transfer.ROMs, TransferredLibraries: transfer.Libraries, TransferredUploads: transfer.Uploads}, nil
+	return DeleteResponse{TransferredROMs: transfer.ROMs, TransferredLibraries: transfer.Libraries, TransferredUploads: transfer.Uploads, TransferredBIOS: transfer.BIOS}, nil
 }
 
 // EndSessions signs a user out on every device.
