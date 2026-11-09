@@ -548,6 +548,7 @@ func TestMySQLShareLinks(t *testing.T) {
 	repositories := NewRepositories(db)
 	prefix := fmt.Sprintf("sl%x", time.Now().UnixNano())
 	exerciseShareLinks(t, ctx, repositories, prefix)
+	exerciseShareMerge(t, ctx, repositories, prefix+"m")
 
 	// Two people redeeming one link at once: exactly one gets the ROM.
 	original := seedDiscROM(t, repositories, ctx, prefix+"-race", prefix+"-owner", nil)

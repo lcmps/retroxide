@@ -168,3 +168,28 @@ func TestShareLinksOnSQLite(t *testing.T) {
 	repositories, ctx := openTestRepositories(t)
 	exerciseShareLinks(t, ctx, repositories, "sq")
 }
+
+// Merging a shared ROM into another moves its links to the merged title: unused links keep
+// working, and on MySQL used ones no longer block deleting the source.
+func TestMergingASharedROMMovesItsLinks(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	exerciseShareMerge(t, ctx, repositories, "mg")
+}
+
+func exerciseShareMerge(t *testing.T, ctx context.Context, repositories *Repositories, prefix string) {
+	t.Helper()
+	target := seedDiscROM(t, repositories, ctx, prefix+"-disc1", prefix+"-alice", nil)
+	source := seedDiscROM(t, repositories, ctx, prefix+"-disc2", prefix+"-alice", nil)
+	createLink(t, repositories, ctx, prefix+"-spent", source.ID, prefix+"-alice")
+	createLink(t, repositories, ctx, prefix+"-unused", source.ID, prefix+"-alice")
+	if _, err := repositories.RedeemShareLink(ctx, shareHash(prefix+"-spent"), prefix+"-bob", prefix+"-bob-copy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.MergeROMs(ctx, target.ID, source.ID, func(string) error { return nil }); err != nil {
+		t.Fatalf("merging a shared ROM = %v", err)
+	}
+	romID, found, err := repositories.FindUnusedShareLink(ctx, shareHash(prefix+"-unused"))
+	if err != nil || !found || romID != target.ID {
+		t.Fatalf("unused link after the merge = %q, %v, %v; want it to offer %s", romID, found, err, target.ID)
+	}
+}
