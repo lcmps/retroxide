@@ -5,7 +5,7 @@ import "testing"
 func TestDecode(t *testing.T) {
 	const none = "-"
 	cases := []struct {
-		platform, path                       string
+		platform, path                     string
 		region, version, model, date, note string
 	}{
 		{"ps2", "pcsx2/bios/ps2-0160e-20010704.bin", "Europe", "1.60", none, "2001-07-04", none},

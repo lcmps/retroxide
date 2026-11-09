@@ -48,6 +48,7 @@ func uploadModel(upload uploadsdomain.Upload) UploadModel {
 	return UploadModel{
 		ID: upload.ID, UploaderID: upload.UploaderID, OriginalFilename: upload.OriginalFilename,
 		Status: string(upload.Status), ErrorMessage: upload.ErrorMessage, ROMID: upload.ROMID,
+		BIOS: upload.BIOS, BIOSPlatform: upload.BIOSPlatform, BIOSID: upload.BIOSID,
 	}
 }
 
@@ -55,6 +56,7 @@ func uploadEntity(model UploadModel) uploadsdomain.Upload {
 	return uploadsdomain.Upload{
 		ID: model.ID, UploaderID: model.UploaderID, OriginalFilename: model.OriginalFilename,
 		Status: uploadsdomain.UploadStatus(model.Status), ErrorMessage: model.ErrorMessage, ROMID: model.ROMID,
+		BIOS: model.BIOS, BIOSPlatform: model.BIOSPlatform, BIOSID: model.BIOSID,
 	}
 }
 

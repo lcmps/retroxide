@@ -70,12 +70,20 @@ func (service *UploadService) CreateSession(ctx context.Context, requester ident
 	if err := ValidateFilename(input.Filename); err != nil {
 		return SessionDTO{}, err
 	}
-	// A disc's track files are checked against its sheet when the disc is assembled.
-	if !input.Part && !service.isAllowedUploadType(input.Filename, input.MIMEType) {
-		return SessionDTO{}, fault.UnsupportedUploadType("mime type or extension is not allowed")
-	}
 	if input.Size <= 0 {
 		return SessionDTO{}, fault.Validation("size must be greater than zero")
+	}
+	bios := BIOSOptions{Enabled: input.BIOS, Platform: input.Platform}
+	switch {
+	case bios.Enabled && input.Part:
+		return SessionDTO{}, fault.Validation("a disc's files cannot be BIOS files")
+	case bios.Enabled:
+		if err := service.checkBIOSUpload(bios, input.Filename, input.Size); err != nil {
+			return SessionDTO{}, err
+		}
+	// A disc's track files are checked against its sheet when the disc is assembled.
+	case !input.Part && !service.isAllowedUploadType(input.Filename, input.MIMEType):
+		return SessionDTO{}, fault.UnsupportedUploadType("mime type or extension is not allowed")
 	}
 	if input.Size > service.policy.MaxUploadBytes {
 		return SessionDTO{}, fault.UploadTooLarge(input.Size, service.policy.MaxUploadBytes)
@@ -101,6 +109,10 @@ func (service *UploadService) CreateSession(ctx context.Context, requester ident
 	session := uploadsdomain.Session{
 		ID: sessionID, UploaderID: requester.UserID, Filename: input.Filename, MIMEType: input.MIMEType,
 		Size: input.Size, HashState: state, UpdatedAt: time.Now(), Part: input.Part,
+	}
+	if bios.Enabled {
+		platform := bios.Platform
+		session.BIOS, session.BIOSPlatform = true, &platform
 	}
 	if err := sessions.repository.SaveUploadSession(ctx, session); err != nil {
 		_ = sessions.partials.DiscardPartial(sessionID)
@@ -187,10 +199,10 @@ func (service *UploadService) finishSession(ctx context.Context, requester ident
 	if session.Part {
 		return service.finishPart(ctx, sessions, session, hash)
 	}
-	accepted, stored, err := service.accept(ctx, requester, session.Filename, hash, session.Size, func(ctx context.Context, address string) (string, error) {
+	accepted, stored, err := service.accept(ctx, requester, session.Filename, sessionBIOS(session), hash, session.Size, func(ctx context.Context, address string) (string, error) {
 		return sessions.partials.CommitPartial(ctx, session.ID, address)
 	})
-	if stored || err == nil || fault.IsCode(err, fault.CodeROMAlreadyExists) {
+	if stored || err == nil || fault.IsCode(err, fault.CodeROMAlreadyExists) || fault.IsCode(err, fault.CodeBIOSAlreadyExists) {
 		sessions.end(context.WithoutCancel(ctx), session.ID)
 	}
 	if err != nil {
@@ -216,12 +228,29 @@ func (service *UploadService) CheckSessionDuplicate(ctx context.Context, request
 		return err
 	}
 	defer release()
-	if _, err := sessions.find(ctx, requester, sessionID); err != nil {
+	session, err := sessions.find(ctx, requester, sessionID)
+	if err != nil {
 		return err
 	}
 	existing, err := service.romRepository.FindROMFileBySHA256(ctx, sha256)
 	if err != nil || existing == nil {
 		return err
+	}
+	// The same rules as when the upload completes: a file kept as a BIOS is a duplicate; one kept
+	// only as a game can still become this BIOS.
+	existingBIOS, err := service.existingBIOS(ctx, *existing)
+	if err != nil {
+		return err
+	}
+	if existingBIOS != nil {
+		if service.audit != nil {
+			service.audit.DuplicateUpload(ctx, existing.ID, sha256)
+		}
+		sessions.end(ctx, sessionID)
+		return fault.BIOSAlreadyExists(existingBIOS.ID, sha256)
+	}
+	if session.BIOS {
+		return nil
 	}
 	if shown, err := service.libraryShows(ctx, *existing); err != nil || !shown {
 		return err
@@ -341,7 +370,7 @@ func (service *UploadService) AssembleDisc(ctx context.Context, requester identi
 		}
 		return UploadAcceptedDTO{}, err
 	}
-	accepted, err := service.record(ctx, requester, input.SheetName, romFile)
+	accepted, err := service.record(ctx, requester, input.SheetName, BIOSOptions{}, romFile)
 	if err != nil {
 		return UploadAcceptedDTO{}, err
 	}
@@ -442,4 +471,12 @@ func sessionDTO(session uploadsdomain.Session, accepted *UploadAcceptedDTO) Sess
 		accepted = nil
 	}
 	return SessionDTO{SessionID: session.ID, Size: session.Size, Received: session.Received, MaxChunkSize: MaxChunkBytes, Upload: accepted}
+}
+
+// sessionBIOS returns the BIOS options a session was created with.
+func sessionBIOS(session uploadsdomain.Session) BIOSOptions {
+	if !session.BIOS || session.BIOSPlatform == nil {
+		return BIOSOptions{}
+	}
+	return BIOSOptions{Enabled: true, Platform: *session.BIOSPlatform}
 }

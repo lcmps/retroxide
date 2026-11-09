@@ -53,7 +53,7 @@ func uploadSessionModel(session uploadsdomain.Session) UploadSessionModel {
 	return UploadSessionModel{
 		ID: session.ID, UploaderID: session.UploaderID, Filename: session.Filename, MIMEType: session.MIMEType,
 		Size: session.Size, Received: session.Received, HashState: session.HashState, UpdatedAt: session.UpdatedAt.Unix(),
-		Part: session.Part,
+		Part: session.Part, BIOS: session.BIOS, BIOSPlatform: session.BIOSPlatform,
 	}
 }
 
@@ -61,7 +61,7 @@ func uploadSessionEntity(model UploadSessionModel) uploadsdomain.Session {
 	return uploadsdomain.Session{
 		ID: model.ID, UploaderID: model.UploaderID, Filename: model.Filename, MIMEType: model.MIMEType,
 		Size: model.Size, Received: model.Received, HashState: model.HashState, UpdatedAt: time.Unix(model.UpdatedAt, 0),
-		Part: model.Part,
+		Part: model.Part, BIOS: model.BIOS, BIOSPlatform: model.BIOSPlatform,
 	}
 }
 
