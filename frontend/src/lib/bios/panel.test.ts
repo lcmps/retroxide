@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Bios } from '#lib/api/types.js';
-import { biosLabel, collapsedSummary, uploadResultLabel } from './panel.js';
+import { biosLabel, biosLibraryLink, collapsedSummary, rowFile, startsOpen, uploadResultLabel } from './panel.js';
 
 const entry = (overrides: Partial<Bios>): Bios => ({
 	bios_id: 'bio_1',
@@ -52,5 +52,28 @@ describe('uploadResultLabel', () => {
 			details: '',
 			recognized: false
 		});
+	});
+});
+
+describe('rowFile', () => {
+	it('names every row by the file emulators expect, with its note', () => {
+		expect(rowFile(entry({ platform: 'dreamcast', expected_path: 'dc/dc_boot.bin', region: null, version: null, date: null, note: 'Boot ROM' }))).toEqual({
+			name: 'dc_boot.bin',
+			note: 'Boot ROM',
+			recognized: true
+		});
+		expect(rowFile(entry({ expected_path: 'dump.bin', filename: 'dump.bin', recognized: false, region: null, version: null, date: '1999', note: null }))).toEqual({
+			name: 'dump.bin',
+			note: null,
+			recognized: false
+		});
+	});
+});
+
+describe('opening the BIOS list from an upload result', () => {
+	it('links to the platform with the list open, which otherwise starts closed', () => {
+		expect(biosLibraryLink('ps2')).toBe('/library?platform=ps2&bios=open');
+		expect(startsOpen(new URLSearchParams('platform=ps2&bios=open'))).toBe(true);
+		expect(startsOpen(new URLSearchParams('platform=ps2'))).toBe(false);
 	});
 });

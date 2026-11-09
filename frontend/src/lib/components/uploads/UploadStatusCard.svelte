@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import type { UploadState, UploadStatusResponse } from '#lib/api/types.js';
-	import { uploadResultLabel } from '#lib/bios/panel.js';
+	import { biosLibraryLink, uploadResultLabel } from '#lib/bios/panel.js';
 	import { getUploadProcessingErrorMessage } from '#lib/helpers/error.js';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
@@ -24,7 +24,7 @@
 
 	{#if upload.bios && bios}
 		<p>
-			<a href={`${resolve('/library')}?${new URLSearchParams({ platform: upload.bios.platform })}`}>
+			<a href={`${resolve('/')}${biosLibraryLink(upload.bios.platform).slice(1)}`}>
 				{bios.recognized && bios.details
 					? t('uploads.messages.biosAdded', 'Added as {platform} BIOS ({details})', { platform: bios.platform, details: bios.details })
 					: bios.recognized

@@ -449,6 +449,7 @@
   "rom.manage.mergeError": "Failed to merge the titles",
   "rom.manage.discsChanged": "The discs changed since you opened this page. Check the list and try again.",
   "library.bios.title": "BIOS files",
+  "library.bios.file": "File",
   "library.bios.summary": "BIOS · {count} files",
   "library.bios.needsLabel": "· {count} needs a label",
   "library.bios.region": "Region",

@@ -2,7 +2,7 @@
 	import ActionButton from '#lib/components/ActionButton.svelte';
 	import { deleteBios, downloadBios, labelBios, listBios } from '#lib/api/client.js';
 	import type { Bios } from '#lib/api/types.js';
-	import { collapsedSummary } from '#lib/bios/panel.js';
+	import { collapsedSummary, rowFile } from '#lib/bios/panel.js';
 	import { getErrorMessage } from '#lib/helpers/error.js';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
@@ -11,7 +11,7 @@
 	 * A platform's BIOS files, above its games: one quiet line that opens into a list. It starts
 	 * closed on every visit, since a BIOS is usually fetched once.
 	 */
-	let { platform }: { platform: string } = $props();
+	let { platform, initiallyOpen = false }: { platform: string; initiallyOpen?: boolean } = $props();
 
 	const t = useTranslate(i18n);
 	const LABEL_FIELDS = ['region', 'version', 'model', 'date', 'note'] as const;
@@ -30,7 +30,7 @@
 	$effect(() => {
 		const key = platform.toLowerCase();
 		let cancelled = false;
-		open = false;
+		open = initiallyOpen;
 		listBios(key)
 			.then((loaded) => {
 				if (!cancelled) entries = loaded;
@@ -105,6 +105,7 @@
 				<table class="bios-table">
 					<thead>
 						<tr>
+							<th>{t('library.bios.file', 'File')}</th>
 							<th>{t(...fieldLabels.region)}</th>
 							<th>{t(...fieldLabels.version)}</th>
 							<th>{t(...fieldLabels.model)}</th>
@@ -114,17 +115,17 @@
 					</thead>
 					<tbody>
 						{#each entries as entry (entry.bios_id)}
+							{@const file = rowFile(entry)}
 							<tr>
-								{#if !entry.recognized && !entry.region && !entry.version && !entry.model}
-									<td colspan="4" class="bios-unknown">
-										{entry.filename} <span class="bios-hint">{t('library.bios.unrecognized', '· not recognized')}</span>
-									</td>
-								{:else}
-									<td>{entry.region ?? '—'}</td>
-									<td>{entry.version ?? '—'}</td>
-									<td>{entry.model ?? '—'}</td>
-									<td>{entry.date ?? '—'}</td>
-								{/if}
+								<td class="bios-unknown">
+									{file.name}
+									{#if file.note}<span class="bios-hint">· {file.note}</span>{/if}
+									{#if !file.recognized}<span class="bios-hint">{t('library.bios.unrecognized', '· not recognized')}</span>{/if}
+								</td>
+								<td>{entry.region ?? '—'}</td>
+								<td>{entry.version ?? '—'}</td>
+								<td>{entry.model ?? '—'}</td>
+								<td>{entry.date ?? '—'}</td>
 								<td class="bios-actions">
 									<ActionButton variant="secondary" onclick={() => download(entry)} title={entry.expected_path}>
 										{t('common.actions.download', 'Download')}
@@ -152,12 +153,12 @@
 							</tr>
 							{#if labelling === entry.bios_id}
 								<tr>
-									<td colspan="5">
+									<td colspan="6">
 										<form class="bios-label-form" onsubmit={(event) => saveLabel(event, entry)}>
 											{#each LABEL_FIELDS as field (field)}
 												<label>
 													<span>{t(...fieldLabels[field])}</span>
-													<input bind:value={draft[field]} maxlength={field === 'note' ? 255 : 64} />
+													<input bind:value={draft[field]} maxlength={field === 'note' ? 255 : field === 'date' ? 16 : 64} />
 												</label>
 											{/each}
 											<div class="bios-actions">

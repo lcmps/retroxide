@@ -492,6 +492,7 @@
   "rom.manage.mergeError": "Falha ao mesclar os títulos",
   "rom.manage.discsChanged": "Os discos mudaram desde que você abriu esta página. Confira a lista e tente novamente.",
   "library.bios.title": "Arquivos de BIOS",
+  "library.bios.file": "Arquivo",
   "library.bios.summary": "BIOS · {count} arquivos",
   "library.bios.needsLabel": "· {count} precisa de identificação",
   "library.bios.region": "Região",

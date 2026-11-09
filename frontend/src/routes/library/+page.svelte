@@ -5,6 +5,7 @@
 	import { Tooltip } from 'bits-ui';
 	import LibrarySort from '#lib/components/LibrarySort.svelte';
 	import BiosPanel from '#lib/components/rom/BiosPanel.svelte';
+	import { startsOpen } from '#lib/bios/panel.js';
 	import LoadMoreSentinel from '#lib/components/LoadMoreSentinel.svelte';
 	import RomCover from '#lib/components/RomCover.svelte';
 	import { i18n } from '#lib';
@@ -88,7 +89,7 @@
 	</div>
 
 	{#if selectedPlatform}
-		<BiosPanel platform={selectedPlatform} />
+		<BiosPanel platform={selectedPlatform} initiallyOpen={startsOpen(page.url.searchParams)} />
 	{/if}
 
 	{#if pager.items.length === 0 && (pager.loading || !ready)}

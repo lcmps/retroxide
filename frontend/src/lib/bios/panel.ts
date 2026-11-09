@@ -24,3 +24,19 @@ export function uploadResultLabel(result: BiosUploadResult): { platform: string;
 function hasLabels(entry: Bios): boolean {
 	return Boolean(entry.region || entry.version || entry.model || entry.date || entry.note);
 }
+
+/** The File cell of a row: the name emulators expect (or the uploaded name), and its note. */
+export function rowFile(entry: Bios): { name: string; note: string | null; recognized: boolean } {
+	const name = entry.expected_path.split('/').pop() || entry.filename;
+	return { name, note: entry.note, recognized: entry.recognized };
+}
+
+/** The library filtered to a platform, with its BIOS list open, as an upload result links to. */
+export function biosLibraryLink(platform: string): string {
+	return `/library?${new URLSearchParams({ platform, bios: 'open' })}`;
+}
+
+/** Whether the BIOS list starts open: only when a link asked for it. */
+export function startsOpen(params: Pick<URLSearchParams, 'get'>): boolean {
+	return params.get('bios') === 'open';
+}
