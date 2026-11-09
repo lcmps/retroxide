@@ -147,6 +147,11 @@ func TestLabel(t *testing.T) {
 	if _, err := service.Label(context.Background(), owner, "bio_unknown", LabelInput{Region: &tooLong}); !fault.IsCode(err, fault.CodeValidation) {
 		t.Fatalf("a 65-character region = %v, want validation error", err)
 	}
+	// Dates are stored in 16 characters (MySQL rejects longer values in strict mode).
+	longDate := "dumped 1995-09-09"
+	if _, err := service.Label(context.Background(), owner, "bio_unknown", LabelInput{Date: &longDate}); !fault.IsCode(err, fault.CodeValidation) {
+		t.Fatalf("a 17-character date = %v, want validation error", err)
+	}
 	labelled, err := service.Label(context.Background(), owner, "bio_unknown", LabelInput{Model: &model})
 	if err != nil || labelled.Model == nil || *labelled.Model != model || repository.entries["bio_unknown"].Labels.Model == nil {
 		t.Fatalf("Label = %+v, %v", labelled, err)

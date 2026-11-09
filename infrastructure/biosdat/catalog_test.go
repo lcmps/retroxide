@@ -154,3 +154,23 @@ func TestRefreshSendsTheETagAndHonours304(t *testing.T) {
 		t.Fatalf("revalidation: changed %v, err %v, If-None-Match %q", changed, err, conditional)
 	}
 }
+
+// A copy downloaded long ago must not hide a newer list bundled with an upgraded binary.
+func TestNewCatalogPrefersTheNewerOfCachedAndBundled(t *testing.T) {
+	extra := strings.Repeat("cd", 20)
+	withVersion := func(version string) []byte {
+		return bytes.Replace(withExtraPS2Entry(extra), []byte("version v1.19.0"), []byte("version "+version), 1)
+	}
+	if !bytes.Contains(embedded, []byte("version v1.19.0")) {
+		t.Skip("the bundled list is no longer v1.19.0; update this test's version")
+	}
+	for version, wantCached := range map[string]bool{"v0.9.0": false, "v1.19.0": true, "v1.20.0": true, "v2.0.0": true} {
+		cacheDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(cacheDir, cacheFile), withVersion(version), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, found := newTestCatalog(t, cacheDir, nil).Lookup(extra, 4194304); found != wantCached {
+			t.Errorf("cached %s used = %v, want %v", version, found, wantCached)
+		}
+	}
+}

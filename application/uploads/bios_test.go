@@ -220,3 +220,41 @@ func asFault(err error, target **fault.Error) bool {
 	*target = appError
 	return ok
 }
+
+// The platform is stored as its catalog key, so listings that match it exactly find the file.
+func TestToggledPlatformIsStoredAsTheCatalogKey(t *testing.T) {
+	fixture := newBIOSFixture(fakeKnownList{})
+	if _, err := fixture.upload("dump.bin", BIOSOptions{Enabled: true, Platform: " PS2 "}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if saved := fixture.uploads.saved[0]; saved.BIOSPlatform == nil || *saved.BIOSPlatform != "ps2" {
+		t.Fatalf("stored platform = %v, want ps2", saved.BIOSPlatform)
+	}
+
+	ctx := context.Background()
+	sessions := newSessionFixture(&testStorage{})
+	sessions.service.WithBIOS(fakeKnownList{}, fakeBIOSLookup{})
+	session, err := sessions.service.CreateSession(ctx, player, CreateSessionInput{Filename: "dump.bin", Size: int64(len(biosContent)), BIOS: true, Platform: "PSX"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored := sessions.sessions.sessions[session.SessionID]; stored.BIOSPlatform == nil || *stored.BIOSPlatform != "psx" {
+		t.Fatalf("session platform = %v, want psx", stored.BIOSPlatform)
+	}
+}
+
+// The early check follows the final step: a recognized BIOS stored only as a game goes on.
+func TestCheckSessionDuplicateLetsARecognizedBIOSStoredAsAGameThrough(t *testing.T) {
+	ctx := context.Background()
+	hash := biosHash(t)
+	fixture := newSessionFixture(&testStorage{})
+	fixture.service.WithBIOS(fakeKnownList{hash.SHA1: {Platform: "psx", Path: "scph5501.bin", SHA1: hash.SHA1, Size: uint64(len(biosContent))}}, fakeBIOSLookup{})
+	fixture.roms.existing = &romdomain.ROMFile{ID: "rf_game", Hash: hash, Size: uint64(len(biosContent))}
+	session, err := fixture.service.CreateSession(ctx, player, CreateSessionInput{Filename: "game.sfc", Size: int64(len(biosContent))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.CheckSessionDuplicate(ctx, player, session.SessionID, hash.SHA256); err != nil {
+		t.Fatalf("check = %v, want the upload to go on and become a BIOS", err)
+	}
+}

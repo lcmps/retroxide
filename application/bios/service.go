@@ -14,7 +14,9 @@ import (
 
 const (
 	maxLabelRunes = 64
-	maxNoteRunes  = 255
+	// maxDateRunes matches the release_date column (16 characters).
+	maxDateRunes = 16
+	maxNoteRunes = 255
 )
 
 type Service struct {
@@ -97,9 +99,9 @@ func (service *Service) Label(ctx context.Context, requester identity.Requester,
 	for _, field := range []struct {
 		value *string
 		limit int
-	}{{labels.Region, maxLabelRunes}, {labels.Version, maxLabelRunes}, {labels.Model, maxLabelRunes}, {labels.Date, maxLabelRunes}, {labels.Note, maxNoteRunes}} {
+	}{{labels.Region, maxLabelRunes}, {labels.Version, maxLabelRunes}, {labels.Model, maxLabelRunes}, {labels.Date, maxDateRunes}, {labels.Note, maxNoteRunes}} {
 		if field.value != nil && utf8.RuneCountInString(*field.value) > field.limit {
-			return DTO{}, fault.Validation("BIOS labels must be at most 64 characters, notes at most 255")
+			return DTO{}, fault.Validation("BIOS labels must be at most 64 characters, dates at most 16, notes at most 255")
 		}
 	}
 	entry.Labels = labels

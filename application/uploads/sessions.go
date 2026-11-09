@@ -78,7 +78,7 @@ func (service *UploadService) CreateSession(ctx context.Context, requester ident
 	case bios.Enabled && input.Part:
 		return SessionDTO{}, fault.Validation("a disc's files cannot be BIOS files")
 	case bios.Enabled:
-		if err := service.checkBIOSUpload(bios, input.Filename, input.Size); err != nil {
+		if bios, err = service.checkBIOSUpload(bios, input.Filename, input.Size); err != nil {
 			return SessionDTO{}, err
 		}
 	// A disc's track files are checked against its sheet when the disc is assembled.
@@ -249,7 +249,8 @@ func (service *UploadService) CheckSessionDuplicate(ctx context.Context, request
 		sessions.end(ctx, sessionID)
 		return fault.BIOSAlreadyExists(existingBIOS.ID, sha256)
 	}
-	if session.BIOS {
+	// The stored file's own hashes say whether the known list recognizes it, as accept() checks.
+	if service.isBIOSTarget(sessionBIOS(*session), existing.Hash, int64(existing.Size)) {
 		return nil
 	}
 	if shown, err := service.libraryShows(ctx, *existing); err != nil || !shown {

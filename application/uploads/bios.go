@@ -41,25 +41,28 @@ func (service *UploadService) WithBIOS(known KnownList, bioses BIOSLookup) *Uplo
 }
 
 // checkBIOSUpload applies the rules of an upload marked as BIOS files: a catalog platform, a file
-// type BIOS files come in, and the BIOS size cap. size is 0 when not known yet.
-func (service *UploadService) checkBIOSUpload(options BIOSOptions, filename string, size int64) error {
+// type BIOS files come in, and the BIOS size cap. size is 0 when not known yet. It returns the
+// options with the platform as its catalog key, however it was written.
+func (service *UploadService) checkBIOSUpload(options BIOSOptions, filename string, size int64) (BIOSOptions, error) {
 	if service.known == nil {
-		return fault.Validation("this server does not take BIOS files")
+		return BIOSOptions{}, fault.Validation("this server does not take BIOS files")
 	}
-	if _, ok := romdomain.PlatformByKey(options.Platform); !ok {
-		return fault.Validation("platform is not a known platform")
+	platform, ok := romdomain.PlatformByKey(options.Platform)
+	if !ok {
+		return BIOSOptions{}, fault.Validation("platform is not a known platform")
 	}
+	options.Platform = platform.Key
 	extension := ""
 	if index := strings.LastIndexByte(filename, '.'); index >= 0 {
 		extension = strings.ToLower(filename[index+1:])
 	}
 	if !slices.Contains(service.known.Extensions(), extension) {
-		return fault.UnsupportedUploadType("BIOS files of this type are not known")
+		return BIOSOptions{}, fault.UnsupportedUploadType("BIOS files of this type are not known")
 	}
 	if limit := service.biosUploadLimit(); size > limit {
-		return fault.UploadTooLarge(size, limit)
+		return BIOSOptions{}, fault.UploadTooLarge(size, limit)
 	}
-	return nil
+	return options, nil
 }
 
 func (service *UploadService) biosUploadLimit() int64 {

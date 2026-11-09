@@ -116,9 +116,11 @@ func (service *UploadService) Create(ctx context.Context, requester identity.Req
 	limit := service.policy.MaxUploadBytes
 	if input.BIOS.Enabled {
 		// The request carries a little multipart framing beyond the file.
-		if err := service.checkBIOSUpload(input.BIOS, input.Filename, max(input.ExpectedSize-multipartAllowance, 0)); err != nil {
+		checked, err := service.checkBIOSUpload(input.BIOS, input.Filename, max(input.ExpectedSize-multipartAllowance, 0))
+		if err != nil {
 			return UploadAcceptedDTO{}, err
 		}
+		input.BIOS = checked
 		limit = service.biosUploadLimit()
 	} else if !service.isAllowedUploadType(input.Filename, input.MIMEType) {
 		return UploadAcceptedDTO{}, fault.UnsupportedUploadType("mime type or extension is not allowed")

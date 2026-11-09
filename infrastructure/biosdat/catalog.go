@@ -2,6 +2,7 @@ package biosdat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,7 +11,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,7 +53,9 @@ func NewCatalog(cacheDir, source string, client *http.Client) (*Catalog, error) 
 	if err != nil {
 		return nil, fmt.Errorf("reading the bundled BIOS list: %w", err)
 	}
-	if cached, err := os.ReadFile(filepath.Join(cacheDir, cacheFile)); err == nil {
+	// A downloaded copy wins unless it is older than the bundled list, as after upgrading a
+	// server that has been offline since it downloaded.
+	if cached, err := os.ReadFile(filepath.Join(cacheDir, cacheFile)); err == nil && compareVersions(listVersion(cached), listVersion(embedded)) >= 0 {
 		if fromCache, err := Parse(bytes.NewReader(cached)); err == nil {
 			entries = fromCache
 		}
@@ -145,6 +150,33 @@ func (catalog *Catalog) use(entries []biosdomain.Known) {
 	catalog.mu.Lock()
 	catalog.bySHA1, catalog.extensions = bySHA1, extensions
 	catalog.mu.Unlock()
+}
+
+var versionLine = regexp.MustCompile(`(?m)^\s*version\s+v?([0-9][0-9.]*)`)
+
+// listVersion reads the version a list's header declares, as numbers; nil when it has none.
+func listVersion(list []byte) []int {
+	match := versionLine.FindSubmatch(list)
+	if match == nil {
+		return nil
+	}
+	var version []int
+	for _, part := range strings.Split(strings.Trim(string(match[1]), "."), ".") {
+		number, err := strconv.Atoi(part)
+		if err != nil {
+			return nil
+		}
+		version = append(version, number)
+	}
+	return version
+}
+
+// compareVersions orders two versions part by part; a missing version sorts lowest.
+func compareVersions(a, b []int) int {
+	if a == nil || b == nil {
+		return cmp.Compare(len(a), len(b))
+	}
+	return slices.Compare(a, b)
 }
 
 func writeAtomically(target string, content []byte) error {
