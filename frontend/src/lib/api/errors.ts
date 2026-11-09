@@ -46,6 +46,10 @@ const ERROR_TRANSLATIONS: Record<string, { key: string; fallback: string }> = {
 		key: 'uploads.errors.biosAlreadyExists',
 		fallback: 'This BIOS is already on the server.'
 	},
+	already_in_library: {
+		key: 'share.page.already',
+		fallback: 'This ROM is already in your library.'
+	},
 	rate_limited: {
 		key: 'common.errors.rate_limited',
 		fallback: 'Too many attempts. Please wait a moment and try again.'

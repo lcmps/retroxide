@@ -65,6 +65,17 @@ export type BiosUploadResult = {
   recognized: boolean;
 };
 
+/** What a share link offers, before it is redeemed. */
+export type SharePreview = {
+  title: string;
+  platform: string;
+  platform_name: string;
+  disc_count: number;
+  has_cover: boolean;
+  /** The viewer already has this ROM, so adding it would be refused. */
+  already_in_library: boolean;
+};
+
 /** Marks an upload as BIOS files for a platform. */
 export type BiosUploadOptions = { platform: string };
 
