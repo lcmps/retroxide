@@ -352,7 +352,7 @@ func romFileEntity(model ROMFileModel) (romdomain.ROMFile, error) {
 }
 
 // ListPlatforms groups by the indexed, case-folded platform_key so values differing only in case
-// count as one platform.
+// count as one platform, and adds the platforms of BIOS files.
 func (repositories *Repositories) ListPlatforms(ctx context.Context, uploaderID *string) ([]rom.PlatformCount, error) {
 	var rows []struct {
 		Platform string
@@ -367,8 +367,26 @@ func (repositories *Repositories) ListPlatforms(ctx context.Context, uploaderID 
 		return nil, databaseError("listing platforms", err)
 	}
 	counts := make([]rom.PlatformCount, 0, len(rows))
+	byKey := make(map[string]int, len(rows))
 	for _, row := range rows {
+		byKey[strings.ToLower(row.Platform)] = len(counts)
 		counts = append(counts, rom.PlatformCount{Platform: row.Platform, Count: row.Count})
+	}
+	// BIOS files are shared, so every requester sees every platform that has one, with or
+	// without games of their own.
+	var bios []struct {
+		Platform string
+		Count    uint64
+	}
+	if err := repositories.DB.WithContext(ctx).Model(&BIOSModel{}).Select("platform, COUNT(*) AS count").Group("platform").Scan(&bios).Error; err != nil {
+		return nil, databaseError("listing bios platforms", err)
+	}
+	for _, row := range bios {
+		if index, ok := byKey[strings.ToLower(row.Platform)]; ok {
+			counts[index].BIOSCount = row.Count
+			continue
+		}
+		counts = append(counts, rom.PlatformCount{Platform: row.Platform, BIOSCount: row.Count})
 	}
 	return counts, nil
 }

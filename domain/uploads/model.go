@@ -20,6 +20,10 @@ type Upload struct {
 	Status           UploadStatus
 	ErrorMessage     *string
 	ROMID            *string
+	// BIOS marks an upload of BIOS files for BIOSPlatform; BIOSID is the entry it became.
+	BIOS         bool
+	BIOSPlatform *string
+	BIOSID       *string
 }
 
 func (upload *Upload) TransitionTo(next UploadStatus) error {

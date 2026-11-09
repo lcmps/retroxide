@@ -510,3 +510,21 @@ func TestMySQLIdentifiesAPlainFileUpload(t *testing.T) {
 		t.Fatalf("re-saving an unchanged upload: %v", err)
 	}
 }
+
+func TestMySQLBIOSFiles(t *testing.T) {
+	mysqlURL := os.Getenv("RETROXIDE_TEST_MYSQL_URL")
+	if mysqlURL == "" {
+		t.Skip("RETROXIDE_TEST_MYSQL_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "mysql", "", mysqlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	exerciseBIOS(t, ctx, NewRepositories(db), fmt.Sprintf("bios%x", time.Now().UnixNano()))
+}

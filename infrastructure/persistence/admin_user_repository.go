@@ -104,7 +104,7 @@ func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]
 	return activity, nil
 }
 
-// DeleteUserTransferringData hands the user's ROMs, libraries, and uploads to heirID and deletes
+// DeleteUserTransferringData hands the user's ROMs, libraries, uploads, and BIOS files to heirID and deletes
 // the account in one transaction; foreign keys delete their API clients and refresh tokens.
 func (repositories *Repositories) DeleteUserTransferringData(ctx context.Context, userID, heirID string) (users.Transfer, error) {
 	var transfer users.Transfer
@@ -128,6 +128,7 @@ func (repositories *Repositories) DeleteUserTransferringData(ctx context.Context
 			{&ROMModel{}, "uploader_id", &transfer.ROMs},
 			{&LibraryModel{}, "user_id", &transfer.Libraries},
 			{&UploadModel{}, "uploader_id", &transfer.Uploads},
+			{&BIOSModel{}, "uploader_id", &transfer.BIOS},
 		} {
 			result := tx.Model(move.model).Where(move.column+" = ?", userID).Update(move.column, heirID)
 			if result.Error != nil {

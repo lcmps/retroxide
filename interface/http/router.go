@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/lcmps/retroxide/application/auth"
+	"github.com/lcmps/retroxide/application/bios"
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/libraries"
 	"github.com/lcmps/retroxide/application/rom"
@@ -35,6 +36,7 @@ type DownloadLinks interface {
 type Dependencies struct {
 	Uploads       uploads.Service
 	ROMs          rom.API
+	BIOS          bios.API
 	Libraries     libraries.API
 	Sessions      auth.SessionAPI
 	Clients       auth.ClientAPI

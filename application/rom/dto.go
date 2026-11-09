@@ -99,6 +99,8 @@ type PlatformDTO struct {
 	Key      string `json:"key"`
 	Name     string `json:"name"`
 	ROMCount uint64 `json:"rom_count"`
+	// BIOSCount counts the platform's BIOS files; a platform may have BIOS files and no games.
+	BIOSCount uint64 `json:"bios_count"`
 }
 
 type ROMHashDTO struct {

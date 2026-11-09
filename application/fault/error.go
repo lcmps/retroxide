@@ -14,6 +14,7 @@ const (
 	CodeNotFound             Code = "not_found"
 	CodeConflict             Code = "conflict"
 	CodeROMAlreadyExists     Code = "rom_already_exists"
+	CodeBIOSAlreadyExists    Code = "bios_already_exists"
 	CodeUploadTooLarge       Code = "upload_too_large"
 	CodeUnsupportedUpload    Code = "upload_type_not_allowed"
 	CodeUnsupportedMediaType Code = "unsupported_media_type"
@@ -27,6 +28,7 @@ type Error struct {
 	Code              Code
 	Message           string
 	ExistingROMFileID *string
+	ExistingBIOSID    *string
 	SHA256            *string
 	Cause             error
 }
@@ -48,6 +50,15 @@ func Conflict() *Error                 { return &Error{Code: CodeConflict, Messa
 
 func ROMAlreadyExists(fileID, sha256 string) *Error {
 	return &Error{Code: CodeROMAlreadyExists, Message: "rom already exists", ExistingROMFileID: &fileID, SHA256: &sha256}
+}
+
+// BIOSAlreadyExists reports that a BIOS file is already on the server, as the entry biosID.
+func BIOSAlreadyExists(biosID, sha256 string) *Error {
+	appError := &Error{Code: CodeBIOSAlreadyExists, Message: "bios already exists", ExistingBIOSID: &biosID}
+	if sha256 != "" {
+		appError.SHA256 = &sha256
+	}
+	return appError
 }
 
 func UploadTooLarge(actualBytes, maxBytes int64) *Error {

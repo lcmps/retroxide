@@ -51,7 +51,48 @@ export type UploadStatusResponse = {
   status: UploadState;
   rom_id: string | null;
   error: string | null;
+  /** Set when the upload became a BIOS file instead of a game. */
+  bios_id?: string | null;
+  bios?: BiosUploadResult | null;
 };
+
+/** What a BIOS upload became. */
+export type BiosUploadResult = {
+  platform: string;
+  platform_name: string;
+  region: string | null;
+  version: string | null;
+  recognized: boolean;
+};
+
+/** Marks an upload as BIOS files for a platform. */
+export type BiosUploadOptions = { platform: string };
+
+/** A BIOS file, shared by every user. */
+export type Bios = {
+  bios_id: string;
+  platform: string;
+  platform_name: string;
+  /** The name it was uploaded with. */
+  filename: string;
+  /** Where emulators look for it; the uploaded name when not recognized. */
+  expected_path: string;
+  recognized: boolean;
+  region: string | null;
+  version: string | null;
+  model: string | null;
+  date: string | null;
+  note: string | null;
+  size: number;
+  sha256: string;
+  sha1: string;
+  md5: string;
+  crc32: string;
+  /** Whether the viewer may label or delete it. */
+  can_modify: boolean;
+};
+
+export type BiosLabels = Partial<Record<'region' | 'version' | 'model' | 'date' | 'note', string | null>>;
 
 export type RomHash = {
   sha256: string;
@@ -191,6 +232,8 @@ export type Platform = {
   key: string;
   name: string;
   rom_count: number;
+  /** BIOS files on the platform; a platform can have BIOS files and no games. */
+  bios_count: number;
 };
 
 export type UserRole = 'admin' | 'user';

@@ -85,6 +85,8 @@ type UploadService struct {
 	discs             DiscAssembler
 	wakeCompressor    func()
 	compressByDefault bool
+	known             KnownList
+	bioses            BIOSLookup
 }
 
 func NewUploadService(
@@ -111,14 +113,22 @@ func (service *UploadService) Create(ctx context.Context, requester identity.Req
 	if err := ValidateFilename(input.Filename); err != nil {
 		return UploadAcceptedDTO{}, err
 	}
-	if !service.isAllowedUploadType(input.Filename, input.MIMEType) {
+	limit := service.policy.MaxUploadBytes
+	if input.BIOS.Enabled {
+		// The request carries a little multipart framing beyond the file.
+		checked, err := service.checkBIOSUpload(input.BIOS, input.Filename, max(input.ExpectedSize-multipartAllowance, 0))
+		if err != nil {
+			return UploadAcceptedDTO{}, err
+		}
+		input.BIOS = checked
+		limit = service.biosUploadLimit()
+	} else if !service.isAllowedUploadType(input.Filename, input.MIMEType) {
 		return UploadAcceptedDTO{}, fault.UnsupportedUploadType("mime type or extension is not allowed")
 	}
 	if input.Content == nil {
 		return UploadAcceptedDTO{}, fault.Validation("empty upload")
 	}
 
-	limit := service.policy.MaxUploadBytes
 	if checker, ok := service.storage.(roomChecker); ok && input.ExpectedSize > 0 &&
 		input.ExpectedSize <= limit+multipartAllowance && !checker.HasRoomFor(input.ExpectedSize) {
 		return UploadAcceptedDTO{}, fault.InsufficientStorage()
@@ -151,7 +161,7 @@ func (service *UploadService) Create(ctx context.Context, requester identity.Req
 	if err != nil {
 		return UploadAcceptedDTO{}, fault.Internal(fmt.Errorf("hashing upload: %w", err))
 	}
-	accepted, stored, err := service.accept(ctx, requester, input.Filename, hash, size, staged.Commit)
+	accepted, stored, err := service.accept(ctx, requester, input.Filename, input.BIOS, hash, size, staged.Commit)
 	committed = stored
 	return accepted, err
 }
@@ -164,6 +174,7 @@ func (service *UploadService) accept(
 	ctx context.Context,
 	requester identity.Requester,
 	filename string,
+	bios BIOSOptions,
 	hash romdomain.ROMHash,
 	size int64,
 	commit func(ctx context.Context, contentAddress string) (string, error),
@@ -176,6 +187,22 @@ func (service *UploadService) accept(
 		if !existing.Hash.MatchesContent(hash) {
 			return UploadAcceptedDTO{}, false, fault.Internal(errors.New("sha256 lookup returned different hashes"))
 		}
+		// A file already kept as a BIOS is a duplicate whatever this upload is; a file kept only
+		// as a game can still become a BIOS, reusing the stored content.
+		existingBIOS, err := service.existingBIOS(ctx, *existing)
+		if err != nil {
+			return UploadAcceptedDTO{}, false, err
+		}
+		if existingBIOS != nil {
+			if service.audit != nil {
+				service.audit.DuplicateUpload(ctx, existing.ID, hash.SHA256)
+			}
+			return UploadAcceptedDTO{}, false, fault.BIOSAlreadyExists(existingBIOS.ID, hash.SHA256)
+		}
+		if service.isBIOSTarget(bios, hash, size) {
+			accepted, err := service.record(ctx, requester, filename, bios, *existing)
+			return accepted, false, err
+		}
 		shown, err := service.libraryShows(ctx, *existing)
 		if err != nil {
 			return UploadAcceptedDTO{}, false, err
@@ -183,7 +210,7 @@ func (service *UploadService) accept(
 		if !shown {
 			// The same content is already stored, so this upload's copy is not kept: the stored
 			// file is identified again for this upload.
-			accepted, err := service.record(ctx, requester, filename, *existing)
+			accepted, err := service.record(ctx, requester, filename, bios, *existing)
 			return accepted, false, err
 		}
 		if service.audit != nil {
@@ -218,7 +245,7 @@ func (service *UploadService) accept(
 		removeStoredContent()
 		return UploadAcceptedDTO{}, true, err
 	}
-	accepted, err = service.record(ctx, requester, filename, savedROMFile)
+	accepted, err = service.record(ctx, requester, filename, bios, savedROMFile)
 	if err != nil {
 		removeStoredContent()
 		return UploadAcceptedDTO{}, true, err
@@ -227,7 +254,7 @@ func (service *UploadService) accept(
 }
 
 // record saves the upload of a stored ROM file and queues its identification.
-func (service *UploadService) record(ctx context.Context, requester identity.Requester, filename string, romFile romdomain.ROMFile) (UploadAcceptedDTO, error) {
+func (service *UploadService) record(ctx context.Context, requester identity.Requester, filename string, bios BIOSOptions, romFile romdomain.ROMFile) (UploadAcceptedDTO, error) {
 	uploadID, err := id.New("upl")
 	if err != nil {
 		return UploadAcceptedDTO{}, fault.Internal(fmt.Errorf("generating upload id: %w", err))
@@ -237,6 +264,10 @@ func (service *UploadService) record(ctx context.Context, requester identity.Req
 		UploaderID:       requester.UserID,
 		OriginalFilename: filename,
 		Status:           uploadsdomain.UploadStatusProcessing,
+	}
+	if bios.Enabled {
+		platform := bios.Platform
+		upload.BIOS, upload.BIOSPlatform = true, &platform
 	}
 	if err := service.uploadRepository.SaveUploadWithJob(ctx, upload, jobsdomain.Payload{
 		Kind:      jobsdomain.KindIdentifyROM,
@@ -262,11 +293,17 @@ func (service *UploadService) Status(ctx context.Context, requester identity.Req
 	if upload == nil || !requester.CanAccess(upload.UploaderID) {
 		return UploadStatusDTO{}, fault.NotFound()
 	}
+	result, err := service.biosResult(ctx, upload.BIOSID)
+	if err != nil {
+		return UploadStatusDTO{}, err
+	}
 	return UploadStatusDTO{
 		UploadID: upload.ID,
 		Status:   string(upload.Status),
 		ROMID:    upload.ROMID,
 		Error:    upload.ErrorMessage,
+		BIOSID:   upload.BIOSID,
+		BIOS:     result,
 	}, nil
 }
 

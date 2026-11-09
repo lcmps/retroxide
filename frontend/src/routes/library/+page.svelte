@@ -4,6 +4,8 @@
 	import { resolve } from '$app/paths';
 	import { Tooltip } from 'bits-ui';
 	import LibrarySort from '#lib/components/LibrarySort.svelte';
+	import BiosPanel from '#lib/components/rom/BiosPanel.svelte';
+	import { startsOpen } from '#lib/bios/panel.js';
 	import LoadMoreSentinel from '#lib/components/LoadMoreSentinel.svelte';
 	import RomCover from '#lib/components/RomCover.svelte';
 	import { i18n } from '#lib';
@@ -85,6 +87,10 @@
 		<h1 id="library-title">{pageTitle}</h1>
 		<LibrarySort {sort} onchange={changeSort} />
 	</div>
+
+	{#if selectedPlatform}
+		<BiosPanel platform={selectedPlatform} initiallyOpen={startsOpen(page.url.searchParams)} />
+	{/if}
 
 	{#if pager.items.length === 0 && (pager.loading || !ready)}
 		<p class="library-state" role="status">{t('library.roms.loading', 'Loading ROMs...')}</p>

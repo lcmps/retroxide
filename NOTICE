@@ -46,3 +46,21 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+========================================================================
+libretro-database (https://github.com/libretro/libretro-database)
+========================================================================
+
+Retroxide includes, unmodified, the file dat/System.dat from the
+libretro-database project by libretro and its contributors:
+
+  https://github.com/libretro/libretro-database/blob/master/dat/System.dat
+
+It is bundled as infrastructure/biosdat/System.dat, to recognize BIOS
+and firmware files by checksum, and Retroxide may download newer copies
+of the same file at runtime. No changes were made to it.
+
+The libretro-database is licensed under the Creative Commons
+Attribution-ShareAlike 4.0 International License (CC BY-SA 4.0):
+
+  https://creativecommons.org/licenses/by-sa/4.0/

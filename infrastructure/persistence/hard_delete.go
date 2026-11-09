@@ -161,11 +161,11 @@ func (repositories *Repositories) HardDeleteROMDisc(ctx context.Context, romID, 
 func unsharedFileIDs(tx *gorm.DB, romID string, files []ROMFileModel) ([]string, error) {
 	ids := []string{}
 	for _, file := range files {
-		var others int64
-		if err := tx.Model(&ROMDiscModel{}).Where("rom_file_id = ? AND rom_id <> ?", file.ID, romID).Count(&others).Error; err != nil {
+		games, bios, err := fileUses(tx, file.ID, romID)
+		if err != nil {
 			return nil, err
 		}
-		if others == 0 {
+		if games == 0 && bios == 0 {
 			ids = append(ids, file.ID)
 		}
 	}
@@ -200,11 +200,11 @@ func deleteJobsAndUploads(tx *gorm.DB, uploadQuery *gorm.DB, unsharedFiles []str
 // unless a ROM still has the file as a disc: then it deletes nothing. The caller has already
 // removed its own disc row, so any row left belongs to another ROM.
 func deleteUnsharedDiscFile(tx *gorm.DB, file ROMFileModel) ([]string, error) {
-	var remaining int64
-	if err := tx.Model(&ROMDiscModel{}).Where("rom_file_id = ?", file.ID).Count(&remaining).Error; err != nil {
+	games, bios, err := fileUses(tx, file.ID, "")
+	if err != nil {
 		return nil, err
 	}
-	if remaining != 0 {
+	if games != 0 || bios != 0 {
 		return nil, nil
 	}
 	// A disc's tracks go with its file, along with any track files stored separately.

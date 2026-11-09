@@ -49,7 +49,9 @@ type Repository interface {
 // values differing only in case are counted together.
 type PlatformCount struct {
 	Platform string
-	Count    uint64
+	// Count is the number of games; BIOSCount the number of BIOS files, which every user sees.
+	Count     uint64
+	BIOSCount uint64
 }
 
 // StoredContent is an open, seekable handle on stored bytes; the caller must close it.

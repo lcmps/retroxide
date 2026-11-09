@@ -11,6 +11,8 @@ type UploadInput struct {
 	// ExpectedSize is the upload's announced size in bytes, or 0 when unknown. An upload that
 	// cannot fit on disk is refused before any of it is written.
 	ExpectedSize int64
+	// BIOS marks the upload as BIOS files for a platform.
+	BIOS BIOSOptions
 }
 
 type UploadAcceptedDTO struct {
@@ -23,6 +25,18 @@ type UploadStatusDTO struct {
 	Status   string  `json:"status"`
 	ROMID    *string `json:"rom_id"`
 	Error    *string `json:"error"`
+	// BIOSID and BIOS are set when the upload became a BIOS file.
+	BIOSID *string        `json:"bios_id"`
+	BIOS   *BIOSResultDTO `json:"bios,omitempty"`
+}
+
+// BIOSResultDTO describes the BIOS file an upload became.
+type BIOSResultDTO struct {
+	Platform     string  `json:"platform"`
+	PlatformName string  `json:"platform_name"`
+	Region       *string `json:"region"`
+	Version      *string `json:"version"`
+	Recognized   bool    `json:"recognized"`
 }
 
 // CreateSessionInput starts an upload sent in parts.
@@ -33,6 +47,9 @@ type CreateSessionInput struct {
 	Size int64 `json:"size"`
 	// Part marks one file of a disc, to be assembled with AssembleDisc.
 	Part bool `json:"part,omitempty"`
+	// BIOS marks the upload as BIOS files for Platform.
+	BIOS     bool   `json:"bios,omitempty"`
+	Platform string `json:"platform,omitempty"`
 }
 
 // SessionDTO is the progress of an upload sent in parts.

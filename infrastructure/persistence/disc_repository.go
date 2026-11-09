@@ -160,12 +160,12 @@ func discTrackEntity(model DiscTrackModel) (romdomain.DiscTrack, error) {
 	}, nil
 }
 
-// DeleteUnusedROMFile forgets a stored file (and its disc tracks) no ROM uses; its content is
-// left for the storage sweep. A file a ROM uses is kept.
+// DeleteUnusedROMFile forgets a stored file (and its disc tracks) no ROM or BIOS uses; its
+// content is left for the storage sweep. A file in use is kept.
 func (repositories *Repositories) DeleteUnusedROMFile(ctx context.Context, romFileID string) error {
 	err := repositories.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var used int64
-		if err := tx.Model(&ROMDiscModel{}).Where("rom_file_id = ?", romFileID).Count(&used).Error; err != nil || used > 0 {
+		games, bios, err := fileUses(tx, romFileID, "")
+		if err != nil || games > 0 || bios > 0 {
 			return err
 		}
 		if err := tx.Where("rom_file_id = ?", romFileID).Delete(&DiscTrackModel{}).Error; err != nil {
