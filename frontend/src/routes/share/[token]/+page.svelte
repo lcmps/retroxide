@@ -8,6 +8,7 @@
 	import { ApiClientError } from '#lib/api/errors.js';
 	import type { SharePreview } from '#lib/api/types.js';
 	import { getErrorMessage } from '#lib/helpers/error.js';
+	import { loadShare } from '#lib/share/load.js';
 	import { useTranslate } from '#lib/i18n/helpers.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
 
@@ -23,21 +24,22 @@
 
 	onMount(() => {
 		void i18n.initialize();
+		let cancelled = false;
 		let objectUrl: string | undefined;
-		getSharePreview(token)
-			.then(async (loaded) => {
-				preview = loaded;
-				phase = 'ready';
-				if (loaded.has_cover) {
-					objectUrl = URL.createObjectURL(await fetchShareCover(token));
-					cover = objectUrl;
-				}
-			})
-			.catch((error: unknown) => {
-				phase = error instanceof ApiClientError && error.status === 404 ? 'used' : 'failed';
-				message = phase === 'failed' ? getErrorMessage(error, 'share.page.error', 'Could not open this link. Please try again.', t) : '';
-			});
+		void loadShare(token, { preview: getSharePreview, cover: fetchShareCover }).then((loaded) => {
+			if (cancelled) return;
+			phase = loaded.phase;
+			preview = loaded.preview;
+			if (loaded.phase === 'ready' && loaded.cover) {
+				objectUrl = URL.createObjectURL(loaded.cover);
+				cover = objectUrl;
+			}
+			if (loaded.phase === 'failed') {
+				message = getErrorMessage(loaded.error, 'share.page.error', 'Could not open this link. Please try again.', t);
+			}
+		});
 		return () => {
+			cancelled = true;
 			if (objectUrl) URL.revokeObjectURL(objectUrl);
 		};
 	});
