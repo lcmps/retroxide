@@ -178,3 +178,77 @@ func TestBIOSNeverAppearInGameListings(t *testing.T) {
 		}
 	}
 }
+
+// exerciseBIOS runs the BIOS queries on any dialect; IDs and contents carry prefix, so runs
+// against a shared MySQL database do not collide.
+func exerciseBIOS(t *testing.T, ctx context.Context, repositories *Repositories, prefix string) {
+	t.Helper()
+	files := storage.New(t.TempDir())
+	kept := seedBIOS(t, repositories, files, prefix+"_kept", "owner", "ps2", prefix+" kept bios")
+	if err := repositories.SaveBIOS(ctx, biosdomain.BIOS{ID: prefix + "_dup", ROMFileID: kept.ROMFileID, UploaderID: "other", Platform: "ps2", Filename: "dup.bin"}); !fault.IsCode(err, fault.CodeBIOSAlreadyExists) {
+		t.Fatalf("second entry for one file = %v, want bios_already_exists", err)
+	}
+	found, err := repositories.FindBIOSByROMFileID(ctx, kept.ROMFileID)
+	if err != nil || found == nil || found.Hash.SHA1 == "" || found.Size != uint64(len(prefix+" kept bios")) || found.Labels.Region == nil {
+		t.Fatalf("FindBIOSByROMFileID = %+v, %v", found, err)
+	}
+	platform := "ps2"
+	listed, err := repositories.ListBIOS(ctx, &platform)
+	if err != nil || !containsBIOS(listed, kept.ID) {
+		t.Fatalf("ListBIOS(ps2) misses %s: %v", kept.ID, err)
+	}
+	found.Recognized, found.ExpectedPath, found.Labels = false, nil, biosdomain.Labels{}
+	if err := repositories.UpdateBIOS(ctx, *found); err != nil {
+		t.Fatal(err)
+	}
+	unrecognized, err := repositories.ListUnrecognizedBIOS(ctx)
+	if err != nil || !containsBIOS(unrecognized, kept.ID) {
+		t.Fatalf("ListUnrecognizedBIOS misses %s: %v", kept.ID, err)
+	}
+	counts, err := repositories.ListPlatforms(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ps2 rom.PlatformCount
+	for _, count := range counts {
+		if count.Platform == "ps2" {
+			ps2 = count
+		}
+	}
+	if ps2.BIOSCount == 0 {
+		t.Fatalf("ListPlatforms = %+v, want ps2 with BIOS files", counts)
+	}
+
+	// A file a game also uses outlives its BIOS entry; an unshared one goes with it.
+	game := romdomain.ROM{ID: prefix + "_game", ROMFileID: kept.ROMFileID, UploaderID: "owner", Identity: romdomain.ROMIdentity{Title: "Old upload", Platform: "ps2", IdentifiedBy: "filename"}}
+	if err := repositories.SaveROM(ctx, game); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.HardDeleteBIOS(ctx, kept.ID, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if file, err := repositories.FindROMFileByID(ctx, kept.ROMFileID); err != nil || file == nil {
+		t.Fatalf("file a game uses was deleted with its BIOS: %v", err)
+	}
+	gone := seedBIOS(t, repositories, files, prefix+"_gone", "owner", "psx", prefix+" gone bios")
+	if err := repositories.HardDeleteBIOS(ctx, gone.ID, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if file, err := repositories.FindROMFileByID(ctx, gone.ROMFileID); err != nil || file != nil {
+		t.Fatalf("unshared file after deleting its BIOS = %+v, %v", file, err)
+	}
+}
+
+func containsBIOS(entries []biosdomain.BIOS, id string) bool {
+	for _, entry := range entries {
+		if entry.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBIOSQueriesOnSQLite(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	exerciseBIOS(t, ctx, repositories, "bios")
+}

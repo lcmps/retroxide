@@ -15,7 +15,9 @@ import (
 // SaveBIOS records a new BIOS entry. A file already recorded as a BIOS is bios_already_exists.
 func (repositories *Repositories) SaveBIOS(ctx context.Context, entry biosdomain.BIOS) error {
 	model := biosModel(entry)
-	if err := repositories.DB.WithContext(ctx).Create(&model).Error; err != nil {
+	// created_at comes from the column default; GORM would otherwise send its tag default as a
+	// literal string, which MySQL rejects for a TIMESTAMP column.
+	if err := repositories.DB.WithContext(ctx).Omit("created_at").Create(&model).Error; err != nil {
 		if existing, lookupErr := repositories.FindBIOSByROMFileID(ctx, entry.ROMFileID); lookupErr == nil && existing != nil {
 			return fault.BIOSAlreadyExists(existing.ID, existing.Hash.SHA256)
 		}
