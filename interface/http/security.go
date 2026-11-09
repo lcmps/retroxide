@@ -3,6 +3,7 @@ package http
 import (
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,10 @@ const (
 	apiContentSecurityPolicy = "default-src 'none'; frame-ancestors 'none'"
 	// The web app's full policy ships as a <meta> tag in its HTML; frame-ancestors only works as a header.
 	frontendContentSecurityPolicy = "frame-ancestors 'none'"
+	// Web workers do not inherit the page's <meta> policy, so worker scripts carry their own: the
+	// upload hash compiles WebAssembly, and a worker needs nothing else.
+	workerContentSecurityPolicy = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; frame-ancestors 'none'"
+	workerScriptPrefix          = "/_app/immutable/workers/"
 )
 
 // securityHeadersMiddleware sets browser hardening headers on every response.
@@ -35,9 +40,12 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 		header.Set("X-Content-Type-Options", "nosniff")
 		header.Set("X-Frame-Options", "DENY")
 		header.Set("Referrer-Policy", "no-referrer")
-		if isAPIPath(c.Request.URL.Path) {
+		switch path := c.Request.URL.Path; {
+		case isAPIPath(path):
 			header.Set("Content-Security-Policy", apiContentSecurityPolicy)
-		} else {
+		case strings.HasPrefix(path, workerScriptPrefix):
+			header.Set("Content-Security-Policy", workerContentSecurityPolicy)
+		default:
 			header.Set("Content-Security-Policy", frontendContentSecurityPolicy)
 		}
 		c.Next()

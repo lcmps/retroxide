@@ -40,6 +40,22 @@ func TestRouterSetsSecurityHeaders(t *testing.T) {
 	}
 }
 
+// Web workers do not inherit the page's <meta> policy, so worker scripts get their own header:
+// WebAssembly (the upload hash) may compile there, and the worker may load nothing else.
+func TestRouterSetsWorkerScriptPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(Dependencies{}, Options{})
+	got := request(router, http.MethodGet, "/_app/immutable/workers/hash.worker-abc123.js").Header().Get("Content-Security-Policy")
+	want := "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; frame-ancestors 'none'"
+	if got != want {
+		t.Fatalf("worker CSP = %q, want %q", got, want)
+	}
+	// Only workers may compile WebAssembly; pages keep their stricter policy.
+	if page := request(router, http.MethodGet, "/_app/immutable/chunks/app.js").Header().Get("Content-Security-Policy"); strings.Contains(page, "wasm") {
+		t.Fatalf("non-worker asset CSP = %q allows WebAssembly", page)
+	}
+}
+
 func TestRouterRejectsOversizedJSONBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := NewRouter(Dependencies{Sessions: routerTestSessions{}}, Options{})
