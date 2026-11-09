@@ -7,9 +7,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/lcmps/retroxide/application/jobs"
 	"github.com/lcmps/retroxide/application/uploads"
 	"github.com/lcmps/retroxide/domain/identity"
+	jobsdomain "github.com/lcmps/retroxide/domain/jobs"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
+	uploadsdomain "github.com/lcmps/retroxide/domain/uploads"
 	"github.com/lcmps/retroxide/infrastructure/hash"
 	"github.com/lcmps/retroxide/infrastructure/storage"
 	"gorm.io/gorm"
@@ -158,5 +161,74 @@ func TestDiscGroupConflictRollsBackAndTheRetryJoins(t *testing.T) {
 	}
 	if discs, err := repositories.FindROMDiscs(ctx, rom.ID); err != nil || len(discs) != 2 {
 		t.Fatalf("discs = %+v, %v", discs, err)
+	}
+}
+
+// failingDiscIndexer fails every attempt, as an image that can't be read would.
+type failingDiscIndexer struct{}
+
+func (failingDiscIndexer) Index(context.Context, romdomain.ROMFile, string) error {
+	return errors.New("cannot read image")
+}
+
+// The pipeline falls back to the filename only when the identifier it is given can do so. In
+// production that is this Identifier, so the fallback must be reachable through it.
+func TestFilenameFallbackIsWiredThroughTheProductionIdentifier(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	files := storage.New(t.TempDir())
+	uploader := uploads.NewUploadService(repositories, repositories, files, hash.New(), nil, nil, uploads.UploadPolicy{MaxUploadBytes: 1024, AllowedExtensions: []string{"iso"}})
+	accepted, err := uploader.Create(ctx, identity.Requester{UserID: "owner", Role: identity.RoleUser}, uploads.UploadInput{Filename: "Unreadable Game (USA).iso", Content: strings.NewReader("not a disc anyone can read")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job JobQueueModel
+	if err := repositories.DB.Where("upload_id = ?", accepted.UploadID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	identifier := NewIdentifier(repositories.DB).WithDiscs(failingDiscIndexer{})
+	if err := identifier.Identify(ctx, job.UploadID, job.ROMFileID); err == nil {
+		t.Fatal("Identify succeeded although indexing fails")
+	}
+	handler := jobs.ROMPipeline(identifier, nil, nil)[jobsdomain.KindIdentifyROM]
+	if handler.OnExhausted == nil {
+		t.Fatal("the production identifier gives the pipeline no filename fallback")
+	}
+	if err := handler.OnExhausted(ctx, jobsdomain.Payload{Kind: jobsdomain.KindIdentifyROM, UploadID: job.UploadID, ROMFileID: job.ROMFileID}); err != nil {
+		t.Fatalf("filename fallback = %v", err)
+	}
+	upload, err := repositories.FindUpload(ctx, job.UploadID)
+	if err != nil || upload.Status != uploadsdomain.UploadStatusCompleted || upload.ROMID == nil {
+		t.Fatalf("upload after the fallback = %+v, %v; want completed with a ROM", upload, err)
+	}
+	rom, err := repositories.FindROMByID(ctx, *upload.ROMID)
+	if err != nil || rom == nil || rom.Identity.Title != "Unreadable Game (USA).iso" {
+		t.Fatalf("ROM after the fallback = %+v, %v; want it titled with the filename", rom, err)
+	}
+}
+
+// When even the fallback fails, the upload must end as failed with the reason, not stay
+// "processing" forever: the transaction that failed cannot be what records it.
+func TestAFailedFilenameFallbackMarksTheUploadFailed(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	files := storage.New(t.TempDir())
+	uploader := uploads.NewUploadService(repositories, repositories, files, hash.New(), nil, nil, uploads.UploadPolicy{MaxUploadBytes: 1024, AllowedExtensions: []string{"iso"}})
+	accepted, err := uploader.Create(ctx, identity.Requester{UserID: "owner", Role: identity.RoleUser}, uploads.UploadInput{Filename: "Lost Game (USA).iso", Content: strings.NewReader("a file whose record is gone")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job JobQueueModel
+	if err := repositories.DB.Where("upload_id = ?", accepted.UploadID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Without its ROM file the fallback cannot record a ROM.
+	if err := repositories.DB.Where("id = ?", job.ROMFileID).Delete(&ROMFileModel{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := NewIdentifier(repositories.DB).CompleteWithFilename(ctx, job.UploadID, job.ROMFileID); err == nil {
+		t.Fatal("the fallback succeeded without its ROM file")
+	}
+	upload, err := repositories.FindUpload(ctx, job.UploadID)
+	if err != nil || upload.Status != uploadsdomain.UploadStatusFailed || upload.ErrorMessage == nil || *upload.ErrorMessage == "" {
+		t.Fatalf("upload after a failed fallback = %+v, %v; want failed with a reason", upload, err)
 	}
 }
