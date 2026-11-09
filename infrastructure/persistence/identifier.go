@@ -18,6 +18,7 @@ import (
 type Identifier struct {
 	database *gorm.DB
 	discs    DiscIndexer
+	known    uploads.KnownList
 }
 
 // DiscIndexer recognizes disc images among uploaded files.
@@ -39,8 +40,19 @@ func (identifier *Identifier) WithDiscs(discs DiscIndexer) *Identifier {
 	return identifier
 }
 
+// WithBIOS makes identification turn BIOS files (recognized by known, or uploaded as BIOS files)
+// into BIOS entries, which are never indexed as discs.
+func (identifier *Identifier) WithBIOS(known uploads.KnownList) *Identifier {
+	identifier.known = known
+	return identifier
+}
+
 func (identifier *Identifier) Identify(ctx context.Context, uploadID, romFileID string) error {
-	if identifier.discs != nil {
+	isBIOS, err := identifier.isBIOS(ctx, uploadID, romFileID)
+	if err != nil {
+		return err
+	}
+	if identifier.discs != nil && !isBIOS {
 		// Indexing reads the whole image, so it runs before, not inside, the transaction below:
 		// holding its locks for minutes would stall every other write.
 		duplicate, err := identifier.indexDisc(ctx, uploadID, romFileID)
@@ -112,7 +124,11 @@ func (identifier *Identifier) inTransaction(ctx context.Context, uploadID, romFi
 			return nil
 		}
 		repositories := NewRepositories(tx)
-		return identify(uploads.NewIdentifyService(repositories, repositories))
+		service := uploads.NewIdentifyService(repositories, repositories)
+		if identifier.known != nil {
+			service.WithBIOS(repositories, identifier.known)
+		}
+		return identify(service)
 	})
 	if err != nil {
 		var appError *fault.Error
@@ -170,4 +186,22 @@ func (identifier *Identifier) refuseDuplicateDisc(ctx context.Context, uploadID,
 		return databaseError("refusing a duplicate disc", err)
 	}
 	return nil
+}
+
+// isBIOS reports whether the upload becomes a BIOS entry, before anything reads the whole file.
+func (identifier *Identifier) isBIOS(ctx context.Context, uploadID, romFileID string) (bool, error) {
+	if identifier.known == nil {
+		return false, nil
+	}
+	repositories := NewRepositories(identifier.database)
+	upload, err := repositories.FindUpload(ctx, uploadID)
+	if err != nil || upload == nil {
+		return false, err
+	}
+	romFile, err := repositories.FindROMFileByID(ctx, romFileID)
+	if err != nil || romFile == nil {
+		return false, err
+	}
+	_, _, isBIOS := uploads.IsBIOSUpload(*upload, *romFile, identifier.known)
+	return isBIOS, nil
 }

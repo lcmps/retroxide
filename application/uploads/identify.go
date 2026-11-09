@@ -8,6 +8,7 @@ import (
 
 	"github.com/lcmps/retroxide/application/fault"
 	"github.com/lcmps/retroxide/application/id"
+	biosdomain "github.com/lcmps/retroxide/domain/bios"
 	romdomain "github.com/lcmps/retroxide/domain/rom"
 	uploadsdomain "github.com/lcmps/retroxide/domain/uploads"
 )
@@ -25,9 +26,33 @@ type identifyROMRepository interface {
 	RecordDisc(context.Context, romdomain.ROMDisc) error
 }
 
+// BIOSRecorder stores the BIOS entries uploads become.
+type BIOSRecorder interface {
+	SaveBIOS(context.Context, biosdomain.BIOS) error
+	FindBIOSByROMFileID(context.Context, string) (*biosdomain.BIOS, error)
+}
+
 type IdentifyService struct {
 	uploadRepository identifyUploadRepository
 	romRepository    identifyROMRepository
+	bios             BIOSRecorder
+	known            KnownList
+}
+
+// WithBIOS makes identification turn BIOS files into BIOS entries rather than games.
+func (service *IdentifyService) WithBIOS(recorder BIOSRecorder, known KnownList) *IdentifyService {
+	service.bios, service.known = recorder, known
+	return service
+}
+
+// IsBIOSUpload reports whether an upload of romFile becomes a BIOS entry, and how: the known
+// list's entry when it recognizes the file, and whether it did. Either a recognized file or an
+// upload marked as BIOS files is a BIOS.
+func IsBIOSUpload(upload uploadsdomain.Upload, romFile romdomain.ROMFile, known KnownList) (match biosdomain.Known, recognized, isBIOS bool) {
+	if known != nil {
+		match, recognized = known.Lookup(romFile.Hash.SHA1, romFile.Size)
+	}
+	return match, recognized, recognized || (upload.BIOS && upload.BIOSPlatform != nil)
 }
 
 func NewIdentifyService(uploadRepository identifyUploadRepository, romRepository identifyROMRepository) *IdentifyService {
@@ -72,6 +97,12 @@ func (service *IdentifyService) identify(ctx context.Context, uploadID, romFileI
 			return err
 		}
 		return fault.NotFound()
+	}
+
+	if service.bios != nil {
+		if handled, err := service.recordBIOS(ctx, upload, *romFile); handled || err != nil {
+			return err
+		}
 	}
 
 	romID, err := service.attachOrCreate(ctx, upload, romFileID, filenameOnly)
@@ -241,4 +272,41 @@ func inferTitle(name string) string {
 		return strings.TrimSpace(originalName)
 	}
 	return name
+}
+
+// recordBIOS completes an upload that is a BIOS file as a BIOS entry, reporting whether it was
+// one. Content already recorded as a BIOS (a retry, or a concurrent upload) keeps its entry.
+func (service *IdentifyService) recordBIOS(ctx context.Context, upload *uploadsdomain.Upload, romFile romdomain.ROMFile) (bool, error) {
+	match, recognized, isBIOS := IsBIOSUpload(*upload, romFile, service.known)
+	if !isBIOS {
+		return false, nil
+	}
+	entry, err := service.bios.FindBIOSByROMFileID(ctx, romFile.ID)
+	if err != nil {
+		return true, err
+	}
+	if entry == nil {
+		biosID, err := id.New("bio")
+		if err != nil {
+			return true, fault.Internal(fmt.Errorf("generating bios id: %w", err))
+		}
+		created := biosdomain.BIOS{
+			ID: biosID, ROMFileID: romFile.ID, UploaderID: upload.UploaderID, Filename: upload.OriginalFilename, Recognized: recognized,
+		}
+		if recognized {
+			path := match.Path
+			created.Platform, created.ExpectedPath, created.Labels = match.Platform, &path, match.Labels
+		} else {
+			created.Platform = *upload.BIOSPlatform
+		}
+		if err := service.bios.SaveBIOS(ctx, created); err != nil {
+			return true, err
+		}
+		entry = &created
+	}
+	if err := upload.TransitionTo(uploadsdomain.UploadStatusCompleted); err != nil {
+		return true, fault.Internal(fmt.Errorf("transitioning upload to completed: %w", err))
+	}
+	upload.ErrorMessage, upload.BIOSID = nil, &entry.ID
+	return true, service.uploadRepository.SaveUpload(ctx, *upload)
 }
