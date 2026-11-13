@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/lcmps/retroxide/application/fault"
 	authdomain "github.com/lcmps/retroxide/domain/auth"
@@ -31,15 +33,53 @@ func ExtractBearerToken(header string) (string, bool) {
 	return token, token != ""
 }
 
+// UserChangeListener is told when a user's record changed in a way that affects their
+// requests: a role change, a logout (token version bump), or deletion.
+type UserChangeListener interface {
+	UserChanged(userID string)
+}
+
 // Authenticator resolves bearer tokens, either user access tokens or API client tokens, to requesters.
 type Authenticator struct {
 	tokens  TokenService
 	users   userReader
 	clients clientTokenReader
+
+	// cache holds what Authenticate needs of each user for cacheTTL, so a page that makes many
+	// requests at once does not read the same user record for each. It is cleared for a user by
+	// UserChanged, which the code paths that change users call, so a logout or a role change
+	// still applies on the very next request.
+	cacheTTL time.Duration
+	cacheMu  sync.Mutex
+	cache    map[string]cachedUser
+	now      func() time.Time
+}
+
+type cachedUser struct {
+	role         identity.RequesterRole
+	tokenVersion uint64
+	expires      time.Time
 }
 
 func NewAuthenticator(tokens TokenService, users userReader, clients clientTokenReader) *Authenticator {
-	return &Authenticator{tokens: tokens, users: users, clients: clients}
+	return &Authenticator{tokens: tokens, users: users, clients: clients, now: time.Now}
+}
+
+// WithUserCache keeps each authenticated user's role and token version for ttl.
+func (authenticator *Authenticator) WithUserCache(ttl time.Duration) *Authenticator {
+	authenticator.cacheTTL = ttl
+	authenticator.cache = make(map[string]cachedUser)
+	return authenticator
+}
+
+// UserChanged forgets a user, so their next request reads the current record.
+func (authenticator *Authenticator) UserChanged(userID string) {
+	if authenticator.cache == nil {
+		return
+	}
+	authenticator.cacheMu.Lock()
+	delete(authenticator.cache, userID)
+	authenticator.cacheMu.Unlock()
 }
 
 // Authenticate verifies token and returns the requester it represents.
@@ -51,14 +91,38 @@ func (authenticator *Authenticator) Authenticate(ctx context.Context, token stri
 	if err != nil {
 		return authenticator.authenticateClient(ctx, token)
 	}
-	user, err := authenticator.users.FindByID(ctx, claims.UserID)
+	user, err := authenticator.lookup(ctx, claims.UserID)
 	if err != nil {
 		return identity.Requester{}, err
 	}
-	if user == nil || user.TokenVersion != claims.TokenVersion {
+	if user == nil || user.tokenVersion != claims.TokenVersion {
 		return identity.Requester{}, fault.Unauthorized()
 	}
-	return identity.Requester{UserID: user.ID, Role: user.Role}, nil
+	return identity.Requester{UserID: claims.UserID, Role: user.role}, nil
+}
+
+// lookup returns what Authenticate needs of a user, from the cache when it is fresh; nil for a
+// user that does not exist (which is not cached, so a user created a moment later signs in).
+func (authenticator *Authenticator) lookup(ctx context.Context, userID string) (*cachedUser, error) {
+	if authenticator.cache != nil {
+		authenticator.cacheMu.Lock()
+		cached, ok := authenticator.cache[userID]
+		authenticator.cacheMu.Unlock()
+		if ok && authenticator.now().Before(cached.expires) {
+			return &cached, nil
+		}
+	}
+	user, err := authenticator.users.FindByID(ctx, userID)
+	if err != nil || user == nil {
+		return nil, err
+	}
+	entry := cachedUser{role: user.Role, tokenVersion: user.TokenVersion, expires: authenticator.now().Add(authenticator.cacheTTL)}
+	if authenticator.cache != nil {
+		authenticator.cacheMu.Lock()
+		authenticator.cache[userID] = entry
+		authenticator.cacheMu.Unlock()
+	}
+	return &entry, nil
 }
 
 func (authenticator *Authenticator) authenticateClient(ctx context.Context, token string) (identity.Requester, error) {

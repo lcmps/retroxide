@@ -30,6 +30,10 @@ import (
 
 const scraperTimeout = 30 * time.Second
 
+// authenticatedUserCacheTTL bounds how long a user's role and token version are kept between
+// requests; changes made in this process clear the entry sooner.
+const authenticatedUserCacheTTL = 10 * time.Second
+
 // datCacheMaxAge is how long downloaded libretro databases are used before being revalidated.
 const datCacheMaxAge = 7 * 24 * time.Hour
 
@@ -69,7 +73,10 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 		return metrics.Counts(counts), err
 	}, storage.FreeSpace)
 	audit := metrics.NewCountingAudit(observability.NewAuditLogger(logger), registry)
-	sessions := auth.NewSessionService(repositories, hasher, tokens, repositories)
+	// Authenticated requests read the user's role and token version from a short cache; the
+	// services that change users clear it, so a logout or role change still applies at once.
+	authenticator := auth.NewAuthenticator(tokens, repositories, repositories).WithUserCache(authenticatedUserCacheTTL)
+	sessions := auth.NewSessionService(repositories, hasher, tokens, repositories).WithUserChangeListener(authenticator)
 	discService := discs.NewService(repositories, storage, hashadapter.New(), discimage.NewImages(hashadapter.New()), discimage.NewCompressor())
 	discsUploaded := make(chan struct{}, 1)
 	wakeCompressor := func() {
@@ -97,9 +104,9 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 		Libraries:     libraries.NewService(repositories, repositories),
 		Sessions:      sessions,
 		Metrics:       registry,
-		Users:         users.NewService(repositories, hasher, sessions),
+		Users:         users.NewService(repositories, hasher, sessions).WithUserChangeListener(authenticator),
 		Clients:       auth.NewClientService(repositories),
-		Authenticator: auth.NewAuthenticator(tokens, repositories, repositories),
+		Authenticator: authenticator,
 		Identifier:    persistence.NewIdentifier(repositories.DB).WithDiscs(discService),
 		Share:         share.NewService(repositories, storage),
 	}

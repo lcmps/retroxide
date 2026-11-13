@@ -23,6 +23,7 @@ type SessionService struct {
 	hasher       PasswordHasher
 	tokens       TokenService
 	refreshes    RefreshTokenRepository
+	listener     UserChangeListener
 	dummyOnce    sync.Once
 	dummyHash    string
 	dummyHashErr error
@@ -35,6 +36,12 @@ func NewSessionService(
 	refreshes RefreshTokenRepository,
 ) *SessionService {
 	return &SessionService{users: users, hasher: hasher, tokens: tokens, refreshes: refreshes}
+}
+
+// WithUserChangeListener tells listener whenever a user's sessions are ended.
+func (service *SessionService) WithUserChangeListener(listener UserChangeListener) *SessionService {
+	service.listener = listener
+	return service
 }
 
 func (service *SessionService) Login(ctx context.Context, input LoginRequest) (SessionResponse, error) {
@@ -123,6 +130,9 @@ func (service *SessionService) endAllSessions(ctx context.Context, userID string
 	// Bump the version first so access tokens die even if revoking refresh tokens fails.
 	if err := service.users.IncrementTokenVersion(ctx, userID); err != nil {
 		return err
+	}
+	if service.listener != nil {
+		service.listener.UserChanged(userID)
 	}
 	return service.refreshes.RevokeAllForUser(ctx, userID)
 }

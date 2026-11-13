@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/lcmps/retroxide/application/fault"
 	authdomain "github.com/lcmps/retroxide/domain/auth"
@@ -142,5 +143,80 @@ func TestAuthenticatorRejectsUnknownToken(t *testing.T) {
 	authenticator := NewAuthenticator(principalTestTokens{err: fault.Unauthorized()}, principalTestUsers{}, clients)
 	if _, err := authenticator.Authenticate(context.Background(), "bad"); !fault.IsCode(err, fault.CodeUnauthorized) {
 		t.Fatalf("Authenticate() error = %v, want unauthorized", err)
+	}
+}
+
+// countingUsers counts FindByID calls, so tests can tell a cache hit from a store read.
+type countingUsers struct {
+	users principalTestUsers
+	calls int
+}
+
+func (users *countingUsers) FindByID(ctx context.Context, userID string) (*authdomain.User, error) {
+	users.calls++
+	return users.users.FindByID(ctx, userID)
+}
+
+func TestAuthenticatorCachesUserLookups(t *testing.T) {
+	users := &countingUsers{users: principalTestUsers{"user-1": {ID: "user-1", Role: identity.RoleUser, TokenVersion: 1}}}
+	authenticator := NewAuthenticator(principalTestTokens{claims: AccessClaims{UserID: "user-1", Role: "user", TokenVersion: 1}}, users, &principalTestClients{}).WithUserCache(10 * time.Second)
+
+	for range 3 {
+		requester, err := authenticator.Authenticate(context.Background(), "signed")
+		if err != nil || requester.UserID != "user-1" {
+			t.Fatalf("Authenticate() = %+v, %v", requester, err)
+		}
+	}
+	if users.calls != 1 {
+		t.Fatalf("FindByID calls = %d, want 1 (cached)", users.calls)
+	}
+	// A cached user still rejects a token from before a logout.
+	stale := NewAuthenticator(principalTestTokens{claims: AccessClaims{UserID: "user-1", Role: "user", TokenVersion: 0}}, users, &principalTestClients{}).WithUserCache(10 * time.Second)
+	if _, err := stale.Authenticate(context.Background(), "signed"); !fault.IsCode(err, fault.CodeUnauthorized) {
+		t.Fatalf("stale token = %v, want unauthorized", err)
+	}
+}
+
+func TestAuthenticatorCacheForgetsChangedUsers(t *testing.T) {
+	users := &countingUsers{users: principalTestUsers{"user-1": {ID: "user-1", Role: identity.RoleUser}}}
+	authenticator := NewAuthenticator(principalTestTokens{claims: AccessClaims{UserID: "user-1", Role: "user"}}, users, &principalTestClients{}).WithUserCache(10 * time.Second)
+	if _, err := authenticator.Authenticate(context.Background(), "signed"); err != nil {
+		t.Fatal(err)
+	}
+	users.users["user-1"] = authdomain.User{ID: "user-1", Role: identity.RoleAdmin}
+	authenticator.UserChanged("user-1")
+
+	requester, err := authenticator.Authenticate(context.Background(), "signed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requester.Role != identity.RoleAdmin || users.calls != 2 {
+		t.Fatalf("role = %v after %d lookups, want admin after a second lookup", requester.Role, users.calls)
+	}
+	// A deleted user is refused as soon as the change is reported.
+	delete(users.users, "user-1")
+	authenticator.UserChanged("user-1")
+	if _, err := authenticator.Authenticate(context.Background(), "signed"); !fault.IsCode(err, fault.CodeUnauthorized) {
+		t.Fatalf("deleted user = %v, want unauthorized", err)
+	}
+}
+
+func TestAuthenticatorCacheExpires(t *testing.T) {
+	users := &countingUsers{users: principalTestUsers{"user-1": {ID: "user-1", Role: identity.RoleUser}}}
+	authenticator := NewAuthenticator(principalTestTokens{claims: AccessClaims{UserID: "user-1", Role: "user"}}, users, &principalTestClients{}).WithUserCache(10 * time.Second)
+	now := time.Unix(1_700_000_000, 0)
+	authenticator.now = func() time.Time { return now }
+
+	for range 2 {
+		if _, err := authenticator.Authenticate(context.Background(), "signed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now = now.Add(11 * time.Second)
+	if _, err := authenticator.Authenticate(context.Background(), "signed"); err != nil {
+		t.Fatal(err)
+	}
+	if users.calls != 2 {
+		t.Fatalf("FindByID calls = %d, want 2 (one per cache lifetime)", users.calls)
 	}
 }

@@ -203,3 +203,25 @@ func TestDeleteTransfersToTheAdministratorAndNeverDeletesSelf(t *testing.T) {
 		t.Fatalf("delete = %+v, heir %q, deleted %v", response, store.heir, store.deleted)
 	}
 }
+
+type changeListener struct{ changed []string }
+
+func (listener *changeListener) UserChanged(userID string) {
+	listener.changed = append(listener.changed, userID)
+}
+
+func TestUpdateAndDeleteTellTheUserChangeListener(t *testing.T) {
+	service, _, _ := fixture()
+	listener := &changeListener{}
+	service.WithUserChangeListener(listener)
+	ctx := context.Background()
+	if _, err := service.Update(ctx, admin, "usr-member", UpdateRequest{Role: ptr("admin")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Delete(ctx, admin, "usr-member"); err != nil {
+		t.Fatal(err)
+	}
+	if len(listener.changed) != 2 || listener.changed[0] != "usr-member" || listener.changed[1] != "usr-member" {
+		t.Fatalf("listener told of %v, want usr-member twice", listener.changed)
+	}
+}

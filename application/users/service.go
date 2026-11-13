@@ -120,12 +120,25 @@ type Service struct {
 	store    Store
 	hasher   auth.PasswordHasher
 	sessions Sessions
+	listener auth.UserChangeListener
 }
 
 var _ API = (*Service)(nil)
 
 func NewService(store Store, hasher auth.PasswordHasher, sessions Sessions) *Service {
 	return &Service{store: store, hasher: hasher, sessions: sessions}
+}
+
+// WithUserChangeListener tells listener whenever an account is changed or deleted.
+func (service *Service) WithUserChangeListener(listener auth.UserChangeListener) *Service {
+	service.listener = listener
+	return service
+}
+
+func (service *Service) userChanged(userID string) {
+	if service.listener != nil {
+		service.listener.UserChanged(userID)
+	}
 }
 
 func (service *Service) List(ctx context.Context, requester identity.Requester) (ListResponse, error) {
@@ -215,6 +228,7 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 	if err := service.store.SaveUser(ctx, *account); err != nil {
 		return UserDTO{}, err
 	}
+	service.userChanged(account.ID)
 	// A reset password must lock out whoever knew the old one.
 	if passwordReset && account.ID != requester.UserID {
 		if err := service.sessions.EndSessions(ctx, account.ID); err != nil {
@@ -238,6 +252,7 @@ func (service *Service) Delete(ctx context.Context, requester identity.Requester
 	if err != nil {
 		return DeleteResponse{}, err
 	}
+	service.userChanged(account.ID)
 	return DeleteResponse{TransferredROMs: transfer.ROMs, TransferredLibraries: transfer.Libraries, TransferredUploads: transfer.Uploads, TransferredBIOS: transfer.BIOS}, nil
 }
 

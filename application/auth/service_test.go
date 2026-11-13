@@ -448,3 +448,25 @@ func TestValidateUsername(t *testing.T) {
 		}
 	}
 }
+
+// changeListener records the users it is told about.
+type changeListener struct{ changed []string }
+
+func (listener *changeListener) UserChanged(userID string) {
+	listener.changed = append(listener.changed, userID)
+}
+
+func TestSessionServiceLogoutTellsTheUserChangeListener(t *testing.T) {
+	user := authdomain.User{ID: "user-1", Email: "mario@example.com", Role: identity.RoleUser}
+	users := authTestUserRepository{usersByID: map[string]authdomain.User{user.ID: user}}
+	refreshes := &authTestRefreshRepository{records: map[string]authdomain.RefreshToken{}}
+	listener := &changeListener{}
+	service := NewSessionService(users, &authTestHasher{}, &authTestTokenService{}, refreshes).WithUserChangeListener(listener)
+
+	if err := service.Logout(context.Background(), identity.Requester{UserID: user.ID, Role: identity.RoleUser}); err != nil {
+		t.Fatal(err)
+	}
+	if len(listener.changed) != 1 || listener.changed[0] != user.ID {
+		t.Fatalf("listener told of %v, want [%s]", listener.changed, user.ID)
+	}
+}
