@@ -37,7 +37,7 @@ func (service *Service) MergeROM(ctx context.Context, requester identity.Request
 	if err := service.repository.MergeROMs(ctx, targetID, sourceID, service.deleteStoredFile(ctx)); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.reloadDetail(ctx, targetID)
+	return service.reloadDetail(ctx, requester, targetID)
 }
 
 // SplitDisc turns the disc with the number into a ROM of its own and returns that ROM.
@@ -53,7 +53,7 @@ func (service *Service) SplitDisc(ctx context.Context, requester identity.Reques
 	if err := service.repository.SplitROMDisc(ctx, romID, disc.ROMFileID, newID); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.reloadDetail(ctx, newID)
+	return service.reloadDetail(ctx, requester, newID)
 }
 
 // ReorderDiscs numbers a ROM's discs in the order of romFileIDs, which must name each disc once.
@@ -64,7 +64,7 @@ func (service *Service) ReorderDiscs(ctx context.Context, requester identity.Req
 	if err := service.repository.ReorderROMDiscs(ctx, romID, romFileIDs); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.reloadDetail(ctx, romID)
+	return service.reloadDetail(ctx, requester, romID)
 }
 
 // RemoveDisc deletes the disc with the number, and its file unless another ROM has it. The caller
@@ -83,7 +83,7 @@ func (service *Service) RemoveDisc(ctx context.Context, requester identity.Reque
 	if err := service.repository.HardDeleteROMDisc(ctx, romID, disc.ROMFileID, service.deleteStoredFile(ctx)); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.reloadDetail(ctx, romID)
+	return service.reloadDetail(ctx, requester, romID)
 }
 
 func (service *Service) findDisc(ctx context.Context, requester identity.Requester, romID string, number int) (romdomain.ROMDisc, error) {
@@ -102,7 +102,7 @@ func (service *Service) findDisc(ctx context.Context, requester identity.Request
 	return romdomain.ROMDisc{}, fault.NotFound()
 }
 
-func (service *Service) reloadDetail(ctx context.Context, romID string) (ROMDetailDTO, error) {
+func (service *Service) reloadDetail(ctx context.Context, requester identity.Requester, romID string) (ROMDetailDTO, error) {
 	rom, err := service.repository.FindROMByID(ctx, romID)
 	if err != nil {
 		return ROMDetailDTO{}, err
@@ -110,7 +110,7 @@ func (service *Service) reloadDetail(ctx context.Context, romID string) (ROMDeta
 	if rom == nil {
 		return ROMDetailDTO{}, fault.NotFound()
 	}
-	return service.detail(ctx, *rom)
+	return service.detail(ctx, requester, *rom)
 }
 
 func derefOrEmpty(value *string) string {

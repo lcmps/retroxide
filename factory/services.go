@@ -19,6 +19,7 @@ import (
 	"github.com/lcmps/retroxide/application/share"
 	"github.com/lcmps/retroxide/application/uploads"
 	"github.com/lcmps/retroxide/application/users"
+	infraauth "github.com/lcmps/retroxide/infrastructure/auth"
 	"github.com/lcmps/retroxide/infrastructure/biosdat"
 	"github.com/lcmps/retroxide/infrastructure/config"
 	hashadapter "github.com/lcmps/retroxide/infrastructure/hash"
@@ -65,7 +66,13 @@ type Services struct {
 	BIOSList *biosdat.Catalog
 	// Share makes and redeems single-use links that copy a ROM into another library.
 	Share *share.Service
+	// ImageLinks signs the image URLs in API responses and verifies them when images are served.
+	ImageLinks *infraauth.ImageLinkSigner
 }
+
+// imageLinkWindow is how long the signed image URLs in API responses stay the same (and so
+// cacheable by the browser); a URL stays valid for one window after the one it was signed in.
+const imageLinkWindow = 24 * time.Hour
 
 func NewServices(settings config.Config, repositories *persistence.Repositories, queue *jobs.NotifyingQueue, storage *storage.Filesystem, hasher auth.PasswordHasher, tokens auth.TokenService, logger *slog.Logger) *Services {
 	registry := metrics.NewRegistry(func(ctx context.Context) (metrics.Counts, error) {
@@ -89,7 +96,9 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 	if err != nil {
 		logger.Error("BIOS support is off: the bundled list of known BIOS files cannot be read", "error", err)
 	}
+	imageLinks := infraauth.NewImageLinkSigner(settings.JWTSecret, imageLinkWindow)
 	services := &Services{
+		ImageLinks:    imageLinks,
 		Discs:         discService,
 		DiscsUploaded: discsUploaded,
 		Uploads: uploads.NewUploadService(
@@ -100,7 +109,7 @@ func NewServices(settings config.Config, repositories *persistence.Repositories,
 				AllowedExtensions: settings.AllowedUploadExtensions,
 			},
 		).WithSessions(repositories, storage, hashadapter.New()).WithDiscAssembly(discService, wakeCompressor, settings.CompressDiscs),
-		ROMs:          rom.NewService(repositories, storage, audit, metrics.NewCountingScraper(NewScraper(settings), registry)).WithThumbnails(imaging.NewThumbnailer()).WithDiscs(discService, wakeCompressor),
+		ROMs:          rom.NewService(repositories, storage, audit, metrics.NewCountingScraper(NewScraper(settings), registry)).WithThumbnails(imaging.NewThumbnailer()).WithDiscs(discService, wakeCompressor).WithImageLinks(imageLinks),
 		Libraries:     libraries.NewService(repositories, repositories),
 		Sessions:      sessions,
 		Metrics:       registry,

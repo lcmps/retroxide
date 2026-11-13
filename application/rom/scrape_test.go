@@ -278,7 +278,7 @@ func TestScrapeStoresACoverThumbnail(t *testing.T) {
 	if string(content) != "\xff\xd8\xffthumbnail" || thumbnailer.calls != 1 {
 		t.Fatalf("thumbnail = %q after %d scalings", content, thumbnailer.calls)
 	}
-	summary := Summarize(romdomain.ROMWithFile{ROM: repository.roms["rom-1"]})
+	summary := Summarize(romdomain.ROMWithFile{ROM: repository.roms["rom-1"]}, nil)
 	if summary.CoverThumbURL == nil || !strings.HasPrefix(*summary.CoverThumbURL, "/api/v1/rom/rom-1/cover/thumb?v=") {
 		t.Fatalf("cover_thumb_url = %v", summary.CoverThumbURL)
 	}

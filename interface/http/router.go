@@ -26,6 +26,12 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, token string) (identity.Requester, error)
 }
 
+// ImageLinks verifies the signed tokens image URLs carry, so browsers can load covers with plain
+// <img> tags. A token names the requester it was signed for and the ROM whose images it covers.
+type ImageLinks interface {
+	Verify(token string) (requester identity.Requester, romID string, err error)
+}
+
 // DownloadLinks issues and verifies short-lived signed download capabilities.
 type DownloadLinks interface {
 	Sign(requester identity.Requester, romID string) (token string, expiresAt time.Time, err error)
@@ -47,6 +53,7 @@ type Dependencies struct {
 	Users         users.API
 	Authenticator Authenticator
 	DownloadLinks DownloadLinks
+	ImageLinks    ImageLinks
 	Locales       map[string][]byte
 	Logger        *slog.Logger
 	// Metrics serves monitoring metrics at /metrics; nil leaves the path unserved. It checks its

@@ -71,7 +71,7 @@ func (service *Service) Get(ctx context.Context, requester identity.Requester, l
 			continue
 		}
 		detail.ROMIDs = append(detail.ROMIDs, row.ROM.ID)
-		detail.Items = append(detail.Items, rom.Summarize(row))
+		detail.Items = append(detail.Items, rom.Summarize(row, nil))
 	}
 	return detail, nil
 }

@@ -22,10 +22,17 @@ type romListReader interface {
 
 type ListROMService struct {
 	repository romListReader
+	images     ImageSigner
 }
 
 func NewListROMService(repository romListReader) *ListROMService {
 	return &ListROMService{repository: repository}
+}
+
+// WithImageLinks signs the image URLs of listed ROMs for the requester.
+func (service *ListROMService) WithImageLinks(images ImageSigner) *ListROMService {
+	service.images = images
+	return service
 }
 
 // List returns the catalog visible to requester: everything for broad-access roles, only their own uploads otherwise.
@@ -68,23 +75,29 @@ func (service *ListROMService) List(ctx context.Context, requester identity.Requ
 		rows = rows[:limit]
 	}
 
+	var sign ImageSign
+	if service.images != nil {
+		sign = func(romID string) string { return service.images.SignImage(requester, romID) }
+	}
 	items := make([]ROMSummaryDTO, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, Summarize(row))
+		items = append(items, Summarize(row, sign))
 	}
 	return ROMListResponseDTO{Item: items, NextCursor: nextCursor}, nil
 }
 
-// Summarize maps a ROM and its content hash to the summary shape used in listings.
-func Summarize(row romdomain.ROMWithFile) ROMSummaryDTO {
+// Summarize maps a ROM and its content hash to the summary shape used in listings; sign, when
+// set, signs its image URLs.
+func Summarize(row romdomain.ROMWithFile, sign ImageSign) ROMSummaryDTO {
+	token := signFor(sign, row.ROM.ID)
 	return ROMSummaryDTO{
 		ROMID:         row.ROM.ID,
 		Title:         row.ROM.Identity.Title,
 		Platform:      row.ROM.Identity.Platform,
 		PlatformName:  romdomain.PlatformName(row.ROM.Identity.Platform),
 		SHA256:        row.SHA256,
-		CoverArtURL:   imageURL(row.ROM.ID, "cover", row.ROM.Identity.CoverArtPath),
-		CoverThumbURL: coverThumbURL(row.ROM),
+		CoverArtURL:   imageURL(row.ROM.ID, "cover", row.ROM.Identity.CoverArtPath, token),
+		CoverThumbURL: coverThumbURL(row.ROM, token),
 		DiscCount:     row.DiscCount,
 	}
 }

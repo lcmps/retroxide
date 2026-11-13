@@ -26,13 +26,14 @@ const (
 const downloadLinkPath = "/api/v1/download"
 
 type romHandler struct {
-	roms  rom.API
-	bios  bios.API
-	links DownloadLinks
+	roms   rom.API
+	bios   bios.API
+	links  DownloadLinks
+	images ImageLinks
 }
 
-func registerROMRoutes(api *gin.RouterGroup, roms rom.API, biosService bios.API, links DownloadLinks) {
-	handler := romHandler{roms: roms, bios: biosService, links: links}
+func registerROMRoutes(api *gin.RouterGroup, roms rom.API, biosService bios.API, links DownloadLinks, images ImageLinks) {
+	handler := romHandler{roms: roms, bios: biosService, links: links, images: images}
 	// Signed links serve ROM and BIOS downloads alike, told apart by the ID they carry.
 	api.GET(strings.TrimPrefix(downloadLinkPath, api.BasePath()), requireService(links != nil && (roms != nil || biosService != nil)), handler.downloadWithLink)
 
@@ -126,13 +127,41 @@ func (handler romHandler) delete(c *gin.Context) {
 }
 
 func (handler romHandler) cover(c *gin.Context) {
-	image, err := handler.roms.OpenCover(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"))
+	requester, ok := handler.imageRequester(c)
+	if !ok {
+		return
+	}
+	image, err := handler.roms.OpenCover(c.Request.Context(), requester, c.Param("rom_id"))
 	serveImage(c, image, err)
 }
 
 func (handler romHandler) coverThumbnail(c *gin.Context) {
-	image, err := handler.roms.OpenCoverThumbnail(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"))
+	requester, ok := handler.imageRequester(c)
+	if !ok {
+		return
+	}
+	image, err := handler.roms.OpenCoverThumbnail(c.Request.Context(), requester, c.Param("rom_id"))
 	serveImage(c, image, err)
+}
+
+// imageRequester resolves who is asking for an image: the bearer principal when the request
+// carried one, else the requester a valid signed token (see rom.ImageTokenParam) names, provided
+// the token covers the ROM in the path. Without either it writes 401 and reports false.
+func (handler romHandler) imageRequester(c *gin.Context) (identity.Requester, bool) {
+	if requester := requesterFromContext(c); requester.UserID != "" {
+		return requester, true
+	}
+	token := c.Query(rom.ImageTokenParam)
+	if token == "" || handler.images == nil {
+		abortUnauthorized(c)
+		return identity.Requester{}, false
+	}
+	requester, romID, err := handler.images.Verify(token)
+	if err != nil || romID != c.Param("rom_id") {
+		abortUnauthorized(c)
+		return identity.Requester{}, false
+	}
+	return requester, true
 }
 
 func (handler romHandler) uploadCover(c *gin.Context) {
@@ -236,7 +265,11 @@ func discNumber(c *gin.Context) (int, error) {
 }
 
 func (handler romHandler) media(c *gin.Context) {
-	image, err := handler.roms.OpenMedia(c.Request.Context(), requesterFromContext(c), c.Param("rom_id"), c.Param("kind"))
+	requester, ok := handler.imageRequester(c)
+	if !ok {
+		return
+	}
+	image, err := handler.roms.OpenMedia(c.Request.Context(), requester, c.Param("rom_id"), c.Param("kind"))
 	serveImage(c, image, err)
 }
 
