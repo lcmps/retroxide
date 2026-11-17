@@ -8,7 +8,7 @@
   import RomEditForm from '#lib/components/rom/RomEditForm.svelte';
   import { platforms } from '#lib/platforms/catalog.svelte.js';
   import { tick, untrack } from 'svelte';
-  import { deleteRom, downloadRom, fetchRomCover, getRom, i18n, scrapeRom } from '#lib';
+  import { deleteRom, downloadRom, getRom, i18n, resolveApiLink, scrapeRom } from '#lib';
   import CompressionProgress from '#lib/components/rom/CompressionProgress.svelte';
   import DiscTracks from '#lib/components/rom/DiscTracks.svelte';
   import { requestCompression, uploadRomCover } from '#lib/api/client.js';
@@ -20,7 +20,6 @@
   import { getErrorMessage, getValidationAwareErrorMessage } from '#lib/helpers/error.js';
   import { useTranslate } from '#lib/i18n/helpers.js';
   import type { RomDetail } from '#lib';
-  import { onDestroy } from 'svelte';
 
   let { data }: PageProps = $props();
 
@@ -32,7 +31,6 @@
   /** True while a disc change runs; it holds Scrape, Delete, Save and the cover upload. */
   let discBusy = $state(false);
   let deleteOpen = $state(false);
-  let coverPreviewUrl = $state<string | null>(null);
   let editing = $state(false);
   let editButton = $state<HTMLButtonElement>();
   let message = $state('');
@@ -69,7 +67,6 @@
       const loaded = await getRom(romId);
       if (romId !== data.romId) return;
       rom = loaded;
-      await loadCoverPreview();
     } catch (error) {
       if (romId !== data.romId) return;
       message = getErrorMessage(error, 'rom.messages.loadFailure', 'Failed to load ROM', t);
@@ -79,18 +76,8 @@
     }
   }
 
-  async function loadCoverPreview(): Promise<void> {
-    if (!rom?.cover_art_url) return;
-    const shown = rom.rom_id;
-    const image = await fetchRomCover(shown, rom.cover_art_url);
-    // A different ROM may have been opened while the cover downloaded.
-    if (rom?.rom_id === shown) showCover(image);
-  }
-
-  function showCover(image: Blob): void {
-    if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl);
-    coverPreviewUrl = URL.createObjectURL(image);
-  }
+  // The cover URL is signed, so the browser loads it directly; a new upload gives a new URL.
+  const coverUrl = $derived(rom?.cover_art_url ? resolveApiLink(rom.cover_art_url) : null);
 
   /** Uploads the chosen image straight away; it does not wait for the details form to be saved. */
   async function changeCover(event: Event & { currentTarget: HTMLInputElement }): Promise<void> {
@@ -115,7 +102,6 @@
       const updated = await uploadRomCover(romId, file);
       if (romId !== data.romId) return;
       rom = updated;
-      showCover(file);
       coverMessage = t('rom.cover.saved', 'Cover art updated.');
     } catch (error) {
       if (romId !== data.romId) return;
@@ -125,10 +111,6 @@
       if (romId === data.romId) uploadingCover = false;
     }
   }
-
-  onDestroy(() => {
-    if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl);
-  });
 
   /** The discs as a list; an old response without them gets the one disc the ROM itself shows. */
   function discEntries(detail: RomDetail | null): RomDiscEntry[] {
@@ -252,7 +234,6 @@
       const updated = await scrapeRom(romId);
       if (romId !== data.romId) return;
       rom = updated;
-      await loadCoverPreview();
       message = t('rom.messages.scrapeSuccess', 'Scrape complete.');
     } catch (error) {
       if (romId !== data.romId) return;
@@ -330,8 +311,6 @@
       clearTimeout(compressionPoll);
       coverMessage = '';
       coverFailed = false;
-      if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl);
-      coverPreviewUrl = null;
       loading = true;
       void i18n
         .initialize()
@@ -355,8 +334,8 @@
   {:else if rom}
     <article class="rom-card">
       <div class="rom-cover-slot">
-        <div class="rom-cover" aria-hidden={coverPreviewUrl || editing || uploadingCover ? undefined : 'true'}>
-          {#if coverPreviewUrl}<img src={coverPreviewUrl} alt={t('rom.cover.alt', 'Cover art for {title}', { title: rom.title })} />{/if}
+        <div class="rom-cover" aria-hidden={coverUrl || editing || uploadingCover ? undefined : 'true'}>
+          {#if coverUrl}<img src={coverUrl} alt={t('rom.cover.alt', 'Cover art for {title}', { title: rom.title })} decoding="async" />{/if}
           <!-- Stays while an upload runs, even if the form is closed, so its progress stays visible. -->
           {#if editing || uploadingCover}
             <input bind:this={coverInput} class="visually-hidden" type="file" accept={COVER_TYPES.join(',')} tabindex="-1" aria-hidden="true" onchange={changeCover} />

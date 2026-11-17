@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$app/env', () => ({ browser: true }));
 
-import { createDownloadLink, fetchRomCover, getRom, hasStoredSession, logoutSession, mergeRom, persistStoredSession, removeDisc, reorderDiscs, requestCompression, splitDisc, uploadRom } from './client';
+import { createDownloadLink, getRom, hasStoredSession, logoutSession, mergeRom, persistStoredSession, removeDisc, reorderDiscs, requestCompression, splitDisc, uploadRom } from './client';
 
 function jsonResponse(payload: unknown, status = 200): Response {
 	return new Response(JSON.stringify(payload), {
@@ -81,19 +81,6 @@ describe('authenticated API requests', () => {
 		expect(new URL(link.url).pathname + new URL(link.url).search).toBe('/api/v1/download?token=signed');
 		expect(link.filename).toBe('Super Mario Bros.nes');
 		expect(link.expiresIn).toBe(60);
-	});
-
-	it('keeps the cover content version so the HTTP cache can serve it', async () => {
-		persistStoredSession({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 });
-		const fetchMock = vi.fn<typeof fetch>(async () => new Response('png'));
-		vi.stubGlobal('fetch', fetchMock);
-
-		await fetchRomCover('rom-1', '/api/v1/rom/rom-1/cover?v=0123456789abcdef');
-
-		expect(fetchMock).toHaveBeenCalledWith('/api/v1/rom/rom-1/cover?v=0123456789abcdef', expect.anything());
-
-		await fetchRomCover('rom-1', '/api/v1/rom/rom-1/cover/thumb?v=fedcba9876543210', true);
-		expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/rom/rom-1/cover/thumb?v=fedcba9876543210', expect.anything());
 	});
 
 	it('revokes the server session and always clears local credentials', async () => {

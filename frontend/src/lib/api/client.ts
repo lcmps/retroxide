@@ -493,18 +493,6 @@ export function uploadRomCover(romId: string, file: File): Promise<RomDetail> {
   });
 }
 
-/**
- * Fetches a ROM's cover, or with thumbnail its small copy for grids. Passing the summary's
- * cover_art_url (or cover_thumb_url) keeps its content version, so the browser can serve repeat
- * requests from its HTTP cache.
- */
-export async function fetchRomCover(romId: string, coverUrl?: string | null, thumbnail = false): Promise<Blob> {
-  const version = coverUrl ? new URL(coverUrl, 'http://localhost').search : '';
-  const resource = thumbnail ? 'cover/thumb' : 'cover';
-  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/${resource}${version}`, { withAuth: true });
-  return response.blob();
-}
-
 export function scrapeRom(romId: string): Promise<RomDetail> {
   return requestJson<RomDetail>(`/rom/${encodeURIComponent(romId)}/scrape`, {
     method: 'POST',
@@ -834,8 +822,11 @@ function startDownload(link: DownloadLink): DownloadLink {
   return link;
 }
 
-/** Resolves a server-relative link against the API origin, which may differ from the page's. */
-function resolveApiLink(path: string): string {
+/**
+ * Resolves a server-relative link (a download link, a signed image URL) against the API origin,
+ * which may differ from the page's.
+ */
+export function resolveApiLink(path: string): string {
   const pageURL = globalThis.location?.href ?? 'http://localhost';
   return new URL(path, new URL(API_BASE_URL, pageURL)).href;
 }
