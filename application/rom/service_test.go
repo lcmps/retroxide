@@ -23,6 +23,8 @@ type romTestRepository struct {
 	// discs maps ROM IDs to their discs; calls records the disc operations asked for.
 	discs map[string][]romdomain.ROMDisc
 	calls []string
+	// loads records the batch loads of files and tracks.
+	loads []string
 }
 
 // FindROMDiscs returns the discs set for the ROM, or one disc for its file, named as it was
@@ -108,6 +110,26 @@ func (*romTestRepository) ListROMsWithFiles(context.Context, int, ROMFilter) ([]
 
 func (repository *romTestRepository) FindDiscTracks(_ context.Context, romFileID string) ([]romdomain.DiscTrack, error) {
 	return repository.discTracks[romFileID], nil
+}
+
+func (repository *romTestRepository) FindROMFilesByIDs(_ context.Context, ids []string) (map[string]romdomain.ROMFile, error) {
+	repository.loads = append(repository.loads, "FindROMFilesByIDs")
+	found := make(map[string]romdomain.ROMFile, len(ids))
+	for _, id := range ids {
+		if romFile, ok := repository.romFiles[id]; ok {
+			found[id] = romFile
+		}
+	}
+	return found, nil
+}
+
+func (repository *romTestRepository) FindDiscTracksByFileIDs(_ context.Context, ids []string) (map[string][]romdomain.DiscTrack, error) {
+	repository.loads = append(repository.loads, "FindDiscTracksByFileIDs")
+	found := make(map[string][]romdomain.DiscTrack, len(ids))
+	for _, id := range ids {
+		found[id] = repository.discTracks[id]
+	}
+	return found, nil
 }
 
 func (repository *romTestRepository) SetCoverThumbnail(_ context.Context, romID, coverPath, thumbnailPath string) error {

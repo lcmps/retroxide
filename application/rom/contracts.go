@@ -16,6 +16,10 @@ type Repository interface {
 	UpdateROM(context.Context, romdomain.ROM) error
 	// FindDiscTracks returns a disc's tracks in order; none for other files.
 	FindDiscTracks(ctx context.Context, romFileID string) ([]romdomain.DiscTrack, error)
+	// FindROMFilesByIDs returns the stored files with the given IDs, keyed by ID.
+	FindROMFilesByIDs(ctx context.Context, ids []string) (map[string]romdomain.ROMFile, error)
+	// FindDiscTracksByFileIDs returns each file's tracks in order, keyed by file ID.
+	FindDiscTracksByFileIDs(ctx context.Context, ids []string) (map[string][]romdomain.DiscTrack, error)
 	// SetCoverThumbnail records a ROM's cover thumbnail, unless its cover has changed since.
 	SetCoverThumbnail(ctx context.Context, romID, coverPath, thumbnailPath string) error
 	// ListROMsWithFiles returns up to limit ROMs ordered by ID that match filter.

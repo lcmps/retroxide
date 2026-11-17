@@ -221,23 +221,30 @@ func (service *Service) loadDiscs(ctx context.Context, rom romdomain.ROM) ([]dis
 	if len(discs) == 0 {
 		discs = []romdomain.ROMDisc{{ROMID: rom.ID, ROMFileID: rom.ROMFileID, Number: 1}}
 	}
+	// One query for every disc's file and one for their tracks, however many discs a title has.
+	ids := make([]string, len(discs))
+	for index, disc := range discs {
+		ids[index] = disc.ROMFileID
+	}
+	files, err := service.repository.FindROMFilesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	tracksByFile, err := service.repository.FindDiscTracksByFileIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	subjects := make([]discSubject, len(discs))
 	for index, disc := range discs {
-		romFile, err := service.repository.FindROMFileByID(ctx, disc.ROMFileID)
-		if err != nil {
-			return nil, err
-		}
-		if romFile == nil {
+		romFile, ok := files[disc.ROMFileID]
+		if !ok {
 			return nil, fault.Internal(fmt.Errorf("rom_file %s not found", disc.ROMFileID))
 		}
-		tracks, err := service.repository.FindDiscTracks(ctx, romFile.ID)
-		if err != nil {
-			return nil, err
-		}
+		tracks := tracksByFile[romFile.ID]
 		filename := discDownloadName(rom, disc, len(discs))
 		subjects[index] = discSubject{
-			disc: disc, file: *romFile, tracks: tracks, filename: filename,
-			options: service.downloadOptions(*romFile, tracks, filename),
+			disc: disc, file: romFile, tracks: tracks, filename: filename,
+			options: service.downloadOptions(romFile, tracks, filename),
 		}
 	}
 	return subjects, nil
@@ -365,7 +372,7 @@ func (service *Service) RequestCompression(ctx context.Context, requester identi
 	if service.wakeCompressor != nil {
 		service.wakeCompressor()
 	}
-	return service.detail(ctx, requester, *rom)
+	return service.detailFrom(ctx, requester, *rom, subjects)
 }
 
 // DownloadFilename returns the name an accessible ROM downloads as in format (empty for the
@@ -526,6 +533,11 @@ func (service *Service) detail(ctx context.Context, requester identity.Requester
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
+	return service.detailFrom(ctx, requester, rom, subjects)
+}
+
+// detailFrom builds a ROM's detail from discs already loaded by loadDiscs.
+func (service *Service) detailFrom(ctx context.Context, requester identity.Requester, rom romdomain.ROM, subjects []discSubject) (ROMDetailDTO, error) {
 	primary := primaryDisc(rom, subjects)
 	detail := detailOf(rom, primary.file, service.imageSigner(requester))
 	detail.Downloads = primary.options

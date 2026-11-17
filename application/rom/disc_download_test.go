@@ -288,3 +288,28 @@ func TestCompressingATitle(t *testing.T) {
 		t.Fatalf("none can compress = %v; requested %v, woken %d", err, discs.requested, *woken)
 	}
 }
+
+func TestRequestCompressionLoadsDiscsOnce(t *testing.T) {
+	service, repository, _, _, _ := titleService(t)
+	repository.loads = nil
+	if _, err := service.RequestCompression(context.Background(), discOwner, "ff7", 0); err != nil {
+		t.Fatal(err)
+	}
+	loads := 0
+	for _, call := range repository.loads {
+		if call == "FindROMFilesByIDs" {
+			loads++
+		}
+	}
+	if loads != 1 {
+		t.Fatalf("disc file loads = %d (%v), want 1: the detail reuses the discs already loaded", loads, repository.loads)
+	}
+	// Loading a title's discs batches its files and tracks instead of asking per disc.
+	repository.loads = nil
+	if _, err := service.Get(context.Background(), discOwner, "ff7"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(repository.loads, ",") != "FindROMFilesByIDs,FindDiscTracksByFileIDs" {
+		t.Fatalf("loads = %v, want one batch load of files and one of tracks", repository.loads)
+	}
+}
