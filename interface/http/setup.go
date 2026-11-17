@@ -31,6 +31,7 @@ func NewSetupRouter(service setup.Service, locales map[string][]byte, logger *sl
 		c.String(http.StatusOK, "ok")
 	})
 	registerLocaleRoutes(router.Group("/api/v1"), locales)
+	registerSetupBootstrapRoute(router)
 
 	handler := setupHandler{setup: service}
 	router.GET(setupPath, handler.status)

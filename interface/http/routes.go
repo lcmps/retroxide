@@ -13,5 +13,6 @@ func registerRoutes(api *gin.RouterGroup, dependencies Dependencies, options Opt
 	registerLibraryRoutes(api, dependencies.Libraries)
 	registerClientRoutes(api, dependencies.Clients)
 	registerAccountRoutes(api, dependencies.Profiles, dependencies.Settings, dependencies.Locales)
+	registerBootstrapRoute(api, dependencies.Settings, dependencies.Profiles)
 	registerUserRoutes(api, dependencies.Users)
 }

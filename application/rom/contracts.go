@@ -22,6 +22,8 @@ type Repository interface {
 	FindDiscTracksByFileIDs(ctx context.Context, ids []string) (map[string][]romdomain.DiscTrack, error)
 	// SetCoverThumbnail records a ROM's cover thumbnail, unless its cover has changed since.
 	SetCoverThumbnail(ctx context.Context, romID, coverPath, thumbnailPath string) error
+	// ListROMsNeedingThumbnails returns up to limit ROMs that have a cover but no thumbnail.
+	ListROMsNeedingThumbnails(ctx context.Context, limit int) ([]romdomain.ROM, error)
 	// ListROMsWithFiles returns up to limit ROMs ordered by ID that match filter.
 	ListROMsWithFiles(ctx context.Context, limit int, filter ROMFilter) ([]romdomain.ROMWithFile, error)
 	FindROMByID(context.Context, string) (*romdomain.ROM, error)

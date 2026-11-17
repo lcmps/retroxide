@@ -83,6 +83,7 @@ func assembleApplication(ctx context.Context, settings config.Config, logger *sl
 				expireUploadSessions(services.Uploads),
 				expireUploadParts(repositories),
 				sweepUnreferencedFiles(repositories, storage),
+				backfillThumbnails(services.ROMs),
 				optimizeDatabase(repositories),
 			}
 			if services.BIOSList != nil {

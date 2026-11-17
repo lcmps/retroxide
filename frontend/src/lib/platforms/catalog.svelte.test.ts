@@ -32,7 +32,7 @@ describe('PlatformCatalog', () => {
 		await Promise.all([first, second]);
 		expect(load).toHaveBeenCalledTimes(1);
 
-		await catalog.refresh();
+		await catalog.refresh({ force: true });
 		expect(load).toHaveBeenCalledTimes(2);
 		expect(catalog.items).toEqual([sms]);
 	});
@@ -45,5 +45,32 @@ describe('platforms with only BIOS files', () => {
 		await catalog.refresh();
 		expect(catalog.items).toEqual([ps2]);
 		expect(catalog.nameFor('ps2')).toBe('PlayStation 2');
+	});
+});
+
+describe('PlatformCatalog staleness', () => {
+	it('skips a refresh while the last load is fresh unless forced', async () => {
+		let now = 0;
+		const load = vi.fn(async () => [sms]);
+		const catalog = new PlatformCatalog(load, () => now);
+
+		await catalog.refresh();
+		await catalog.refresh();
+		expect(load).toHaveBeenCalledTimes(1);
+
+		await catalog.refresh({ force: true });
+		expect(load).toHaveBeenCalledTimes(2);
+
+		now = 6_000;
+		await catalog.refresh();
+		expect(load).toHaveBeenCalledTimes(3);
+	});
+
+	it('does not count a failed load as fresh', async () => {
+		const load = vi.fn<() => Promise<Platform[]>>().mockRejectedValueOnce(new Error('offline')).mockResolvedValue([sms]);
+		const catalog = new PlatformCatalog(load, () => 0);
+		await catalog.refresh();
+		await catalog.refresh();
+		expect(load).toHaveBeenCalledTimes(2);
 	});
 });

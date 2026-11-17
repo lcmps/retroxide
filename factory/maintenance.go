@@ -220,3 +220,21 @@ func optimizeDatabase(database databaseOptimizer) maintenanceTask {
 		}
 	}
 }
+
+// thumbnailBackfiller makes the missing thumbnails of covers stored before thumbnails existed.
+type thumbnailBackfiller interface {
+	BackfillThumbnails(ctx context.Context) (int, error)
+}
+
+// backfillThumbnails returns a task making every missing cover thumbnail, so library grids
+// never scale a cover on first view.
+func backfillThumbnails(roms thumbnailBackfiller) maintenanceTask {
+	return func(ctx context.Context, logger *slog.Logger) {
+		made, err := roms.BackfillThumbnails(ctx)
+		if err != nil {
+			logger.Warn("could not make cover thumbnails", "error", err, "made", made)
+		} else if made > 0 {
+			logger.Info("made cover thumbnails", "thumbnails", made)
+		}
+	}
+}

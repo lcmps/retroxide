@@ -7,6 +7,7 @@
 	import { onMount } from "svelte";
 	import type { Snippet } from "svelte";
 	import { getProfile, i18n, logger, logoutSession } from "#lib";
+	import { bootstrapSession } from "#lib/session/bootstrap.svelte.js";
 	import { uploadQueue } from "#lib/uploads/shared.js";
 	import { loginPathFor } from "#lib/share/paths.js";
 	import { useTranslate } from "#lib/i18n/helpers.js";
@@ -143,9 +144,10 @@
 		const refreshPlatforms = () => void platforms.refresh();
 		window.addEventListener("focus", refreshPlatforms);
 		// The account's language wins over the browser's, on every device the user signs in on.
+		// The profile usually arrived with the bootstrap; it is fetched only when it did not.
 		void i18n
 			.initialize()
-			.then(() => getProfile())
+			.then(() => bootstrapSession.profile ?? getProfile())
 			.then((profile) => {
 				isAdmin = profile.role === "admin";
 				setUserFont(profile.font);
@@ -210,7 +212,7 @@
 				<select
 					value={selectedPlatform}
 					onchange={changePlatform}
-					onfocus={() => void platforms.refresh()}
+					onfocus={() => void platforms.refresh({ force: true })}
 					aria-label={translate("rom.fields.platform", "Platform")}
 					disabled={!libraryControlsEnabled}
 					title={libraryControlsEnabled

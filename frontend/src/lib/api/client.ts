@@ -8,6 +8,7 @@ import type {
   ApiError,
   DownloadLink,
   Appearance,
+  Bootstrap,
   CreateUserRequest,
   DeleteUserResponse,
   ManagedUser,
@@ -378,6 +379,14 @@ export async function updateProfile(payload: UpdateProfileRequest): Promise<Prof
     persistStoredSession(response.session);
   }
   return response.profile;
+}
+
+/**
+ * Fetches the setup state, the appearance, and (with a stored session) the profile in one
+ * request. A stale session is refused with a 401, which clears it like any other request.
+ */
+export function getBootstrap(): Promise<Bootstrap> {
+  return requestJson<Bootstrap>('/bootstrap', { withAuth: hasStoredSession() });
 }
 
 /** The presentation settings, such as the interface font; available without signing in. */

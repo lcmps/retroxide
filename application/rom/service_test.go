@@ -132,6 +132,17 @@ func (repository *romTestRepository) FindDiscTracksByFileIDs(_ context.Context, 
 	return found, nil
 }
 
+// ListROMsNeedingThumbnails returns ROMs with a cover but no thumbnail, in ID order.
+func (repository *romTestRepository) ListROMsNeedingThumbnails(_ context.Context, limit int) ([]romdomain.ROM, error) {
+	var needing []romdomain.ROM
+	for _, rom := range repository.roms {
+		if rom.Identity.CoverArtPath != nil && rom.Identity.CoverThumbPath == nil && len(needing) < limit {
+			needing = append(needing, rom)
+		}
+	}
+	return needing, nil
+}
+
 func (repository *romTestRepository) SetCoverThumbnail(_ context.Context, romID, coverPath, thumbnailPath string) error {
 	rom, ok := repository.roms[romID]
 	if ok && rom.Identity.CoverArtPath != nil && *rom.Identity.CoverArtPath == coverPath {

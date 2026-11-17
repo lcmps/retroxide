@@ -155,7 +155,7 @@ func authMiddleware(authenticator Authenticator) gin.HandlerFunc {
 			return
 		}
 		token, ok := auth.ExtractBearerToken(c.GetHeader("Authorization"))
-		if !ok && isImagePath(method, path) {
+		if !ok && isOptionalAuthPath(method, path) {
 			c.Next()
 			return
 		}
@@ -176,6 +176,12 @@ func authMiddleware(authenticator Authenticator) gin.HandlerFunc {
 		c.Set(principalKey, requester)
 		c.Next()
 	}
+}
+
+// isOptionalAuthPath reports a path that serves anonymous requests as well as authenticated
+// ones: images carrying a signed token, and the bootstrap, which adds the profile when signed in.
+func isOptionalAuthPath(method, path string) bool {
+	return isImagePath(method, path) || (method == http.MethodGet && path == bootstrapPath)
 }
 
 // isImagePath reports a GET of a ROM's cover, cover thumbnail, or media image: the paths that

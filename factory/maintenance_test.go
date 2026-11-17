@@ -60,3 +60,23 @@ func TestOptimizeDatabaseRunsAndSurvivesFailure(t *testing.T) {
 		}
 	}
 }
+
+type countingBackfiller struct {
+	calls int
+	err   error
+}
+
+func (backfiller *countingBackfiller) BackfillThumbnails(context.Context) (int, error) {
+	backfiller.calls++
+	return 2, backfiller.err
+}
+
+func TestBackfillThumbnailsRunsAndSurvivesFailure(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, backfiller := range []*countingBackfiller{{}, {err: errors.New("disk")}} {
+		backfillThumbnails(backfiller)(context.Background(), logger)
+		if backfiller.calls != 1 {
+			t.Fatalf("BackfillThumbnails called %d times, want 1", backfiller.calls)
+		}
+	}
+}
