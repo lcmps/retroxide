@@ -661,6 +661,14 @@ func exerciseUserManagement(t *testing.T, ctx context.Context, repositories *Rep
 	if leaver.ROMCount != 3 || leaver.StorageBytes != 3000 || leaver.UploadCount != 1 || leaver.ActiveSessions != 1 || len(leaver.Platforms) != 2 {
 		t.Fatalf("activity = %+v", leaver)
 	}
+	// One user's activity reads the same as their entry in everyone's.
+	one, err := repositories.UserActivityFor(ctx, leaverID)
+	if err != nil || fmt.Sprint(one) != fmt.Sprint(leaver) {
+		t.Fatalf("UserActivityFor = %+v, %v; want %+v", one, err, leaver)
+	}
+	if none, err := repositories.UserActivityFor(ctx, "nobody"); err != nil || none.ROMCount != 0 || len(none.Platforms) != 0 {
+		t.Fatalf("UserActivityFor(nobody) = %+v, %v", none, err)
+	}
 
 	transfer, err := repositories.DeleteUserTransferringData(ctx, leaverID, heirID)
 	if err != nil {

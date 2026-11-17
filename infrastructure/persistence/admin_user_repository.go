@@ -33,7 +33,28 @@ func (repositories *Repositories) ListUsers(ctx context.Context) ([]authdomain.U
 // UserActivity summarizes every user with a few grouped queries rather than one per user. The
 // ROM counts read only idx_rom_uploader_platform.
 func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]users.Activity, error) {
+	return repositories.userActivity(ctx, nil)
+}
+
+// UserActivityFor summarizes one user with the same queries, restricted to them.
+func (repositories *Repositories) UserActivityFor(ctx context.Context, userID string) (users.Activity, error) {
+	activity, err := repositories.userActivity(ctx, &userID)
+	if err != nil {
+		return users.Activity{}, err
+	}
+	return activity[userID], nil
+}
+
+// userActivity gathers activity keyed by user ID, for everyone or only userID.
+func (repositories *Repositories) userActivity(ctx context.Context, userID *string) (map[string]users.Activity, error) {
 	db := repositories.DB.WithContext(ctx)
+	// only narrows a query to the one user, when asked for one.
+	only := func(query *gorm.DB, column string) *gorm.DB {
+		if userID == nil {
+			return query
+		}
+		return query.Where(column+" = ?", *userID)
+	}
 	activity := make(map[string]users.Activity)
 	update := func(userID string, change func(*users.Activity)) {
 		entry := activity[userID]
@@ -46,7 +67,7 @@ func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]
 		Platform   string
 		Count      uint64
 	}
-	if err := db.Model(&ROMModel{}).Select("uploader_id, MIN(platform) AS platform, COUNT(*) AS count").
+	if err := only(db.Model(&ROMModel{}), "uploader_id").Select("uploader_id, MIN(platform) AS platform, COUNT(*) AS count").
 		Group("uploader_id, platform_key").Scan(&platforms).Error; err != nil {
 		return nil, databaseError("counting roms per user", err)
 	}
@@ -61,7 +82,7 @@ func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]
 		UploaderID string
 		Bytes      uint64
 	}
-	if err := db.Table("rom AS r").Joins("JOIN rom_disc AS d ON d.rom_id = r.id").Joins("JOIN rom_file AS f ON f.id = d.rom_file_id").
+	if err := only(db.Table("rom AS r").Joins("JOIN rom_disc AS d ON d.rom_id = r.id").Joins("JOIN rom_file AS f ON f.id = d.rom_file_id"), "r.uploader_id").
 		Select("r.uploader_id AS uploader_id, COALESCE(SUM(f.size), 0) AS bytes").Group("r.uploader_id").Scan(&storage).Error; err != nil {
 		return nil, databaseError("summing storage per user", err)
 	}
@@ -73,7 +94,7 @@ func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]
 		UploaderID string
 		Count      uint64
 	}
-	if err := db.Model(&UploadModel{}).Select("uploader_id, COUNT(*) AS count").Group("uploader_id").Scan(&uploads).Error; err != nil {
+	if err := only(db.Model(&UploadModel{}), "uploader_id").Select("uploader_id, COUNT(*) AS count").Group("uploader_id").Scan(&uploads).Error; err != nil {
 		return nil, databaseError("counting uploads per user", err)
 	}
 	for _, row := range uploads {
@@ -84,7 +105,7 @@ func (repositories *Repositories) UserActivity(ctx context.Context) (map[string]
 		UserID string
 		Count  uint64
 	}
-	active := db.Model(&RefreshTokenModel{}).Select("user_id, COUNT(*) AS count").Where("revoked = ?", false)
+	active := only(db.Model(&RefreshTokenModel{}), "user_id").Select("user_id, COUNT(*) AS count").Where("revoked = ?", false)
 	now := uint64(time.Now().Unix())
 	if isMySQL(db) {
 		active = active.Where("expires_at > FROM_UNIXTIME(?)", now)

@@ -94,9 +94,9 @@ type Service struct {
 	progressFileID  string
 	progressPercent int
 
-	// compressible remembers, per ROM file ID, whether a disc kept as tracks can be compressed.
-	// The sheet a stored file was uploaded with never changes, so the answer is read once rather
-	// than from disk on every view of the ROM's page.
+	// compressible remembers, per sheet (by its content-addressed storage key), whether a disc
+	// kept as tracks can be compressed. A stored sheet never changes, so the answer is read once
+	// rather than from disk on every view of the ROM's page.
 	compressible sync.Map
 }
 
@@ -141,17 +141,18 @@ func (service *Service) CanCompressFile(ctx context.Context, romFile romdomain.R
 	if service.compressor == nil || romFile.Format != romdomain.FormatTracks {
 		return false
 	}
-	if known, ok := service.compressible.Load(romFile.ID); ok {
+	key := sheetPath(romFile)
+	if known, ok := service.compressible.Load(key); ok {
 		return known.(bool)
 	}
-	sheet, err := service.storage.Read(ctx, sheetPath(romFile))
+	sheet, err := service.storage.Read(ctx, key)
 	if err != nil {
 		// Not remembered: the next view tries the disk again.
 		slog.WarnContext(ctx, "could not read a disc's sheet", "rom_file_id", romFile.ID, "error", err)
 		return false
 	}
 	compressible := compressibleSheet(sheet)
-	service.compressible.Store(romFile.ID, compressible)
+	service.compressible.Store(key, compressible)
 	return compressible
 }
 

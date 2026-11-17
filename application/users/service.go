@@ -52,6 +52,8 @@ type Store interface {
 	SaveUser(context.Context, authdomain.User) error
 	// UserActivity summarizes every user's ROMs, uploads, and active sessions, keyed by user ID.
 	UserActivity(context.Context) (map[string]Activity, error)
+	// UserActivityFor summarizes one user.
+	UserActivityFor(ctx context.Context, userID string) (Activity, error)
 	// DeleteUserTransferringData deletes userID in one transaction, handing their ROMs, libraries,
 	// and uploads to heirID; their API clients and sessions are deleted with them.
 	DeleteUserTransferringData(ctx context.Context, userID, heirID string) (Transfer, error)
@@ -280,11 +282,11 @@ func (service *Service) adminTarget(ctx context.Context, requester identity.Requ
 }
 
 func (service *Service) summary(ctx context.Context, account authdomain.User, requester identity.Requester) (UserDTO, error) {
-	activity, err := service.store.UserActivity(ctx)
+	activity, err := service.store.UserActivityFor(ctx, account.ID)
 	if err != nil {
 		return UserDTO{}, err
 	}
-	return userDTO(account, activity[account.ID], requester), nil
+	return userDTO(account, activity, requester), nil
 }
 
 func (service *Service) checkEmail(ctx context.Context, email, userID string) error {
