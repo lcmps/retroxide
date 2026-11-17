@@ -30,6 +30,9 @@ func (roms *imageTestROMs) OpenCover(_ context.Context, requester identity.Reque
 	return rom.Image{StoredContent: rom.StoredContent{ReadSeekCloser: nopSeekCloser{strings.NewReader(testPNG)}, Size: int64(len(testPNG))}}, nil
 }
 
+// PlatformCatalog gives the logging test an authenticated API request that succeeds.
+func (roms *imageTestROMs) PlatformCatalog() []rom.PlatformDTO { return nil }
+
 func (roms *imageTestROMs) OpenCoverThumbnail(ctx context.Context, requester identity.Requester, romID string) (rom.Image, error) {
 	return roms.OpenCover(ctx, requester, romID)
 }

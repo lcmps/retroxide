@@ -38,7 +38,11 @@ func requestIDMiddleware(logger *slog.Logger) gin.HandlerFunc {
 				"error", c.Errors.Last().Err,
 			)
 		}
-		logger.InfoContext(ctx, "http request handled",
+		level := slog.LevelInfo
+		if isQuietRequest(c.Request.Method, c.Request.URL.Path, c.Writer.Status()) {
+			level = slog.LevelDebug
+		}
+		logger.Log(ctx, level, "http request handled",
 			"request_id", requestID,
 			"method", c.Request.Method,
 			"path", c.Request.URL.Path,
@@ -46,6 +50,16 @@ func requestIDMiddleware(logger *slog.Logger) gin.HandlerFunc {
 			"latency_ms", time.Since(started).Milliseconds(),
 		)
 	}
+}
+
+// isQuietRequest reports a request worth logging only at debug level: a successful response for
+// a static asset of the web app or an image. A library page loads dozens of each, and logging
+// every one buries the requests that matter.
+func isQuietRequest(method, path string, status int) bool {
+	if status >= http.StatusBadRequest {
+		return false
+	}
+	return !isAPIPath(path) || isImagePath(method, path)
 }
 
 // corsMiddleware answers preflight requests and decorates responses for the configured origins.
