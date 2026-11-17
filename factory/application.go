@@ -83,6 +83,7 @@ func assembleApplication(ctx context.Context, settings config.Config, logger *sl
 				expireUploadSessions(services.Uploads),
 				expireUploadParts(repositories),
 				sweepUnreferencedFiles(repositories, storage),
+				optimizeDatabase(repositories),
 			}
 			if services.BIOSList != nil {
 				tasks = append(tasks, refreshBIOSList(services.BIOSList, services.BIOS))
