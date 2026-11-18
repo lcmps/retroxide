@@ -50,3 +50,26 @@ describe('RomPager', () => {
 		expect(fetchPage).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe('RomPager total', () => {
+	it('keeps the first page total while paging and clears it on reset', async () => {
+		let resolveSecond: (page: RomListResponse) => void = () => undefined;
+		const fetchPage = vi
+			.fn<(limit: number, cursor: string | undefined) => Promise<RomListResponse>>()
+			.mockResolvedValueOnce({ item: [rom('a')], next_cursor: 'a', total: 3 })
+			.mockResolvedValueOnce({ item: [rom('b')], next_cursor: null, total: null })
+			.mockImplementationOnce(() => new Promise((resolve) => (resolveSecond = resolve)));
+		const pager = new RomPager(fetchPage, 1);
+
+		await pager.reset({});
+		expect(pager.total).toBe(3);
+		await pager.loadMore();
+		expect(pager.total).toBe(3);
+
+		const pending = pager.reset({ q: 'zelda' });
+		expect(pager.total).toBeNull();
+		resolveSecond({ item: [], next_cursor: null, total: 0 });
+		await pending;
+		expect(pager.total).toBe(0);
+	});
+});

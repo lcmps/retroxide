@@ -61,7 +61,8 @@ function readStoredSession(): StoredSession | null {
     return null;
   }
 
-  const rawSession = sessionStorage.getItem(SESSION_STORAGE_KEY);
+  // A session kept for this tab wins over one remembered on the device.
+  const rawSession = sessionStorage.getItem(SESSION_STORAGE_KEY) ?? deviceStorage()?.getItem(SESSION_STORAGE_KEY);
   if (!rawSession) {
     return null;
   }
@@ -88,7 +89,31 @@ function readStoredSession(): StoredSession | null {
   }
 }
 
-export function persistStoredSession(session: SessionResponse): void {
+/** The device-wide store a remembered session lives in, when the browser allows it. */
+function deviceStorage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The store this tab's session is read from: its own tab store when it has one, else the
+ * device ("Keep me signed in"). Null without a session.
+ */
+function sessionSource(): Storage | null {
+  if (sessionStorage.getItem(SESSION_STORAGE_KEY) !== null) return sessionStorage;
+  const device = deviceStorage();
+  return device?.getItem(SESSION_STORAGE_KEY) != null ? device : null;
+}
+
+/**
+ * Saves a session. With remember, it is kept on the device and survives closing the tab;
+ * without, it lasts for this tab only. Leaving remember out (a token refresh) keeps the session
+ * where it already is.
+ */
+export function persistStoredSession(session: SessionResponse, options: { remember?: boolean } = {}): void {
   if (!browser) {
     return;
   }
@@ -99,7 +124,32 @@ export function persistStoredSession(session: SessionResponse): void {
     expiresAt: Date.now() + session.expires_in * 1000
   };
 
-  sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(storedSession));
+  const serialized = JSON.stringify(storedSession);
+  if (options.remember === undefined) {
+    // A refresh or password change replaces this tab's session where it lives, and leaves any
+    // session another tab keeps in the other store alone.
+    (sessionSource() ?? sessionStorage).setItem(SESSION_STORAGE_KEY, serialized);
+    return;
+  }
+  const device = deviceStorage();
+  if (options.remember && device) {
+    device.setItem(SESSION_STORAGE_KEY, serialized);
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } else {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, serialized);
+    device?.removeItem(SESSION_STORAGE_KEY);
+  }
+}
+
+/**
+ * Forgets this tab's session after the server refused it: the store it was read from only, so a
+ * tab-only session ending does not sign out tabs that share a remembered one.
+ */
+function expireStoredSession(): void {
+  if (!browser) {
+    return;
+  }
+  sessionSource()?.removeItem(SESSION_STORAGE_KEY);
 }
 
 export function clearStoredSession(): void {
@@ -108,6 +158,7 @@ export function clearStoredSession(): void {
   }
 
   sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  deviceStorage()?.removeItem(SESSION_STORAGE_KEY);
 }
 
 export function hasStoredSession(): boolean {
@@ -120,10 +171,31 @@ function notifySessionExpired(): void {
   }
 }
 
+/** The lock that keeps tabs sharing a remembered session from refreshing it at once. */
+const REFRESH_LOCK = 'retroxide.session-refresh';
+
+/**
+ * Refreshes the session. Tabs that share a remembered session also share its refresh token, and
+ * the server treats a refresh token used twice as stolen and ends every session; so refreshes
+ * take a lock across tabs, and a tab that finds the token already rotated by another uses the
+ * new one instead of refreshing again.
+ */
 async function performSessionRefresh(): Promise<boolean> {
+  const before = readStoredSession();
+  if (!before) {
+    return false;
+  }
+  const locks = globalThis.navigator?.locks;
+  return locks ? locks.request(REFRESH_LOCK, () => refreshUnlessRotated(before.refresh_token)) : refreshUnlessRotated(before.refresh_token);
+}
+
+async function refreshUnlessRotated(expectedRefreshToken: string): Promise<boolean> {
   const session = readStoredSession();
   if (!session) {
     return false;
+  }
+  if (session.refresh_token !== expectedRefreshToken) {
+    return true; // another tab refreshed while this one waited
   }
 
   try {
@@ -206,7 +278,7 @@ async function requestResponse(path: string, init?: ApiRequestOptions): Promise<
 
   if (!response.ok) {
     if (init?.withAuth && response.status === 401) {
-      clearStoredSession();
+      expireStoredSession();
       notifySessionExpired();
     }
     throw await createResponseError(response);
@@ -583,7 +655,7 @@ export function uploadRom(
   if (request.status === 401 && await refreshStoredSession()) request = await sendUpload();
   if (request.status < 200 || request.status >= 300) {
     if (request.status === 401) {
-      clearStoredSession();
+      expireStoredSession();
       notifySessionExpired();
     }
     throw getXmlHttpRequestError(request);
@@ -780,7 +852,7 @@ export function sendUploadPart(
     if (request.status === 401 && await refreshStoredSession()) request = await send();
     if (request.status < 200 || request.status >= 300) {
       if (request.status === 401) {
-        clearStoredSession();
+        expireStoredSession();
         notifySessionExpired();
       }
       throw getXmlHttpRequestError(request);

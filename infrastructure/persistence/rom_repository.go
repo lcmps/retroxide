@@ -103,22 +103,7 @@ var romMetadataColumns = []string{
 // ListROMsWithFiles returns up to limit+1 ROMs in filter.Sort order, so callers can detect a
 // next page.
 func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit int, filter rom.ROMFilter) ([]romdomain.ROMWithFile, error) {
-	base := func() *gorm.DB {
-		query := repositories.DB.WithContext(ctx).
-			Table("rom AS r").
-			Joins("JOIN rom_file AS f ON f.id = r.rom_file_id")
-		if filter.UploaderID != nil {
-			query = query.Where("r.uploader_id = ?", *filter.UploaderID)
-		}
-		if filter.Platform != nil && *filter.Platform != "" {
-			// platform_key is the generated, indexed LOWER(platform) column.
-			query = query.Where("r.platform_key = ?", strings.ToLower(*filter.Platform))
-		}
-		if filter.Search != nil && strings.TrimSpace(*filter.Search) != "" {
-			query = searchROMs(query, strings.TrimSpace(*filter.Search))
-		}
-		return query
-	}
+	base := func() *gorm.DB { return repositories.filteredROMs(ctx, filter) }
 	column, sorted := sortColumns[filter.Sort.Field]
 	if !sorted {
 		query := base()
@@ -128,6 +113,35 @@ func (repositories *Repositories) ListROMsWithFiles(ctx context.Context, limit i
 		return scanROMsWithFiles(query.Order("r.id ASC").Limit(limit+1), "listing roms")
 	}
 	return listSortedROMs(base, column, filter, limit+1)
+}
+
+// CountROMs counts the ROMs a listing with filter returns over all its pages; the sort and the
+// cursor do not change the count and are ignored.
+func (repositories *Repositories) CountROMs(ctx context.Context, filter rom.ROMFilter) (uint64, error) {
+	var count int64
+	if err := repositories.filteredROMs(ctx, filter).Count(&count).Error; err != nil {
+		return 0, databaseError("counting roms", err)
+	}
+	return uint64(count), nil
+}
+
+// filteredROMs selects the ROMs, joined to their files, that filter's uploader, platform and
+// search match.
+func (repositories *Repositories) filteredROMs(ctx context.Context, filter rom.ROMFilter) *gorm.DB {
+	query := repositories.DB.WithContext(ctx).
+		Table("rom AS r").
+		Joins("JOIN rom_file AS f ON f.id = r.rom_file_id")
+	if filter.UploaderID != nil {
+		query = query.Where("r.uploader_id = ?", *filter.UploaderID)
+	}
+	if filter.Platform != nil && *filter.Platform != "" {
+		// platform_key is the generated, indexed LOWER(platform) column.
+		query = query.Where("r.platform_key = ?", strings.ToLower(*filter.Platform))
+	}
+	if filter.Search != nil && strings.TrimSpace(*filter.Search) != "" {
+		query = searchROMs(query, strings.TrimSpace(*filter.Search))
+	}
+	return query
 }
 
 // sortColumns maps sort fields to their columns. The listing compares them case-insensitively:

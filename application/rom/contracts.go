@@ -26,6 +26,8 @@ type Repository interface {
 	ListROMsNeedingThumbnails(ctx context.Context, limit int) ([]romdomain.ROM, error)
 	// ListROMsWithFiles returns up to limit ROMs ordered by ID that match filter.
 	ListROMsWithFiles(ctx context.Context, limit int, filter ROMFilter) ([]romdomain.ROMWithFile, error)
+	// CountROMs counts what a listing with filter returns over all its pages.
+	CountROMs(ctx context.Context, filter ROMFilter) (uint64, error)
 	FindROMByID(context.Context, string) (*romdomain.ROM, error)
 	FindROMFileByID(context.Context, string) (*romdomain.ROMFile, error)
 	FindROMFileBySHA256(context.Context, string) (*romdomain.ROMFile, error)

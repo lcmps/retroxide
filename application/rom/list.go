@@ -18,6 +18,8 @@ const (
 
 type romListReader interface {
 	ListROMsWithFiles(ctx context.Context, limit int, filter ROMFilter) ([]romdomain.ROMWithFile, error)
+	// CountROMs counts what a listing with filter returns over all its pages.
+	CountROMs(ctx context.Context, filter ROMFilter) (uint64, error)
 }
 
 type ListROMService struct {
@@ -83,7 +85,16 @@ func (service *ListROMService) List(ctx context.Context, requester identity.Requ
 	for _, row := range rows {
 		items = append(items, Summarize(row, sign))
 	}
-	return ROMListResponseDTO{Item: items, NextCursor: nextCursor}, nil
+	response := ROMListResponseDTO{Item: items, NextCursor: nextCursor}
+	// Only the first page is counted, so paging through costs nothing more.
+	if request.Cursor == nil {
+		total, err := service.repository.CountROMs(ctx, filter)
+		if err != nil {
+			return ROMListResponseDTO{}, err
+		}
+		response.Total = &total
+	}
+	return response, nil
 }
 
 // Summarize maps a ROM and its content hash to the summary shape used in listings; sign, when
