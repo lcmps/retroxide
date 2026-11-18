@@ -199,3 +199,22 @@ func TestRunStopsServerAndWorkerOnContextCancellation(t *testing.T) {
 		t.Fatal("Run() did not stop after context cancellation")
 	}
 }
+
+func TestDefaultGinModeIsReleaseUnlessConfigured(t *testing.T) {
+	previous := gin.Mode()
+	t.Cleanup(func() { gin.SetMode(previous) })
+
+	t.Setenv(gin.EnvGinMode, "")
+	gin.SetMode(gin.DebugMode)
+	defaultGinMode()
+	if gin.Mode() != gin.ReleaseMode {
+		t.Fatalf("mode without GIN_MODE = %q, want release", gin.Mode())
+	}
+
+	t.Setenv(gin.EnvGinMode, gin.DebugMode)
+	gin.SetMode(gin.DebugMode)
+	defaultGinMode()
+	if gin.Mode() != gin.DebugMode {
+		t.Fatalf("mode with GIN_MODE=debug = %q, want debug kept", gin.Mode())
+	}
+}

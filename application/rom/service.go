@@ -24,6 +24,13 @@ type Service struct {
 	thumbnailSlots chan struct{}
 	discs          Discs
 	wakeCompressor func()
+	images         ImageSigner
+}
+
+// WithImageLinks signs image URLs so browsers can load them with plain <img> tags.
+func (service *Service) WithImageLinks(images ImageSigner) *Service {
+	service.images = images
+	return service
 }
 
 // WithDiscs lets discs download in their other formats and be compressed; wake starts the
@@ -40,7 +47,7 @@ func NewService(repository Repository, storage Storage, audit Audit, scraper Scr
 }
 
 func (service *Service) List(ctx context.Context, requester identity.Requester, request ListRequest) (ROMListResponseDTO, error) {
-	return NewListROMService(service.repository).List(ctx, requester, request)
+	return NewListROMService(service.repository).WithImageLinks(service.images).List(ctx, requester, request)
 }
 
 func (service *Service) Get(ctx context.Context, requester identity.Requester, romID string) (ROMDetailDTO, error) {
@@ -48,7 +55,7 @@ func (service *Service) Get(ctx context.Context, requester identity.Requester, r
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.detail(ctx, *rom)
+	return service.detail(ctx, requester, *rom)
 }
 
 func (service *Service) Update(ctx context.Context, requester identity.Requester, romID string, input UpdateROMRequest) (ROMDetailDTO, error) {
@@ -89,7 +96,7 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 	if err := service.repository.UpdateROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.detail(ctx, *rom)
+	return service.detail(ctx, requester, *rom)
 }
 
 func (service *Service) Delete(ctx context.Context, requester identity.Requester, romID string) error {
@@ -214,23 +221,30 @@ func (service *Service) loadDiscs(ctx context.Context, rom romdomain.ROM) ([]dis
 	if len(discs) == 0 {
 		discs = []romdomain.ROMDisc{{ROMID: rom.ID, ROMFileID: rom.ROMFileID, Number: 1}}
 	}
+	// One query for every disc's file and one for their tracks, however many discs a title has.
+	ids := make([]string, len(discs))
+	for index, disc := range discs {
+		ids[index] = disc.ROMFileID
+	}
+	files, err := service.repository.FindROMFilesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	tracksByFile, err := service.repository.FindDiscTracksByFileIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	subjects := make([]discSubject, len(discs))
 	for index, disc := range discs {
-		romFile, err := service.repository.FindROMFileByID(ctx, disc.ROMFileID)
-		if err != nil {
-			return nil, err
-		}
-		if romFile == nil {
+		romFile, ok := files[disc.ROMFileID]
+		if !ok {
 			return nil, fault.Internal(fmt.Errorf("rom_file %s not found", disc.ROMFileID))
 		}
-		tracks, err := service.repository.FindDiscTracks(ctx, romFile.ID)
-		if err != nil {
-			return nil, err
-		}
+		tracks := tracksByFile[romFile.ID]
 		filename := discDownloadName(rom, disc, len(discs))
 		subjects[index] = discSubject{
-			disc: disc, file: *romFile, tracks: tracks, filename: filename,
-			options: service.downloadOptions(*romFile, tracks, filename),
+			disc: disc, file: romFile, tracks: tracks, filename: filename,
+			options: service.downloadOptions(romFile, tracks, filename),
 		}
 	}
 	return subjects, nil
@@ -358,7 +372,7 @@ func (service *Service) RequestCompression(ctx context.Context, requester identi
 	if service.wakeCompressor != nil {
 		service.wakeCompressor()
 	}
-	return service.detail(ctx, *rom)
+	return service.detailFrom(ctx, requester, *rom, subjects)
 }
 
 // DownloadFilename returns the name an accessible ROM downloads as in format (empty for the
@@ -389,7 +403,7 @@ func (service *Service) UploadCover(ctx context.Context, requester identity.Requ
 	if err := service.repository.UpdateROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.detail(ctx, *rom)
+	return service.detail(ctx, requester, *rom)
 }
 
 // Scrape fills only missing metadata and images. The title and platform are replaced only while
@@ -402,7 +416,7 @@ func (service *Service) Scrape(ctx context.Context, requester identity.Requester
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.scrape(ctx, rom)
+	return service.scrape(ctx, requester, rom)
 }
 
 // ScrapeUpload scrapes the ROM an upload created, on behalf of the background job queued once the
@@ -420,13 +434,14 @@ func (service *Service) ScrapeUpload(ctx context.Context, uploadID string) error
 	if err != nil || rom == nil {
 		return err
 	}
-	if _, err := service.scrape(ctx, rom); err != nil && !fault.IsCode(err, fault.CodeNotFound) {
+	// The background job has no requester, so the detail it gets back is unsigned and unused.
+	if _, err := service.scrape(ctx, identity.Requester{}, rom); err != nil && !fault.IsCode(err, fault.CodeNotFound) {
 		return err
 	}
 	return nil
 }
 
-func (service *Service) scrape(ctx context.Context, rom *romdomain.ROM) (ROMDetailDTO, error) {
+func (service *Service) scrape(ctx context.Context, requester identity.Requester, rom *romdomain.ROM) (ROMDetailDTO, error) {
 	romFile, err := service.repository.FindROMFileByID(ctx, rom.ROMFileID)
 	if err != nil {
 		return ROMDetailDTO{}, err
@@ -493,7 +508,7 @@ func (service *Service) scrape(ctx context.Context, rom *romdomain.ROM) (ROMDeta
 	if err := service.repository.UpdateROM(ctx, *rom); err != nil {
 		return ROMDetailDTO{}, err
 	}
-	return service.detail(ctx, *rom)
+	return service.detail(ctx, requester, *rom)
 }
 
 func fillMissing(target **string, value string) {
@@ -513,13 +528,18 @@ func (service *Service) findAccessibleROM(ctx context.Context, requester identit
 	return rom, nil
 }
 
-func (service *Service) detail(ctx context.Context, rom romdomain.ROM) (ROMDetailDTO, error) {
+func (service *Service) detail(ctx context.Context, requester identity.Requester, rom romdomain.ROM) (ROMDetailDTO, error) {
 	subjects, err := service.loadDiscs(ctx, rom)
 	if err != nil {
 		return ROMDetailDTO{}, err
 	}
+	return service.detailFrom(ctx, requester, rom, subjects)
+}
+
+// detailFrom builds a ROM's detail from discs already loaded by loadDiscs.
+func (service *Service) detailFrom(ctx context.Context, requester identity.Requester, rom romdomain.ROM, subjects []discSubject) (ROMDetailDTO, error) {
 	primary := primaryDisc(rom, subjects)
-	detail := detailOf(rom, primary.file)
+	detail := detailOf(rom, primary.file, service.imageSigner(requester))
 	detail.Downloads = primary.options
 	detail.Disc = service.discDetail(ctx, primary)
 	if len(subjects) > 1 {
@@ -570,8 +590,10 @@ func hashDTO(romFile romdomain.ROMFile) ROMHashDTO {
 	return ROMHashDTO{SHA256: romFile.Hash.SHA256, SHA1: romFile.Hash.SHA1, MD5: romFile.Hash.MD5, CRC32: romFile.Hash.CRC32}
 }
 
-// detailOf maps a ROM and its content file to the detail response.
-func detailOf(rom romdomain.ROM, romFile romdomain.ROMFile) ROMDetailDTO {
+// detailOf maps a ROM and its content file to the detail response; sign, when set, signs its
+// image URLs.
+func detailOf(rom romdomain.ROM, romFile romdomain.ROMFile, sign ImageSign) ROMDetailDTO {
+	token := signFor(sign, rom.ID)
 	return ROMDetailDTO{
 		ROMID:          rom.ID,
 		Title:          rom.Identity.Title,
@@ -583,9 +605,9 @@ func detailOf(rom romdomain.ROM, romFile romdomain.ROMFile) ROMDetailDTO {
 		ReleaseYear:    rom.Identity.ReleaseYear,
 		Genre:          rom.Identity.Genre,
 		Description:    rom.Identity.Description,
-		CoverArtURL:    imageURL(rom.ID, "cover", rom.Identity.CoverArtPath),
-		TitleScreenURL: imageURL(rom.ID, "media/"+MediaTitleScreen, rom.Identity.TitleScreenPath),
-		ScreenshotURL:  imageURL(rom.ID, "media/"+MediaScreenshot, rom.Identity.ScreenshotPath),
+		CoverArtURL:    imageURL(rom.ID, "cover", rom.Identity.CoverArtPath, token),
+		TitleScreenURL: imageURL(rom.ID, "media/"+MediaTitleScreen, rom.Identity.TitleScreenPath, token),
+		ScreenshotURL:  imageURL(rom.ID, "media/"+MediaScreenshot, rom.Identity.ScreenshotPath, token),
 		Hash:           hashDTO(romFile),
 	}
 }

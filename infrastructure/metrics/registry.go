@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -45,12 +46,39 @@ type Registry struct {
 
 	counts    func(context.Context) (Counts, error)
 	freeSpace func() (int64, bool)
+
+	// The database gauges are a handful of aggregate queries over the whole library; a scrape
+	// every few seconds would run them that often, so the last answer is kept for countsTTL.
+	countsMu sync.Mutex
+	cached   Counts
+	cachedAt time.Time
+	now      func() time.Time
 }
+
+// countsTTL is how long the database gauges are served from the last scrape's answer.
+const countsTTL = 30 * time.Second
 
 // NewRegistry returns a registry reading database gauges with counts and free disk space with
 // freeSpace (which reports false when it cannot be measured).
 func NewRegistry(counts func(context.Context) (Counts, error), freeSpace func() (int64, bool)) *Registry {
-	return &Registry{started: time.Now(), counts: counts, freeSpace: freeSpace}
+	return &Registry{started: time.Now(), counts: counts, freeSpace: freeSpace, now: time.Now}
+}
+
+// readCounts returns the database gauges, from the cache when it is fresh. A failure is not
+// cached, so the next scrape asks the database again.
+func (registry *Registry) readCounts(ctx context.Context) (Counts, error) {
+	registry.countsMu.Lock()
+	defer registry.countsMu.Unlock()
+	now := registry.now()
+	if !registry.cachedAt.IsZero() && now.Sub(registry.cachedAt) < countsTTL {
+		return registry.cached, nil
+	}
+	counts, err := registry.counts(ctx)
+	if err != nil {
+		return Counts{}, err
+	}
+	registry.cached, registry.cachedAt = counts, now
+	return counts, nil
 }
 
 // CountResponse records an HTTP response's status.
@@ -106,7 +134,7 @@ func (registry *Registry) Write(ctx context.Context, out io.Writer) error {
 	writer.metric("retroxide_http_responses_total", "counter", "HTTP responses by status class.", responses...)
 
 	if registry.counts != nil {
-		counts, err := registry.counts(ctx)
+		counts, err := registry.readCounts(ctx)
 		if err != nil {
 			gauge("retroxide_database_up", "Whether the database answered the metrics queries.", 0)
 		} else {

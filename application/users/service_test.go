@@ -14,6 +14,8 @@ type fakeStore struct {
 	activity map[string]Activity
 	deleted  []string
 	heir     string
+	// everyoneQueries counts how often the activity of every user was asked for.
+	everyoneQueries int
 }
 
 func (store *fakeStore) ListUsers(context.Context) ([]authdomain.User, error) {
@@ -55,7 +57,12 @@ func (store *fakeStore) SaveUser(_ context.Context, account authdomain.User) err
 }
 
 func (store *fakeStore) UserActivity(context.Context) (map[string]Activity, error) {
+	store.everyoneQueries++
 	return store.activity, nil
+}
+
+func (store *fakeStore) UserActivityFor(_ context.Context, userID string) (Activity, error) {
+	return store.activity[userID], nil
 }
 
 func (store *fakeStore) DeleteUserTransferringData(_ context.Context, userID, heirID string) (Transfer, error) {
@@ -201,5 +208,38 @@ func TestDeleteTransfersToTheAdministratorAndNeverDeletesSelf(t *testing.T) {
 	}
 	if response.TransferredROMs != 3 || store.heir != "usr-admin" || len(store.deleted) != 1 {
 		t.Fatalf("delete = %+v, heir %q, deleted %v", response, store.heir, store.deleted)
+	}
+}
+
+type changeListener struct{ changed []string }
+
+func (listener *changeListener) UserChanged(userID string) {
+	listener.changed = append(listener.changed, userID)
+}
+
+func TestUpdateAndDeleteTellTheUserChangeListener(t *testing.T) {
+	service, _, _ := fixture()
+	listener := &changeListener{}
+	service.WithUserChangeListener(listener)
+	ctx := context.Background()
+	if _, err := service.Update(ctx, admin, "usr-member", UpdateRequest{Role: ptr("admin")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Delete(ctx, admin, "usr-member"); err != nil {
+		t.Fatal(err)
+	}
+	if len(listener.changed) != 2 || listener.changed[0] != "usr-member" || listener.changed[1] != "usr-member" {
+		t.Fatalf("listener told of %v, want usr-member twice", listener.changed)
+	}
+}
+
+func TestUpdateSummarizesOnlyTheChangedUser(t *testing.T) {
+	service, store, _ := fixture()
+	updated, err := service.Update(context.Background(), admin, "usr-member", UpdateRequest{Role: ptr("admin")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ROMCount != 3 || store.everyoneQueries != 0 {
+		t.Fatalf("updated = %+v after %d whole-table activity queries, want the member's own activity and none", updated, store.everyoneQueries)
 	}
 }

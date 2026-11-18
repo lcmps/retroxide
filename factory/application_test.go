@@ -46,10 +46,14 @@ func TestNewApplicationAssemblesDependencies(t *testing.T) {
 	if response.Header().Get("Access-Control-Allow-Origin") != settings.CORSAllowedOrigins[0] {
 		t.Fatal("configured CORS origin was not retained")
 	}
+	// Health checks are logged only at debug; the sign-in that follows is logged at info.
+	if strings.Contains(logs.String(), "http request handled") {
+		t.Fatal("a health check was logged at info")
+	}
+	session := login(t, app.Router, settings.AdminPassword)
 	if !strings.Contains(logs.String(), "http request handled") {
 		t.Fatal("router did not use configured logger")
 	}
-	session := login(t, app.Router, settings.AdminPassword)
 	for _, path := range []string{"/api/v1/rom", "/api/v1/library", "/api/v1/client", "/api/v1/i18n/en"} {
 		t.Run(path, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, path, nil)

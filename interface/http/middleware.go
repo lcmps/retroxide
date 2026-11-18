@@ -38,7 +38,11 @@ func requestIDMiddleware(logger *slog.Logger) gin.HandlerFunc {
 				"error", c.Errors.Last().Err,
 			)
 		}
-		logger.InfoContext(ctx, "http request handled",
+		level := slog.LevelInfo
+		if isQuietRequest(c.Request.Method, c.Request.URL.Path, c.Writer.Status()) {
+			level = slog.LevelDebug
+		}
+		logger.Log(ctx, level, "http request handled",
 			"request_id", requestID,
 			"method", c.Request.Method,
 			"path", c.Request.URL.Path,
@@ -46,6 +50,16 @@ func requestIDMiddleware(logger *slog.Logger) gin.HandlerFunc {
 			"latency_ms", time.Since(started).Milliseconds(),
 		)
 	}
+}
+
+// isQuietRequest reports a request worth logging only at debug level: a successful response for
+// a static asset of the web app or an image. A library page loads dozens of each, and logging
+// every one buries the requests that matter.
+func isQuietRequest(method, path string, status int) bool {
+	if status >= http.StatusBadRequest {
+		return false
+	}
+	return !isAPIPath(path) || isImagePath(method, path)
 }
 
 // corsMiddleware answers preflight requests and decorates responses for the configured origins.
@@ -130,7 +144,9 @@ var publicRoutes = map[string]map[string]struct{}{
 }
 
 // authMiddleware requires a valid bearer token on every non-public API path and stores the
-// resolved requester for handlers.
+// resolved requester for handlers. Image paths may instead carry a signed token in their query,
+// which their handlers check: a request to one without a bearer token passes through here, and
+// one with a bearer token is authenticated as usual.
 func authMiddleware(authenticator Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		method, path := c.Request.Method, c.Request.URL.Path
@@ -139,6 +155,10 @@ func authMiddleware(authenticator Authenticator) gin.HandlerFunc {
 			return
 		}
 		token, ok := auth.ExtractBearerToken(c.GetHeader("Authorization"))
+		if !ok && isOptionalAuthPath(method, path) {
+			c.Next()
+			return
+		}
 		if !ok || authenticator == nil {
 			abortUnauthorized(c)
 			return
@@ -156,6 +176,33 @@ func authMiddleware(authenticator Authenticator) gin.HandlerFunc {
 		c.Set(principalKey, requester)
 		c.Next()
 	}
+}
+
+// isOptionalAuthPath reports a path that serves anonymous requests as well as authenticated
+// ones: images carrying a signed token, and the bootstrap, which adds the profile when signed in.
+func isOptionalAuthPath(method, path string) bool {
+	return isImagePath(method, path) || (method == http.MethodGet && path == bootstrapPath)
+}
+
+// isImagePath reports a GET of a ROM's cover, cover thumbnail, or media image: the paths that
+// accept a signed token in place of a bearer token.
+func isImagePath(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	rest, ok := strings.CutPrefix(path, "/api/v1/rom/")
+	if !ok {
+		return false
+	}
+	romID, resource, found := strings.Cut(rest, "/")
+	if !found || romID == "" {
+		return false
+	}
+	if resource == "cover" || resource == "cover/thumb" {
+		return true
+	}
+	kind, ok := strings.CutPrefix(resource, "media/")
+	return ok && kind != "" && !strings.Contains(kind, "/")
 }
 
 func isPublicPath(method, path string) bool {

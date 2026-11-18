@@ -62,6 +62,48 @@ func (repositories *Repositories) FindDiscTracks(ctx context.Context, romFileID 
 	return tracks, nil
 }
 
+// FindROMFilesByIDs returns the stored files with the given IDs, keyed by ID; missing IDs are
+// absent.
+func (repositories *Repositories) FindROMFilesByIDs(ctx context.Context, ids []string) (map[string]romdomain.ROMFile, error) {
+	files := make(map[string]romdomain.ROMFile, len(ids))
+	if len(ids) == 0 {
+		return files, nil
+	}
+	var models []ROMFileModel
+	if err := repositories.DB.WithContext(ctx).Where("id IN ?", ids).Find(&models).Error; err != nil {
+		return nil, databaseError("finding rom files by id", err)
+	}
+	for _, model := range models {
+		file, err := romFileEntity(model)
+		if err != nil {
+			return nil, err
+		}
+		files[model.ID] = file
+	}
+	return files, nil
+}
+
+// FindDiscTracksByFileIDs returns the tracks of each of the given files in number order, keyed
+// by file ID; a file that is not a disc has none.
+func (repositories *Repositories) FindDiscTracksByFileIDs(ctx context.Context, ids []string) (map[string][]romdomain.DiscTrack, error) {
+	tracks := make(map[string][]romdomain.DiscTrack, len(ids))
+	if len(ids) == 0 {
+		return tracks, nil
+	}
+	var models []DiscTrackModel
+	if err := repositories.DB.WithContext(ctx).Where("rom_file_id IN ?", ids).Order("rom_file_id, number").Find(&models).Error; err != nil {
+		return nil, databaseError("finding disc tracks by file id", err)
+	}
+	for _, model := range models {
+		track, err := discTrackEntity(model)
+		if err != nil {
+			return nil, err
+		}
+		tracks[model.ROMFileID] = append(tracks[model.ROMFileID], track)
+	}
+	return tracks, nil
+}
+
 // FindROMFileByDiscIdentity returns the file holding the disc with identity, if any.
 func (repositories *Repositories) FindROMFileByDiscIdentity(ctx context.Context, identity string) (*romdomain.ROMFile, error) {
 	model, err := takeOne[ROMFileModel](repositories.DB.WithContext(ctx).Where("disc_identity = ?", identity), "finding rom file by disc identity")

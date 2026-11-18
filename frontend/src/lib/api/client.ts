@@ -8,6 +8,7 @@ import type {
   ApiError,
   DownloadLink,
   Appearance,
+  Bootstrap,
   CreateUserRequest,
   DeleteUserResponse,
   ManagedUser,
@@ -380,6 +381,14 @@ export async function updateProfile(payload: UpdateProfileRequest): Promise<Prof
   return response.profile;
 }
 
+/**
+ * Fetches the setup state, the appearance, and (with a stored session) the profile in one
+ * request. A stale session is refused with a 401, which clears it like any other request.
+ */
+export function getBootstrap(): Promise<Bootstrap> {
+  return requestJson<Bootstrap>('/bootstrap', { withAuth: hasStoredSession() });
+}
+
 /** The presentation settings, such as the interface font; available without signing in. */
 export function getAppearance(): Promise<Appearance> {
   return requestJson<Appearance>('/appearance');
@@ -491,18 +500,6 @@ export function uploadRomCover(romId: string, file: File): Promise<RomDetail> {
     withAuth: true,
     body: formData
   });
-}
-
-/**
- * Fetches a ROM's cover, or with thumbnail its small copy for grids. Passing the summary's
- * cover_art_url (or cover_thumb_url) keeps its content version, so the browser can serve repeat
- * requests from its HTTP cache.
- */
-export async function fetchRomCover(romId: string, coverUrl?: string | null, thumbnail = false): Promise<Blob> {
-  const version = coverUrl ? new URL(coverUrl, 'http://localhost').search : '';
-  const resource = thumbnail ? 'cover/thumb' : 'cover';
-  const response = await requestResponse(`/rom/${encodeURIComponent(romId)}/${resource}${version}`, { withAuth: true });
-  return response.blob();
 }
 
 export function scrapeRom(romId: string): Promise<RomDetail> {
@@ -834,8 +831,11 @@ function startDownload(link: DownloadLink): DownloadLink {
   return link;
 }
 
-/** Resolves a server-relative link against the API origin, which may differ from the page's. */
-function resolveApiLink(path: string): string {
+/**
+ * Resolves a server-relative link (a download link, a signed image URL) against the API origin,
+ * which may differ from the page's.
+ */
+export function resolveApiLink(path: string): string {
   const pageURL = globalThis.location?.href ?? 'http://localhost';
   return new URL(path, new URL(API_BASE_URL, pageURL)).href;
 }

@@ -22,7 +22,10 @@ const (
 	// sqliteMaxOpenConns lets WAL readers run concurrently; writers still serialize on SQLite's lock.
 	sqliteMaxOpenConns = 4
 	// sqliteCacheKiB is each connection's page cache (the default is 2 MiB).
-	sqliteCacheKiB    = 8 * 1024
+	sqliteCacheKiB = 8 * 1024
+	// sqliteMmapBytes lets SQLite read up to this much of the file through the page cache
+	// directly instead of copying pages into its own cache first.
+	sqliteMmapBytes   = 256 << 20
 	mysqlMaxOpenConns = 10
 	// mysqlMaxIdleConns keeps the whole pool warm instead of reconnecting under bursts.
 	mysqlMaxIdleConns = mysqlMaxOpenConns
@@ -121,7 +124,8 @@ func OpenDatabase(ctx context.Context, driver, sqlitePath, mysqlURL string) (*go
 //   - foreign keys are enforced;
 //   - transactions begin IMMEDIATE, taking the write lock up front so concurrent transactions
 //     queue on busy_timeout rather than failing with "database is locked" when upgrading;
-//   - temporary tables and sorts stay in memory, and each connection caches more pages.
+//   - temporary tables and sorts stay in memory, each connection caches more pages, and reads
+//     go through a memory map of the file.
 func sqliteDSN(path string) (string, error) {
 	if strings.Contains(path, "?") {
 		return "", fault.Validation("sqlite path must not contain '?'")
@@ -134,6 +138,7 @@ func sqliteDSN(path string) (string, error) {
 		"foreign_keys(1)",
 		"temp_store(MEMORY)",
 		fmt.Sprintf("cache_size(-%d)", sqliteCacheKiB),
+		fmt.Sprintf("mmap_size(%d)", sqliteMmapBytes),
 	} {
 		query.Add("_pragma", pragma)
 	}
@@ -209,4 +214,16 @@ func poolSettings(driver string) (maxOpen, maxIdle int, err error) {
 	default:
 		return 0, 0, fault.Validation("unsupported database driver " + driver)
 	}
+}
+
+// Optimize refreshes SQLite's query planner statistics, which SQLite recommends doing now and
+// then on a long-running connection; it is cheap when nothing changed. MySQL keeps its own.
+func (repositories *Repositories) Optimize(ctx context.Context) error {
+	if isMySQL(repositories.DB) {
+		return nil
+	}
+	if err := repositories.DB.WithContext(ctx).Exec("PRAGMA optimize").Error; err != nil {
+		return databaseError("optimizing sqlite statistics", err)
+	}
+	return nil
 }

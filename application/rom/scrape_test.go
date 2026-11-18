@@ -278,7 +278,7 @@ func TestScrapeStoresACoverThumbnail(t *testing.T) {
 	if string(content) != "\xff\xd8\xffthumbnail" || thumbnailer.calls != 1 {
 		t.Fatalf("thumbnail = %q after %d scalings", content, thumbnailer.calls)
 	}
-	summary := Summarize(romdomain.ROMWithFile{ROM: repository.roms["rom-1"]})
+	summary := Summarize(romdomain.ROMWithFile{ROM: repository.roms["rom-1"]}, nil)
 	if summary.CoverThumbURL == nil || !strings.HasPrefix(*summary.CoverThumbURL, "/api/v1/rom/rom-1/cover/thumb?v=") {
 		t.Fatalf("cover_thumb_url = %v", summary.CoverThumbURL)
 	}
@@ -334,5 +334,35 @@ func TestAScrapeFinishingAfterTheROMWasRemovedStoresNothing(t *testing.T) {
 	}
 	if len(repository.roms) != 0 {
 		t.Errorf("roms = %v, want none stored", repository.roms)
+	}
+}
+
+func TestBackfillThumbnailsMakesEachMissingThumbnailOnce(t *testing.T) {
+	cover := "/storage/" + strings.Repeat("ab", 32)
+	repository, storage := scrapeFixture(t, romdomain.ROMIdentity{Title: "x", Platform: "snes", CoverArtPath: &cover})
+	storage.files[cover] = pngBytes
+	thumbnailer := &fakeThumbnailer{}
+	service := NewService(repository, storage, romTestAudit{}, nil).WithThumbnails(thumbnailer)
+
+	made, err := service.BackfillThumbnails(context.Background())
+	if err != nil || made != 1 || thumbnailer.calls != 1 || repository.roms["rom-1"].Identity.CoverThumbPath == nil {
+		t.Fatalf("BackfillThumbnails() = %d, %v after %d scalings; thumbnail %v", made, err, thumbnailer.calls, repository.roms["rom-1"].Identity.CoverThumbPath)
+	}
+	if made, err := service.BackfillThumbnails(context.Background()); err != nil || made != 0 || thumbnailer.calls != 1 {
+		t.Fatalf("second pass = %d, %v after %d scalings; want nothing left to do", made, err, thumbnailer.calls)
+	}
+
+	// A cover that cannot be scaled becomes its own thumbnail, so it is never retried.
+	repository, storage = scrapeFixture(t, romdomain.ROMIdentity{Title: "x", Platform: "snes", CoverArtPath: &cover})
+	storage.files[cover] = pngBytes
+	failing := &fakeThumbnailer{err: ErrThumbnailNotSmaller}
+	service = NewService(repository, storage, romTestAudit{}, nil).WithThumbnails(failing)
+	for range 2 {
+		if _, err := service.BackfillThumbnails(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if path := repository.roms["rom-1"].Identity.CoverThumbPath; failing.calls != 1 || path == nil || *path != cover {
+		t.Fatalf("unscalable cover: %d scalings, thumbnail %v; want one attempt and the cover itself", failing.calls, path)
 	}
 }

@@ -40,3 +40,43 @@ func TestRefreshBIOSListRechecksOnlyWhenTheListChanged(t *testing.T) {
 		}
 	}
 }
+
+type countingOptimizer struct {
+	calls int
+	err   error
+}
+
+func (optimizer *countingOptimizer) Optimize(context.Context) error {
+	optimizer.calls++
+	return optimizer.err
+}
+
+func TestOptimizeDatabaseRunsAndSurvivesFailure(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, optimizer := range []*countingOptimizer{{}, {err: errors.New("locked")}} {
+		optimizeDatabase(optimizer)(context.Background(), logger)
+		if optimizer.calls != 1 {
+			t.Fatalf("Optimize called %d times, want 1", optimizer.calls)
+		}
+	}
+}
+
+type countingBackfiller struct {
+	calls int
+	err   error
+}
+
+func (backfiller *countingBackfiller) BackfillThumbnails(context.Context) (int, error) {
+	backfiller.calls++
+	return 2, backfiller.err
+}
+
+func TestBackfillThumbnailsRunsAndSurvivesFailure(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, backfiller := range []*countingBackfiller{{}, {err: errors.New("disk")}} {
+		backfillThumbnails(backfiller)(context.Background(), logger)
+		if backfiller.calls != 1 {
+			t.Fatalf("BackfillThumbnails called %d times, want 1", backfiller.calls)
+		}
+	}
+}

@@ -291,6 +291,14 @@ export type Appearance = {
   font: UIFont;
 };
 
+/** What the web app needs before its first paint, in one request. */
+export type Bootstrap = {
+  setup_required: boolean;
+  appearance: Appearance;
+  /** The signed-in account, or null for an anonymous request. */
+  profile: Profile | null;
+};
+
 export type SettingOption = {
   value: string;
   label: string;

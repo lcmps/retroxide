@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/lcmps/retroxide/application/rom"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -661,6 +662,14 @@ func exerciseUserManagement(t *testing.T, ctx context.Context, repositories *Rep
 	if leaver.ROMCount != 3 || leaver.StorageBytes != 3000 || leaver.UploadCount != 1 || leaver.ActiveSessions != 1 || len(leaver.Platforms) != 2 {
 		t.Fatalf("activity = %+v", leaver)
 	}
+	// One user's activity reads the same as their entry in everyone's.
+	one, err := repositories.UserActivityFor(ctx, leaverID)
+	if err != nil || fmt.Sprint(one) != fmt.Sprint(leaver) {
+		t.Fatalf("UserActivityFor = %+v, %v; want %+v", one, err, leaver)
+	}
+	if none, err := repositories.UserActivityFor(ctx, "nobody"); err != nil || none.ROMCount != 0 || len(none.Platforms) != 0 {
+		t.Fatalf("UserActivityFor(nobody) = %+v, %v", none, err)
+	}
 
 	transfer, err := repositories.DeleteUserTransferringData(ctx, leaverID, heirID)
 	if err != nil {
@@ -973,5 +982,51 @@ func exerciseDiscs(t *testing.T, ctx context.Context, repositories *Repositories
 	}
 	if gone, _ := repositories.FindROMFileByID(ctx, file.ID); gone != nil {
 		t.Fatal("an unused disc was kept")
+	}
+}
+
+func TestUpsertROMFileReturnsTheStoredFile(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	file := validROMFile("rf-returned", "payload")
+	saved, err := repositories.UpsertROMFile(ctx, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.Format = romdomain.FormatFile // the default a file without a format is stored with
+	if !reflect.DeepEqual(saved, file) {
+		t.Fatalf("UpsertROMFile returned %+v, want %+v", saved, file)
+	}
+	found, err := repositories.FindROMFileByID(ctx, file.ID)
+	if err != nil || found == nil || !reflect.DeepEqual(*found, saved) {
+		t.Fatalf("stored file = %+v, %v; want what UpsertROMFile returned", found, err)
+	}
+}
+
+func TestListROMsNeedingThumbnailsFindsCoversWithoutOne(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	cover, thumb := "ab/"+strings.Repeat("ab", 32), "cd/"+strings.Repeat("cd", 32)
+	for _, row := range []struct {
+		id           string
+		cover, thumb *string
+	}{
+		{"rom-needs", &cover, nil},
+		{"rom-has", &cover, &thumb},
+		{"rom-none", nil, nil},
+	} {
+		file := validROMFile("rf-"+row.id, row.id)
+		if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+		if err := repositories.SaveROM(ctx, romdomain.ROM{ID: row.id, ROMFileID: file.ID, UploaderID: "u",
+			Identity: romdomain.ROMIdentity{Title: row.id, Platform: "snes", IdentifiedBy: "test", Confidence: 100, CoverArtPath: row.cover, CoverThumbPath: row.thumb}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	needing, err := repositories.ListROMsNeedingThumbnails(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(needing) != 1 || needing[0].ID != "rom-needs" {
+		t.Fatalf("needing = %+v, want only rom-needs", needing)
 	}
 }

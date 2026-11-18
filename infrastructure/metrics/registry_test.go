@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lcmps/retroxide/application/rom"
 )
@@ -115,5 +116,45 @@ func TestInstrumentsCountOutcomesAndPassCallsOn(t *testing.T) {
 	audit.DownloadServed(context.Background(), "r", "f", "s", 7)
 	if next.calls != 3 || registry.UploadedBytes.Load() != 10 || registry.UploadsDuplicate.Load() != 1 || registry.DownloadedBytes.Load() != 7 || registry.Downloads.Load() != 1 {
 		t.Fatalf("audit calls %d, uploaded %d, duplicates %d, downloaded %d", next.calls, registry.UploadedBytes.Load(), registry.UploadsDuplicate.Load(), registry.DownloadedBytes.Load())
+	}
+}
+
+func TestRegistryCachesCountsBriefly(t *testing.T) {
+	calls := 0
+	var failing bool
+	registry := NewRegistry(func(context.Context) (Counts, error) {
+		calls++
+		if failing {
+			return Counts{}, errors.New("offline")
+		}
+		return Counts{ROMs: int64(calls)}, nil
+	}, nil)
+	now := time.Unix(1_700_000_000, 0)
+	registry.now = func() time.Time { return now }
+	write := func() string {
+		var text strings.Builder
+		if err := registry.Write(context.Background(), &text); err != nil {
+			t.Fatal(err)
+		}
+		return text.String()
+	}
+
+	write()
+	if got := write(); calls != 1 || !strings.Contains(got, "retroxide_roms 1\n") {
+		t.Fatalf("second scrape within the TTL ran the queries %d times:\n%s", calls, got)
+	}
+	now = now.Add(countsTTL + time.Second)
+	if got := write(); calls != 2 || !strings.Contains(got, "retroxide_roms 2\n") {
+		t.Fatalf("scrape after the TTL ran the queries %d times:\n%s", calls, got)
+	}
+	// A failure is reported, not cached: the next scrape asks again.
+	now = now.Add(countsTTL + time.Second)
+	failing = true
+	if got := write(); !strings.Contains(got, "retroxide_database_up 0\n") {
+		t.Fatalf("failed counts not reported:\n%s", got)
+	}
+	failing = false
+	if got := write(); calls != 4 || !strings.Contains(got, "retroxide_database_up 1\n") {
+		t.Fatalf("scrape after a failure ran the queries %d times:\n%s", calls, got)
 	}
 }

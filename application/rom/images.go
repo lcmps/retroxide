@@ -94,11 +94,55 @@ func (service *Service) openImage(ctx context.Context, path string) (Image, erro
 	if err != nil {
 		return Image{}, err
 	}
+	return ImageOf(content, path), nil
+}
+
+// ImageOf wraps opened content as an image, versioned by its content address when path is one.
+func ImageOf(content StoredContent, path string) Image {
 	version := ""
 	if address := filepath.Base(path); len(address) == sha256.Size*2 && isLowerHex(address) {
 		version = address
 	}
-	return Image{StoredContent: content, Version: version}, nil
+	return Image{StoredContent: content, Version: version}
+}
+
+// backfillBatch is how many covers a backfill pass handles per query.
+const backfillBatch = 20
+
+// BackfillThumbnails makes the thumbnail of every cover stored before thumbnails existed, a
+// batch at a time, so library pages never have to make one on first view. It returns how many
+// it made. A cover that cannot be scaled is recorded as its own thumbnail, so it is tried once.
+func (service *Service) BackfillThumbnails(ctx context.Context) (int, error) {
+	if service.thumbnailer == nil {
+		return 0, nil
+	}
+	made := 0
+	for ctx.Err() == nil {
+		roms, err := service.repository.ListROMsNeedingThumbnails(ctx, backfillBatch)
+		if err != nil || len(roms) == 0 {
+			return made, err
+		}
+		for _, rom := range roms {
+			cover := *rom.Identity.CoverArtPath
+			content, err := service.storage.Read(ctx, cover)
+			if err != nil {
+				// A missing cover is the storage sweep's business; its own path keeps it off this list.
+				if err := service.repository.SetCoverThumbnail(ctx, rom.ID, cover, cover); err != nil {
+					return made, err
+				}
+				continue
+			}
+			thumbnail, err := service.thumbnailFor(ctx, cover, content)
+			if err != nil {
+				return made, err
+			}
+			if err := service.repository.SetCoverThumbnail(ctx, rom.ID, cover, thumbnail); err != nil {
+				return made, err
+			}
+			made++
+		}
+	}
+	return made, ctx.Err()
 }
 
 // storeCover stores a cover and its thumbnail, recording both on identity.
