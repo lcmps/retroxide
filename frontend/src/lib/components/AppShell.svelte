@@ -13,6 +13,7 @@
 	import { useTranslate } from "#lib/i18n/helpers.js";
 	import { setUserFont } from "#lib/appearance.js";
 	import { platforms } from "#lib/platforms/catalog.svelte.js";
+	import { librarySearchTarget } from "#lib/library/search.js";
 
 	type Props = {
 		activePath: string;
@@ -26,7 +27,6 @@
 	let isAdmin = $state(false);
 	let searchText = $state("");
 
-	const libraryControlsEnabled = $derived(activePath === "/library");
 	// The platforms the library actually holds. A platform named in the URL but not (or no
 	// longer) listed still gets an option, so the selection stays visible.
 	const platformOptions = $derived.by(() => {
@@ -45,35 +45,11 @@
 	const uploadsInProgress = $derived(
 		translate("nav.uploadsInProgress", "Uploads: {count} in progress", { count: uploadQueue.transferringCount }),
 	);
-	async function updateLibrarySearchParams(
-		nextPlatform: string,
-		nextQuery: string,
-	): Promise<void> {
-		if (activePath !== "/library") {
-			return;
-		}
-
-		const params = new URLSearchParams(page.url.searchParams.toString());
-		const trimmedQuery = nextQuery.trim();
-
-		if (nextPlatform) {
-			params.set("platform", nextPlatform);
-		} else {
-			params.delete("platform");
-		}
-
-		if (trimmedQuery) {
-			params.set("q", trimmedQuery);
-		} else {
-			params.delete("q");
-		}
-
-		const nextUrl =
-			params.size > 0 ? `/library?${params.toString()}` : "/library";
-		await goto(nextUrl, {
-			replace: true,
-			reset: false,
-		});
+	/** The header's filters lead to the library from any page, keeping focus in the control. */
+	async function updateLibrarySearchParams(nextPlatform: string, nextQuery: string): Promise<void> {
+		const target = librarySearchTarget(page.url, nextPlatform, nextQuery);
+		// reset: false keeps focus in the control and the scroll position.
+		await goto(target.href, { replace: target.replace, reset: false });
 	}
 
 	function changePlatform(event: Event): void {
@@ -196,12 +172,6 @@
 		>
 			<label
 				class="app-shell__control-group"
-				title={libraryControlsEnabled
-					? undefined
-					: translate(
-							"app.shell.library_only",
-							"Available on the Library page only.",
-						)}
 			>
 				<span class="app-shell__assistive"
 					>{translate("rom.fields.platform", "Platform")}</span
@@ -214,13 +184,6 @@
 					onchange={changePlatform}
 					onfocus={() => void platforms.refresh({ force: true })}
 					aria-label={translate("rom.fields.platform", "Platform")}
-					disabled={!libraryControlsEnabled}
-					title={libraryControlsEnabled
-						? undefined
-						: translate(
-								"app.shell.library_only",
-								"Available on the Library page only.",
-							)}
 				>
 					<option value=""
 						>{translate("rom.fields.platform", "Platform")}</option
@@ -233,12 +196,6 @@
 
 			<label
 				class="app-shell__control-group app-shell__control-group--search"
-				title={libraryControlsEnabled
-					? undefined
-					: translate(
-							"app.shell.library_only",
-							"Available on the Library page only.",
-						)}
 			>
 				<span class="app-shell__assistive"
 					>{translate(
@@ -261,13 +218,6 @@
 						"app.shell.search_label",
 						"Search library",
 					)}
-					disabled={!libraryControlsEnabled}
-					title={libraryControlsEnabled
-						? undefined
-						: translate(
-								"app.shell.library_only",
-								"Available on the Library page only.",
-							)}
 				/>
 			</label>
 
