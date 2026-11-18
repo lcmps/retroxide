@@ -35,7 +35,7 @@
 	{/if}
 
 	{#if upload.rom_id}
-		<p>{t('uploads.messages.romId', 'ROM ID: {romId}', { romId: upload.rom_id })}</p>
+		<p><a href={resolve('/rom/[rom_id]', { rom_id: upload.rom_id })}>{t('uploads.messages.openRom', 'Open ROM')}</a></p>
 	{/if}
 
 	{#if upload.error}

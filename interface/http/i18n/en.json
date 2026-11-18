@@ -305,6 +305,8 @@
   "uploads.messages.biosAddedPlain": "Added as {platform} BIOS",
   "uploads.messages.biosUnrecognized": "Added as {platform} BIOS (not recognized)",
   "uploads.pick_file": "Choose ROM files",
+  "uploads.form.drop": "or drop them here",
+  "uploads.messages.openRom": "Open ROM",
   "uploads.progress.label": "Upload progress",
   "uploads.queue.clearFinished": "Clear finished",
   "uploads.queue.clearHint": "Remove completed and failed uploads from this list",

@@ -56,6 +56,39 @@
 		files = Array.from(event.currentTarget.files ?? []);
 	}
 
+	/** Files are being dragged over the picker, which then shows it accepts them. */
+	let dragging = $state(false);
+
+	function dragOver(event: DragEvent): void {
+		event.preventDefault();
+		dragging = true;
+	}
+
+	/**
+	 * Takes dropped files as the selection, as picking them does. Folders are skipped: browsers
+	 * hand them over as empty files.
+	 */
+	function drop(event: DragEvent): void {
+		event.preventDefault();
+		dragging = false;
+		const transfer = event.dataTransfer;
+		if (!transfer) return;
+		const dropped: File[] = [];
+		const items = Array.from(transfer.items ?? []);
+		if (items.length > 0) {
+			for (const item of items) {
+				if (item.kind !== 'file' || item.webkitGetAsEntry?.()?.isDirectory) continue;
+				const file = item.getAsFile();
+				if (file) dropped.push(file);
+			}
+		} else {
+			dropped.push(...Array.from(transfer.files ?? []));
+		}
+		if (dropped.length === 0) return;
+		files = dropped;
+		if (input) input.value = '';
+	}
+
 	function submit(event: SubmitEvent): void {
 		event.preventDefault();
 		if (files.length === 0) return;
@@ -67,8 +100,9 @@
 </script>
 
 <form class="upload-form" onsubmit={submit}>
-	<label class="upload-picker">
+	<label class="upload-picker" class:dragging ondragover={dragOver} ondragleave={() => (dragging = false)} ondrop={drop}>
 		<span>{t('uploads.pick_file', 'Choose ROM files')}</span>
+		<span class="upload-picker__drop">{t('uploads.form.drop', 'or drop them here')}</span>
 		<!-- BIOS files come in types beyond the game list; the server checks them against its list. -->
 		<input bind:this={input} type="file" multiple accept={biosMode ? undefined : ACCEPTED_EXTENSIONS} onchange={select} />
 	</label>
@@ -161,6 +195,16 @@
 		border: 2px dashed var(--pixel-panel-strong);
 		color: var(--pixel-muted);
 		font-size: 0.65rem;
+	}
+
+	.upload-picker.dragging {
+		border-color: var(--pixel-focus);
+		background: var(--pixel-panel-strong);
+	}
+
+	.upload-picker__drop {
+		margin-top: -0.5rem;
+		font-size: 0.5rem;
 	}
 
 	.upload-picker input[type='file'] {
