@@ -11,6 +11,7 @@
   import { deleteRom, downloadRom, getRom, i18n, resolveApiLink, scrapeRom } from '#lib';
   import CompressionProgress from '#lib/components/rom/CompressionProgress.svelte';
   import DiscTracks from '#lib/components/rom/DiscTracks.svelte';
+  import RomFiles from '#lib/components/rom/RomFiles.svelte';
   import { requestCompression, uploadRomCover } from '#lib/api/client.js';
   import DiscSwitcher from '#lib/components/rom/DiscSwitcher.svelte';
   import DiscManager from '#lib/components/rom/DiscManager.svelte';
@@ -391,6 +392,8 @@
             {/each}
           </dl>
           {#if rom.description}<p class="rom-description">{rom.description}</p>{/if}
+          <!-- Every ROM shows its files' formats and sizes; a title of several discs lists each disc. -->
+          {#if discs.length}<RomFiles files={discs} selected={current?.number} />{/if}
           {#if currentDisc}<DiscTracks disc={currentDisc} />{/if}
         {/if}
       </div>
