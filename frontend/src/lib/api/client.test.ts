@@ -306,4 +306,45 @@ describe('staying signed in', () => {
 		expect(tabStore.size).toBe(0);
 		expect(hasStoredSession()).toBe(false);
 	});
+
+	it('leaves another tab’s remembered session alone when this tab-only session refreshes', async () => {
+		deviceStore.set('retroxide.session', JSON.stringify({ access_token: 'b-access', refresh_token: 'b-refresh', expiresAt: Date.now() + 3_600_000 }));
+		tabStore.set('retroxide.session', JSON.stringify({ access_token: 'a-access', refresh_token: 'a-refresh', expiresAt: Date.now() + 10_000 })); // this tab, near expiry
+		const fetchMock = vi.fn<typeof fetch>(async (input) =>
+			String(input).endsWith('/session/refresh')
+				? jsonResponse({ access_token: 'a-new', refresh_token: 'a-refresh-2', token_type: 'Bearer', expires_in: 900 })
+				: jsonResponse({ rom_id: 'rom-1' })
+		);
+		vi.stubGlobal('fetch', fetchMock);
+		await getRom('rom-1');
+		expect(tabStore.get('retroxide.session')).toContain('a-new');
+		expect(deviceStore.get('retroxide.session')).toContain('b-refresh');
+	});
+
+	it('expiring this tab-only session does not sign out a remembered tab', async () => {
+		deviceStore.set('retroxide.session', JSON.stringify({ access_token: 'b-access', refresh_token: 'b-refresh', expiresAt: Date.now() + 3_600_000 }));
+		tabStore.set('retroxide.session', JSON.stringify({ access_token: 'a-access', refresh_token: 'a-refresh', expiresAt: Date.now() + 3_600_000 }));
+		vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(null, { status: 401 })));
+		await expect(getRom('rom-1')).rejects.toBeTruthy();
+		expect(tabStore.size).toBe(0);
+		expect(deviceStore.get('retroxide.session')).toContain('b-refresh');
+	});
+
+	it('uses the token another tab just refreshed instead of replaying the old one', async () => {
+		persistStoredSession({ ...session, expires_in: 10 }, { remember: true });
+		// While this tab waits for the lock, another tab rotates the shared token.
+		vi.stubGlobal('navigator', {
+			locks: {
+				request: async (_name: string, callback: () => Promise<unknown>) => {
+					deviceStore.set('retroxide.session', JSON.stringify({ access_token: 'other-access', refresh_token: 'other-refresh', expiresAt: Date.now() + 900_000 }));
+					return callback();
+				}
+			}
+		});
+		const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ rom_id: 'rom-1' }));
+		vi.stubGlobal('fetch', fetchMock);
+		await getRom('rom-1');
+		expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/session/refresh'))).toBe(false);
+		expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer other-access');
+	});
 });

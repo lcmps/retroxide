@@ -328,23 +328,7 @@
 			text-align: center;
 		}
 
-		.library-heading__title {
-		display: grid;
-		gap: 0.4rem;
-	}
-
-	.library-count {
-		margin: 0;
-		color: var(--pixel-muted);
-		font-size: 0.55rem;
-	}
-
-	.library-state a {
-		margin-inline-start: 0.4rem;
-		color: var(--pixel-text);
-	}
-
-	.library-state {
+		.library-state {
 			text-align: center;
 		}
 		/* Fixed-width columns centred as a group, instead of stretched tracks hugging the left. */

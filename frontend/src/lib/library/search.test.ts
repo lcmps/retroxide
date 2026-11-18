@@ -28,3 +28,12 @@ describe('librarySearchTarget', () => {
 		expect(librarySearchTarget(at('/share/abc?next=x'), '', 'zelda').href).toBe('/library?q=zelda');
 	});
 });
+
+describe('librarySearchTarget on the library', () => {
+	it('keeps the library’s other settings, such as an open BIOS panel', () => {
+		expect(librarySearchTarget(at('/library?platform=psx&bios=open'), 'psx', 'ff')).toEqual({
+			href: '/library?platform=psx&bios=open&q=ff',
+			replace: true
+		});
+	});
+});
