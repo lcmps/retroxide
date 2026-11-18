@@ -147,7 +147,7 @@
 		// The profile usually arrived with the bootstrap; it is fetched only when it did not.
 		void i18n
 			.initialize()
-			.then(() => bootstrapSession.profile ?? getProfile())
+			.then(() => bootstrapSession.takeProfile() ?? getProfile())
 			.then((profile) => {
 				isAdmin = profile.role === "admin";
 				setUserFont(profile.font);

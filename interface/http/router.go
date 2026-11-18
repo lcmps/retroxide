@@ -29,7 +29,7 @@ type Authenticator interface {
 // ImageLinks verifies the signed tokens image URLs carry, so browsers can load covers with plain
 // <img> tags. A token names the requester it was signed for and the ROM whose images it covers.
 type ImageLinks interface {
-	Verify(token string) (requester identity.Requester, romID string, err error)
+	Verify(ctx context.Context, token string) (requester identity.Requester, romID string, err error)
 }
 
 // DownloadLinks issues and verifies short-lived signed download capabilities.

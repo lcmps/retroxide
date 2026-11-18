@@ -220,3 +220,52 @@ func TestAuthenticatorCacheExpires(t *testing.T) {
 		t.Fatalf("FindByID calls = %d, want 2 (one per cache lifetime)", users.calls)
 	}
 }
+
+// racingUsers reports a change to the user while their record is being read, as a demotion
+// committed by another request would.
+type racingUsers struct {
+	users  principalTestUsers
+	during func()
+}
+
+func (users *racingUsers) FindByID(ctx context.Context, userID string) (*authdomain.User, error) {
+	user, err := users.users.FindByID(ctx, userID)
+	if users.during != nil {
+		during := users.during
+		users.during = nil
+		during()
+	}
+	return user, err
+}
+
+func TestAuthenticatorCacheDoesNotKeepARecordReadBeforeAChange(t *testing.T) {
+	users := &racingUsers{users: principalTestUsers{"user-1": {ID: "user-1", Role: identity.RoleAdmin}}}
+	authenticator := NewAuthenticator(principalTestTokens{claims: AccessClaims{UserID: "user-1", Role: "admin"}}, users, &principalTestClients{}).WithUserCache(10 * time.Second)
+	users.during = func() {
+		users.users["user-1"] = authdomain.User{ID: "user-1", Role: identity.RoleUser}
+		authenticator.UserChanged("user-1")
+	}
+	if _, err := authenticator.Authenticate(context.Background(), "signed"); err != nil {
+		t.Fatal(err)
+	}
+	requester, err := authenticator.Authenticate(context.Background(), "signed")
+	if err != nil || requester.Role != identity.RoleUser {
+		t.Fatalf("after a demotion during a read: role %v, %v; want the demoted role", requester.Role, err)
+	}
+}
+
+func TestCurrentResolvesASignedRequesterAgainstTheUserRecord(t *testing.T) {
+	users := principalTestUsers{"user-1": {ID: "user-1", Role: identity.RoleUser}}
+	authenticator := NewAuthenticator(principalTestTokens{}, users, &principalTestClients{})
+	current, err := authenticator.Current(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleAdmin})
+	if err != nil || current.Role != identity.RoleUser {
+		t.Fatalf("Current(signed as admin) = %+v, %v; want the user's current role", current, err)
+	}
+	client, err := authenticator.Current(context.Background(), identity.Requester{UserID: "user-1", Role: identity.RoleClient})
+	if err != nil || client.Role != identity.RoleClient {
+		t.Fatalf("Current(client) = %+v, %v; want the client role kept", client, err)
+	}
+	if _, err := authenticator.Current(context.Background(), identity.Requester{UserID: "gone", Role: identity.RoleAdmin}); !fault.IsCode(err, fault.CodeUnauthorized) {
+		t.Fatalf("Current(deleted user) = %v, want unauthorized", err)
+	}
+}

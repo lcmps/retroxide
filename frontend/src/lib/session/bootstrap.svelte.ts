@@ -39,6 +39,16 @@ export class BootstrapSession {
 		return bootstrap.setup_required ? 'required' : 'ready';
 	}
 
+	/**
+	 * Returns the bootstrap's profile and forgets it. The shell mounts again after a sign-out and
+	 * a new sign-in in the same tab; that account must fetch its own profile, not reuse this one.
+	 */
+	takeProfile(): Profile | null {
+		const profile = this.profile;
+		this.profile = null;
+		return profile;
+	}
+
 	async #fetchOnceMore(): Promise<Bootstrap> {
 		try {
 			return await this.#fetch();

@@ -44,7 +44,7 @@ func (roms *imageTestROMs) OpenMedia(ctx context.Context, requester identity.Req
 // imageTestLinks accepts "img:<userID>:<romID>" tokens.
 type imageTestLinks struct{}
 
-func (imageTestLinks) Verify(token string) (identity.Requester, string, error) {
+func (imageTestLinks) Verify(_ context.Context, token string) (identity.Requester, string, error) {
 	rest, ok := strings.CutPrefix(token, "img:")
 	userID, romID, found := strings.Cut(rest, ":")
 	if !ok || !found {

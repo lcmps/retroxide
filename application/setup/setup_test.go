@@ -46,8 +46,10 @@ func TestRequestValidate(t *testing.T) {
 		t.Fatalf("valid mysql request = %v", err)
 	}
 	for name, change := range map[string]func(*Request){
-		"sqlite path":    func(r *Request) { r.SQLitePath = " " },
-		"mysql host":     func(r *Request) { r.DBDriver, r.MySQL = DriverMySQL, MySQLConnection{Port: 3306, User: "u", Database: "d"} },
+		"sqlite path": func(r *Request) { r.SQLitePath = " " },
+		"mysql host": func(r *Request) {
+			r.DBDriver, r.MySQL = DriverMySQL, MySQLConnection{Port: 3306, User: "u", Database: "d"}
+		},
 		"driver":         func(r *Request) { r.DBDriver = "postgres" },
 		"storage path":   func(r *Request) { r.StorageRoot = "" },
 		"email":          func(r *Request) { r.AdminEmail = "not-an-email" },

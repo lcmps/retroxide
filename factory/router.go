@@ -34,7 +34,7 @@ func NewRouter(settings config.Config, services *Services, logger *slog.Logger) 
 		Settings:      appsettings.NewService(config.NewSettingsStore(config.FilePath(config.ProcessLookup), config.ProcessLookup, settings)),
 		Authenticator: services.Authenticator,
 		DownloadLinks: auth.NewDownloadLinkSigner(settings.JWTSecret, downloadLinkLifetime),
-		ImageLinks:    services.ImageLinks,
+		ImageLinks:    auth.CheckedImageLinks{Signer: services.ImageLinks, Users: services.Authenticator},
 		Locales:       locales,
 		Logger:        logger,
 		Metrics:       metricsHandler(settings, services),

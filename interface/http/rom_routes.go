@@ -156,9 +156,13 @@ func (handler romHandler) imageRequester(c *gin.Context) (identity.Requester, bo
 		abortUnauthorized(c)
 		return identity.Requester{}, false
 	}
-	requester, romID, err := handler.images.Verify(token)
-	if err != nil || romID != c.Param("rom_id") {
+	requester, romID, err := handler.images.Verify(c.Request.Context(), token)
+	switch {
+	case fault.IsCode(err, fault.CodeUnauthorized) || (err == nil && romID != c.Param("rom_id")):
 		abortUnauthorized(c)
+		return identity.Requester{}, false
+	case err != nil:
+		writeError(c, err) // the user record could not be read
 		return identity.Requester{}, false
 	}
 	return requester, true

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -55,5 +56,29 @@ func TestImageLinkRejectsTampering(t *testing.T) {
 		if _, _, err := signer.Verify(candidate); !fault.IsCode(err, fault.CodeUnauthorized) {
 			t.Errorf("%s: Verify() error = %v, want unauthorized", name, err)
 		}
+	}
+}
+
+type currentUsers map[string]identity.RequesterRole
+
+func (users currentUsers) Current(_ context.Context, requester identity.Requester) (identity.Requester, error) {
+	role, ok := users[requester.UserID]
+	if !ok {
+		return identity.Requester{}, fault.Unauthorized()
+	}
+	return identity.Requester{UserID: requester.UserID, Role: role}, nil
+}
+
+func TestCheckedImageLinksUseTheCurrentUser(t *testing.T) {
+	signer := NewImageLinkSigner(strings.Repeat("s", 32), 24*time.Hour)
+	token := signer.Sign(identity.Requester{UserID: "user-1", Role: identity.RoleAdmin}, "rom-1")
+	links := CheckedImageLinks{Signer: signer, Users: currentUsers{"user-1": identity.RoleUser}}
+	requester, romID, err := links.Verify(context.Background(), token)
+	if err != nil || romID != "rom-1" || requester.Role != identity.RoleUser {
+		t.Fatalf("Verify() = %+v %q %v; want the demoted role", requester, romID, err)
+	}
+	gone := CheckedImageLinks{Signer: signer, Users: currentUsers{}}
+	if _, _, err := gone.Verify(context.Background(), token); !fault.IsCode(err, fault.CodeUnauthorized) {
+		t.Fatalf("Verify() for a deleted user = %v, want unauthorized", err)
 	}
 }

@@ -52,7 +52,10 @@ type Authenticator struct {
 	cacheTTL time.Duration
 	cacheMu  sync.Mutex
 	cache    map[string]cachedUser
-	now      func() time.Time
+	// generation counts UserChanged calls, so a record read before a change is not cached
+	// after it.
+	generation uint64
+	now        func() time.Time
 }
 
 type cachedUser struct {
@@ -79,6 +82,7 @@ func (authenticator *Authenticator) UserChanged(userID string) {
 	}
 	authenticator.cacheMu.Lock()
 	delete(authenticator.cache, userID)
+	authenticator.generation++
 	authenticator.cacheMu.Unlock()
 }
 
@@ -104,9 +108,11 @@ func (authenticator *Authenticator) Authenticate(ctx context.Context, token stri
 // lookup returns what Authenticate needs of a user, from the cache when it is fresh; nil for a
 // user that does not exist (which is not cached, so a user created a moment later signs in).
 func (authenticator *Authenticator) lookup(ctx context.Context, userID string) (*cachedUser, error) {
+	var generation uint64
 	if authenticator.cache != nil {
 		authenticator.cacheMu.Lock()
 		cached, ok := authenticator.cache[userID]
+		generation = authenticator.generation
 		authenticator.cacheMu.Unlock()
 		if ok && authenticator.now().Before(cached.expires) {
 			return &cached, nil
@@ -119,10 +125,31 @@ func (authenticator *Authenticator) lookup(ctx context.Context, userID string) (
 	entry := cachedUser{role: user.Role, tokenVersion: user.TokenVersion, expires: authenticator.now().Add(authenticator.cacheTTL)}
 	if authenticator.cache != nil {
 		authenticator.cacheMu.Lock()
-		authenticator.cache[userID] = entry
+		// A change reported while the record was read may postdate it; this request uses it,
+		// but the next one reads again.
+		if authenticator.generation == generation {
+			authenticator.cache[userID] = entry
+		}
 		authenticator.cacheMu.Unlock()
 	}
 	return &entry, nil
+}
+
+// Current resolves a requester taken from a signed capability (such as an image link) against
+// the user's record now: a deleted user is unauthorized, and a person gets their current role.
+// A client keeps its role, provided its owner still exists.
+func (authenticator *Authenticator) Current(ctx context.Context, requester identity.Requester) (identity.Requester, error) {
+	user, err := authenticator.lookup(ctx, requester.UserID)
+	if err != nil {
+		return identity.Requester{}, err
+	}
+	if user == nil {
+		return identity.Requester{}, fault.Unauthorized()
+	}
+	if requester.Role == identity.RoleClient {
+		return requester, nil
+	}
+	return identity.Requester{UserID: requester.UserID, Role: user.role}, nil
 }
 
 func (authenticator *Authenticator) authenticateClient(ctx context.Context, token string) (identity.Requester, error) {

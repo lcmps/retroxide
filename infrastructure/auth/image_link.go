@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -87,4 +88,28 @@ func (signer *ImageLinkSigner) signature(encodedPayload string) []byte {
 	mac := hmac.New(sha256.New, signer.key)
 	mac.Write([]byte(encodedPayload))
 	return mac.Sum(nil)
+}
+
+// CurrentUsers resolves a requester named in a signed link against the user's record now.
+type CurrentUsers interface {
+	Current(ctx context.Context, requester identity.Requester) (identity.Requester, error)
+}
+
+// CheckedImageLinks verifies image tokens and then looks their user up, so a token signed before
+// a demotion or deletion grants only what the user may see now.
+type CheckedImageLinks struct {
+	Signer *ImageLinkSigner
+	Users  CurrentUsers
+}
+
+func (links CheckedImageLinks) Verify(ctx context.Context, token string) (identity.Requester, string, error) {
+	signed, romID, err := links.Signer.Verify(token)
+	if err != nil {
+		return identity.Requester{}, "", err
+	}
+	current, err := links.Users.Current(ctx, signed)
+	if err != nil {
+		return identity.Requester{}, "", err
+	}
+	return current, romID, nil
 }

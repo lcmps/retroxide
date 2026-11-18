@@ -38,3 +38,12 @@ describe('BootstrapSession', () => {
 		expect(session.profile).toBeNull();
 	});
 });
+
+describe('BootstrapSession profile hand-off', () => {
+	it('hands the profile over once, so a later sign-in in the same tab fetches its own', async () => {
+		const session = new BootstrapSession(async () => ready, vi.fn());
+		await session.load();
+		expect(session.takeProfile()).toEqual(profile);
+		expect(session.takeProfile()).toBeNull();
+	});
+});
