@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { resolveApiLink } from '#lib/api/client.js';
+	import SignedImage from './SignedImage.svelte';
 
 	type Props = {
 		romId: string;
@@ -11,22 +11,11 @@
 
 	// romId stays in the props for callers' sake; the signed URLs already name the ROM.
 	let { coverArtUrl, coverThumbUrl }: Props = $props();
-
-	// The URL carries a signed token, so the browser loads it like any image: lazily as it nears
-	// the viewport, from its HTTP cache on repeat visits, with no bearer-authenticated fetch and
-	// no blob kept in page memory. Versioned URLs let the cache answer repeat visits.
-	const src = $derived.by(() => {
-		const url = coverThumbUrl || coverArtUrl;
-		return url ? resolveApiLink(url) : null;
-	});
-	// A cover whose token expired while the page sat open fails quietly rather than showing a
-	// broken-image icon; the next list load brings a fresh URL.
-	let failedSrc = $state<string | null>(null);
-	const shown = $derived(src && src !== failedSrc ? src : null);
 </script>
 
+<!-- Loaded lazily as it nears the viewport, from the browser's cache on repeat visits. -->
 <span class="rom-cover-image">
-	{#if shown}<img src={shown} alt="" loading="lazy" decoding="async" onerror={() => (failedSrc = shown)} />{/if}
+	<SignedImage url={coverThumbUrl || coverArtUrl} alt="" lazy />
 </span>
 
 <style>
@@ -34,12 +23,5 @@
 		display: block;
 		width: 100%;
 		height: 100%;
-	}
-
-	img {
-		display: block;
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
 	}
 </style>
