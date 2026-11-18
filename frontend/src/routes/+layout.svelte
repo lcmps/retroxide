@@ -7,11 +7,12 @@
 	import { onMount } from 'svelte';
 	import { Tooltip } from 'bits-ui';
 	import AppShell from '#lib/components/AppShell.svelte';
-	import { getSetupStatus, hasStoredSession } from '#lib/api/client.js';
+	import { hasStoredSession } from '#lib/api/client.js';
+	import { bootstrapSession } from '#lib/session/bootstrap.svelte.js';
 	import '@fontsource/press-start-2p';
 	import '@fontsource/ubuntu/400.css';
 	import '@fontsource/ubuntu/700.css';
-	import { applyCachedFont, loadAppearance, loadShownFont } from '#lib/appearance.js';
+	import { applyCachedFont, loadShownFont } from '#lib/appearance.js';
 	import { i18n } from '#lib/i18n/store.svelte.js';
 	import '#lib/styles/layout.css';
 	import '#lib/styles/pixel.css';
@@ -77,12 +78,8 @@
 	applyCachedFont();
 	onMount(() => {
 		preventIosFocusZoom();
-		void loadAppearance();
-		// An unreachable backend is treated as configured so the normal error paths apply.
-		const setup = getSetupStatus()
-			.then((status): 'required' | 'ready' => (status.required ? 'required' : 'ready'))
-			.catch((): 'ready' => 'ready');
-		void Promise.all([setup, waitForTextAssets()]).then(([state]) => {
+		// Setup state, default font, and profile arrive in one request.
+		void Promise.all([bootstrapSession.load(), waitForTextAssets()]).then(([state]) => {
 			setupState = state;
 			enforceRoute();
 		});

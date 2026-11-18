@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/lcmps/retroxide/application/jobs"
 	"github.com/lcmps/retroxide/factory"
 	"github.com/lcmps/retroxide/infrastructure/config"
@@ -152,7 +153,16 @@ func (app *App) Close() error {
 	return database.Close()
 }
 
+// defaultGinMode runs gin in release mode unless GIN_MODE says otherwise: debug mode prints
+// every route and a warning at start, which is noise for anyone running the binary directly.
+func defaultGinMode() {
+	if os.Getenv(gin.EnvGinMode) == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+}
+
 func RunFromEnvironment() error {
+	defaultGinMode()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

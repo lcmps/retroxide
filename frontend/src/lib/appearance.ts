@@ -1,5 +1,5 @@
 import { browser } from '$app/env';
-import { getAppearance, hasStoredSession } from '#lib/api/client.js';
+import { hasStoredSession } from '#lib/api/client.js';
 import type { UIFont } from '#lib/api/types.js';
 
 const FONT_STORAGE_KEY = 'retroxide.font';
@@ -84,14 +84,5 @@ export async function loadShownFont(): Promise<void> {
 	const family = FONT_FAMILIES[shown];
 	if (family) {
 		await document.fonts.load(`1em "${family}"`);
-	}
-}
-
-/** Fetches the application default font, which every visitor gets, signed in or not. */
-export async function loadAppearance(): Promise<void> {
-	try {
-		setDefaultFont((await getAppearance()).font);
-	} catch {
-		// Keep the cached or default font when the server cannot be reached.
 	}
 }

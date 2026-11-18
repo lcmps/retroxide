@@ -52,6 +52,8 @@ type Store interface {
 	SaveUser(context.Context, authdomain.User) error
 	// UserActivity summarizes every user's ROMs, uploads, and active sessions, keyed by user ID.
 	UserActivity(context.Context) (map[string]Activity, error)
+	// UserActivityFor summarizes one user.
+	UserActivityFor(ctx context.Context, userID string) (Activity, error)
 	// DeleteUserTransferringData deletes userID in one transaction, handing their ROMs, libraries,
 	// and uploads to heirID; their API clients and sessions are deleted with them.
 	DeleteUserTransferringData(ctx context.Context, userID, heirID string) (Transfer, error)
@@ -120,12 +122,25 @@ type Service struct {
 	store    Store
 	hasher   auth.PasswordHasher
 	sessions Sessions
+	listener auth.UserChangeListener
 }
 
 var _ API = (*Service)(nil)
 
 func NewService(store Store, hasher auth.PasswordHasher, sessions Sessions) *Service {
 	return &Service{store: store, hasher: hasher, sessions: sessions}
+}
+
+// WithUserChangeListener tells listener whenever an account is changed or deleted.
+func (service *Service) WithUserChangeListener(listener auth.UserChangeListener) *Service {
+	service.listener = listener
+	return service
+}
+
+func (service *Service) userChanged(userID string) {
+	if service.listener != nil {
+		service.listener.UserChanged(userID)
+	}
 }
 
 func (service *Service) List(ctx context.Context, requester identity.Requester) (ListResponse, error) {
@@ -215,6 +230,7 @@ func (service *Service) Update(ctx context.Context, requester identity.Requester
 	if err := service.store.SaveUser(ctx, *account); err != nil {
 		return UserDTO{}, err
 	}
+	service.userChanged(account.ID)
 	// A reset password must lock out whoever knew the old one.
 	if passwordReset && account.ID != requester.UserID {
 		if err := service.sessions.EndSessions(ctx, account.ID); err != nil {
@@ -238,6 +254,7 @@ func (service *Service) Delete(ctx context.Context, requester identity.Requester
 	if err != nil {
 		return DeleteResponse{}, err
 	}
+	service.userChanged(account.ID)
 	return DeleteResponse{TransferredROMs: transfer.ROMs, TransferredLibraries: transfer.Libraries, TransferredUploads: transfer.Uploads, TransferredBIOS: transfer.BIOS}, nil
 }
 
@@ -265,11 +282,11 @@ func (service *Service) adminTarget(ctx context.Context, requester identity.Requ
 }
 
 func (service *Service) summary(ctx context.Context, account authdomain.User, requester identity.Requester) (UserDTO, error) {
-	activity, err := service.store.UserActivity(ctx)
+	activity, err := service.store.UserActivityFor(ctx, account.ID)
 	if err != nil {
 		return UserDTO{}, err
 	}
-	return userDTO(account, activity[account.ID], requester), nil
+	return userDTO(account, activity, requester), nil
 }
 
 func (service *Service) checkEmail(ctx context.Context, email, userID string) error {

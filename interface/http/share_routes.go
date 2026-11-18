@@ -5,7 +5,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/lcmps/retroxide/application/rom"
 	"github.com/lcmps/retroxide/application/share"
 )
 
@@ -39,8 +38,8 @@ func (handler shareHandler) preview(c *gin.Context) {
 }
 
 func (handler shareHandler) cover(c *gin.Context) {
-	content, err := handler.share.Cover(c.Request.Context(), requesterFromContext(c), c.Param("token"))
-	serveImage(c, rom.Image{StoredContent: content}, err)
+	image, err := handler.share.Cover(c.Request.Context(), requesterFromContext(c), c.Param("token"))
+	serveImage(c, image, err)
 }
 
 func (handler shareHandler) redeem(c *gin.Context) {

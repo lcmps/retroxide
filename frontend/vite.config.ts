@@ -46,6 +46,32 @@ export default defineConfig(({ mode }) => {
 			// subset that Vite would otherwise inline as a data: URI is blocked by the browser.
 			assetsInlineLimit: (file) => (/\.(woff2?|ttf|otf|eot)$/i.test(file) ? false : undefined)
 		},
+		// Components render in jsdom (the "client" project, *.svelte.test.ts); everything else
+		// runs in Node. The browser condition picks Svelte's client runtime for component tests.
+		test: {
+			projects: [
+				{
+					extends: true,
+					test: {
+						name: 'client',
+						environment: 'jsdom',
+						include: ['src/**/*.svelte.{test,spec}.ts'],
+						// Unmounts every rendered component after each test.
+						setupFiles: ['@testing-library/svelte/vitest']
+					},
+					resolve: { conditions: ['browser'] }
+				},
+				{
+					extends: true,
+					test: {
+						name: 'server',
+						environment: 'node',
+						include: ['src/**/*.{test,spec}.ts'],
+						exclude: ['src/**/*.svelte.{test,spec}.ts', 'node_modules/**']
+					}
+				}
+			]
+		},
 		server: {
 			proxy: {
 				'/api': {

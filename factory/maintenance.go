@@ -205,3 +205,36 @@ func refreshBIOSList(list biosListRefresher, bioses biosRechecker) maintenanceTa
 		}
 	}
 }
+
+// databaseOptimizer refreshes the database's query planner statistics.
+type databaseOptimizer interface {
+	Optimize(ctx context.Context) error
+}
+
+// optimizeDatabase returns a task refreshing the query planner's statistics, so queries keep
+// choosing good plans as the library grows.
+func optimizeDatabase(database databaseOptimizer) maintenanceTask {
+	return func(ctx context.Context, logger *slog.Logger) {
+		if err := database.Optimize(ctx); err != nil {
+			logger.Warn("could not optimize the database", "error", err)
+		}
+	}
+}
+
+// thumbnailBackfiller makes the missing thumbnails of covers stored before thumbnails existed.
+type thumbnailBackfiller interface {
+	BackfillThumbnails(ctx context.Context) (int, error)
+}
+
+// backfillThumbnails returns a task making every missing cover thumbnail, so library grids
+// never scale a cover on first view.
+func backfillThumbnails(roms thumbnailBackfiller) maintenanceTask {
+	return func(ctx context.Context, logger *slog.Logger) {
+		made, err := roms.BackfillThumbnails(ctx)
+		if err != nil {
+			logger.Warn("could not make cover thumbnails", "error", err, "made", made)
+		} else if made > 0 {
+			logger.Info("made cover thumbnails", "thumbnails", made)
+		}
+	}
+}

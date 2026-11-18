@@ -25,14 +25,8 @@ func (repositories *Repositories) UpsertROMFile(ctx context.Context, romFile rom
 		}
 		return romdomain.ROMFile{}, databaseError("upserting rom file", err)
 	}
-	saved, err := repositories.FindROMFileBySHA256(ctx, model.SHA256)
-	if err != nil {
-		return romdomain.ROMFile{}, err
-	}
-	if saved == nil {
-		return romdomain.ROMFile{}, fault.Internal(errors.New("rom file was not visible after upsert"))
-	}
-	return *saved, nil
+	// The row is exactly the model just written; reading it back would be a wasted round trip.
+	return romFileEntity(model)
 }
 
 func classifyROMFileConflict(existingID string, existingHash, incomingHash romdomain.ROMHash) error {
@@ -389,6 +383,20 @@ func (repositories *Repositories) ListPlatforms(ctx context.Context, uploaderID 
 		counts = append(counts, rom.PlatformCount{Platform: row.Platform, BIOSCount: row.Count})
 	}
 	return counts, nil
+}
+
+// ListROMsNeedingThumbnails returns up to limit ROMs with a cover but no thumbnail, by ID.
+func (repositories *Repositories) ListROMsNeedingThumbnails(ctx context.Context, limit int) ([]romdomain.ROM, error) {
+	var models []ROMModel
+	if err := repositories.DB.WithContext(ctx).Where("cover_art_path IS NOT NULL AND cover_thumb_path IS NULL").
+		Order("id ASC").Limit(limit).Find(&models).Error; err != nil {
+		return nil, databaseError("listing roms needing thumbnails", err)
+	}
+	roms := make([]romdomain.ROM, 0, len(models))
+	for _, model := range models {
+		roms = append(roms, romEntity(model))
+	}
+	return roms, nil
 }
 
 // SetCoverThumbnail records a ROM's cover thumbnail, unless its cover changed since the

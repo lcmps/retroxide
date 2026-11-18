@@ -614,3 +614,36 @@ func TestUpdateROMClearsAFieldAndKeepsTheRest(t *testing.T) {
 		t.Fatalf("UpdateROM() of an unchanged ROM = %v", err)
 	}
 }
+
+func TestFindROMFilesAndTracksByIDsReturnOnlyTheAskedFor(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	one := seedDiscFile(t, repositories, ctx, "rf-batch-1", 10)
+	two := seedDiscFile(t, repositories, ctx, "rf-batch-2", 20)
+	seedDiscFile(t, repositories, ctx, "rf-batch-3", 30)
+	tracks := []romdomain.DiscTrack{
+		{Number: 2, Mode: "AUDIO", SectorBytes: 2352, Frames: 1, Size: 2352, Hash: two.Hash, Filename: "b.bin"},
+		{Number: 1, Mode: "MODE1/2352", SectorBytes: 2352, Frames: 1, Size: 2352, Hash: one.Hash, Filename: "a.bin"},
+	}
+	identity := "disc-batch"
+	if err := repositories.SaveDisc(ctx, two.ID, romdomain.FormatTracks, &identity, tracks); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := repositories.FindROMFilesByIDs(ctx, []string{one.ID, two.ID, "rf-missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[one.ID].Size != 10 || files[two.ID].Size != 20 {
+		t.Fatalf("files = %+v, want the two seeded files", files)
+	}
+	byFile, err := repositories.FindDiscTracksByFileIDs(ctx, []string{one.ID, two.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byFile[one.ID]) != 0 || len(byFile[two.ID]) != 2 || byFile[two.ID][0].Number != 1 || byFile[two.ID][1].Number != 2 {
+		t.Fatalf("tracks = %+v, want two tracks of %s in number order and none for %s", byFile, two.ID, one.ID)
+	}
+	if empty, err := repositories.FindROMFilesByIDs(ctx, nil); err != nil || len(empty) != 0 {
+		t.Fatalf("no IDs = %v, %v", empty, err)
+	}
+}

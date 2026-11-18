@@ -4,7 +4,6 @@ vi.mock('$app/env', () => ({ browser: true }));
 
 const hasStoredSession = vi.fn(() => false);
 vi.mock('#lib/api/client.js', () => ({
-	getAppearance: vi.fn(),
 	hasStoredSession: () => hasStoredSession()
 }));
 

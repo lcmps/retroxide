@@ -17,6 +17,9 @@ import (
 )
 
 // shareRouteRepository is an in-memory store for the real share service.
+// shareThumbKey is the content-addressed storage key of the shared ROM's thumbnail.
+var shareThumbKey = "ab/" + strings.Repeat("ab", 32)
+
 type shareRouteRepository struct {
 	links map[string]string
 	owned map[string]bool
@@ -27,7 +30,8 @@ func (repository *shareRouteRepository) FindROMByID(_ context.Context, id string
 		return nil, nil
 	}
 	cover := "covers/game.png"
-	return &romdomain.ROM{ID: id, ROMFileID: "rf_game", UploaderID: "usr_a", Identity: romdomain.ROMIdentity{Title: "Game", Platform: "snes", CoverArtPath: &cover}}, nil
+	thumb := shareThumbKey
+	return &romdomain.ROM{ID: id, ROMFileID: "rf_game", UploaderID: "usr_a", Identity: romdomain.ROMIdentity{Title: "Game", Platform: "snes", CoverArtPath: &cover, CoverThumbPath: &thumb}}, nil
 }
 
 func (repository *shareRouteRepository) FindROMDiscs(_ context.Context, romID string) ([]romdomain.ROMDisc, error) {
@@ -142,5 +146,18 @@ func TestShareRedeemAlreadyInLibrary(t *testing.T) {
 	}
 	if len(repository.links) != 1 {
 		t.Fatal("a refused redeem spent the link")
+	}
+}
+
+func TestShareCoverIsCacheableWhenVersioned(t *testing.T) {
+	router, _ := newShareRouter(t)
+	token := shareToken(t, router)
+	versioned := sendAs(router, "b", http.MethodGet, "/api/v1/share/"+token+"/cover?v="+strings.Repeat("ab", 8), "")
+	if versioned.Code != http.StatusOK || versioned.Header().Get("Cache-Control") != "private, max-age=31536000, immutable" {
+		t.Fatalf("versioned cover = %d %q", versioned.Code, versioned.Header().Get("Cache-Control"))
+	}
+	plain := sendAs(router, "b", http.MethodGet, "/api/v1/share/"+token+"/cover", "")
+	if plain.Code != http.StatusOK || plain.Header().Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("unversioned cover = %d %q", plain.Code, plain.Header().Get("Cache-Control"))
 	}
 }

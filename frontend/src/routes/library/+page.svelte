@@ -169,6 +169,14 @@
 		justify-items: start;
 	}
 
+	/* Tiles far off screen are not laid out or painted until they scroll near, so a long
+	   library costs little more to keep than a short one. The intrinsic size keeps the
+	   scrollbar honest for tiles that have not been laid out yet. */
+	.rom-gallery > li {
+		content-visibility: auto;
+		contain-intrinsic-size: auto 7.75rem auto 13.5rem;
+	}
+
 	.rom-tile {
 		display: grid;
 		gap: 0.55rem;
@@ -285,5 +293,6 @@
 		/* Fixed-width columns centred as a group, instead of stretched tracks hugging the left. */
 		.rom-gallery { grid-template-columns: repeat(auto-fill, 6.25rem); justify-content: center; gap: 1.25rem 1rem; }
 		.rom-tile, .rom-cover { width: 6.25rem; }
+		.rom-gallery > li { contain-intrinsic-size: auto 6.25rem auto 11rem; }
 	}
 </style>

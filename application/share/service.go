@@ -37,7 +37,7 @@ type Repository interface {
 type API interface {
 	Create(ctx context.Context, requester identity.Requester, romID string) (LinkDTO, error)
 	Preview(ctx context.Context, requester identity.Requester, token string) (PreviewDTO, error)
-	Cover(ctx context.Context, requester identity.Requester, token string) (rom.StoredContent, error)
+	Cover(ctx context.Context, requester identity.Requester, token string) (rom.Image, error)
 	Redeem(ctx context.Context, requester identity.Requester, token string) (RedeemedDTO, error)
 }
 
@@ -116,16 +116,21 @@ func (service *Service) Preview(ctx context.Context, requester identity.Requeste
 }
 
 // Cover opens the offered ROM's cover (its small copy when there is one) for the preview.
-func (service *Service) Cover(ctx context.Context, requester identity.Requester, token string) (rom.StoredContent, error) {
+func (service *Service) Cover(ctx context.Context, requester identity.Requester, token string) (rom.Image, error) {
 	shared, err := service.offered(ctx, requester, token)
 	if err != nil {
-		return rom.StoredContent{}, err
+		return rom.Image{}, err
 	}
 	path := coverPath(*shared)
 	if path == "" {
-		return rom.StoredContent{}, fault.NotFound()
+		return rom.Image{}, fault.NotFound()
 	}
-	return service.storage.Open(ctx, path)
+	content, err := service.storage.Open(ctx, path)
+	if err != nil {
+		return rom.Image{}, err
+	}
+	// Versioned by its content address, so a versioned URL is cached for good.
+	return rom.ImageOf(content, path), nil
 }
 
 // Redeem spends the link, adding a copy of its ROM to the requester's library.

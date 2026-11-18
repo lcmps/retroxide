@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	gormmysql "gorm.io/driver/mysql"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -194,5 +197,36 @@ func TestSQLiteConfiguresEveryPooledConnectionAndQueuesConcurrentWrites(t *testi
 func TestSQLiteDSNRejectsQueryCharacterInPath(t *testing.T) {
 	if _, err := sqliteDSN("/data/odd?.sqlite3"); !fault.IsCode(err, fault.CodeValidation) {
 		t.Fatalf("sqliteDSN error = %v, want validation error", err)
+	}
+}
+
+func TestSQLiteDSNMapsTheDatabaseIntoMemory(t *testing.T) {
+	dsn, err := sqliteDSN("/data/retroxide.sqlite3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(dsn, "mmap_size%28"+strconv.Itoa(sqliteMmapBytes)+"%29") {
+		t.Fatalf("dsn = %q, want an mmap_size pragma", dsn)
+	}
+}
+
+func TestOptimizeRunsOnlyOnSQLite(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenDatabase(ctx, "sqlite", t.TempDir()+"/optimize.sqlite3", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sqlDB, _ := db.DB(); _ = sqlDB.Close() })
+	if err := NewRepositories(db).Optimize(ctx); err != nil {
+		t.Fatalf("Optimize() on sqlite = %v", err)
+	}
+	// MySQL has no PRAGMA; a dry-run connection shows nothing is sent.
+	mysql, err := gorm.Open(gormmysql.New(gormmysql.Config{DSN: "user:pass@tcp(127.0.0.1:1)/db", SkipInitializeWithVersion: true}),
+		&gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewRepositories(mysql).Optimize(ctx); err != nil {
+		t.Fatalf("Optimize() on mysql = %v, want nothing done", err)
 	}
 }
