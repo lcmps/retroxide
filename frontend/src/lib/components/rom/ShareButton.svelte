@@ -40,29 +40,41 @@
 	}
 </script>
 
+<!-- The button joins the page's action row; the link and messages take a row of their own below it. -->
 <div class="share">
-	<ActionButton type="button" variant="secondary" onclick={create} disabled={creating} aria-busy={creating} title={t('share.hint', 'Anyone signed in can use this link once.')}>
+	<ActionButton type="button" onclick={create} disabled={creating} aria-busy={creating} title={t('share.hint', 'Anyone signed in can use this link once.')}>
 		{creating ? t('share.creating', 'Creating link...') : t('share.button', 'Share')}
 	</ActionButton>
-	{#if link}
-		<div class="share-link">
-			<label class="visually-hidden" for="share-link-field">{t('share.linkLabel', 'Share link')}</label>
-			<input id="share-link-field" bind:this={field} value={link} readonly onfocus={(event) => event.currentTarget.select()} />
-			<ActionButton type="button" variant="secondary" onclick={copy}>
-				{copied ? t('share.copied', 'Copied') : t('share.copy', 'Copy')}
-			</ActionButton>
+	{#if link || message}
+		<div class="share-panel">
+			{#if link}
+				<div class="share-link">
+					<label class="visually-hidden" for="share-link-field">{t('share.linkLabel', 'Share link')}</label>
+					<input id="share-link-field" bind:this={field} value={link} readonly onfocus={(event) => event.currentTarget.select()} />
+					<ActionButton type="button" variant="secondary" onclick={copy}>
+						{copied ? t('share.copied', 'Copied') : t('share.copy', 'Copy')}
+					</ActionButton>
+				</div>
+				<p class="share-hint">{t('share.hint', 'Anyone signed in can use this link once.')}</p>
+			{/if}
+			{#if message}
+				<p class="share-hint" role="alert">{message}</p>
+			{/if}
 		</div>
-		<p class="share-hint">{t('share.hint', 'Anyone signed in can use this link once.')}</p>
-	{/if}
-	{#if message}
-		<p class="share-hint" role="alert">{message}</p>
 	{/if}
 </div>
 
 <style>
+	/* The wrapper disappears from layout, so the button sits in the action row like its
+	   neighbours. */
 	.share {
-		/* A row of its own under the ROM's actions, as wide as the page allows. */
-		grid-column: 1 / -1;
+		display: contents;
+	}
+
+	/* After every button of the row (order), on a line of its own (flex-basis 100%). */
+	.share-panel {
+		order: 1;
+		flex: 1 0 100%;
 		display: grid;
 		gap: 0.6rem;
 		justify-items: start;
@@ -76,6 +88,13 @@
 		gap: 0.5rem;
 		width: 100%;
 		min-width: 0;
+	}
+
+	/* On phones the page stretches every action button across the row; Copy stays beside the
+	   link instead. */
+	.share-panel .share-link :global(.action-button) {
+		width: auto;
+		flex: none;
 	}
 
 	.share-link input {
