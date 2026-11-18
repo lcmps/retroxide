@@ -22,6 +22,8 @@ type ROMSummaryDTO struct {
 type ROMListResponseDTO struct {
 	Item       []ROMSummaryDTO `json:"item"`
 	NextCursor *string         `json:"next_cursor"`
+	// Total is how many ROMs match over all pages; only the first page (no cursor) carries it.
+	Total *uint64 `json:"total,omitempty"`
 }
 
 type ROMDetailDTO struct {

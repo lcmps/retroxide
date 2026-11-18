@@ -46,7 +46,8 @@ export function parseRomListResponse(value: unknown): RomListResponse {
 		return { rom_id: rom.rom_id, title: rom.title, platform: rom.platform, platform_name: platformName, sha256: rom.sha256, cover_art_url: (rom.cover_art_url as string | null | undefined) ?? null, cover_thumb_url: (rom.cover_thumb_url as string | null | undefined) ?? null, disc_count: typeof rom.disc_count === 'number' && rom.disc_count >= 1 ? rom.disc_count : 1 };
 	});
 
-	return { item, next_cursor: payload.next_cursor };
+	const total = typeof payload.total === 'number' && Number.isFinite(payload.total) ? payload.total : null;
+	return { item, next_cursor: payload.next_cursor, total };
 }
 
 export function parseUploadAcceptedResponse(value: unknown): UploadAcceptedResponse {

@@ -14,6 +14,7 @@
 
 	let login = $state('');
 	let password = $state('');
+	let remember = $state(false);
 	let loading = $state(false);
 	let resultMessage = $state('');
   const isAuthenticated = $derived(browser && hasStoredSession());
@@ -33,11 +34,7 @@
 
 		try {
 			const session = await createSession({ login: login.trim(), password });
-			persistStoredSession(session);
-			resultMessage = t('login.messages.success', 'Logged in successfully. Token type: {tokenType}. Expires in {expiresIn}s.', {
-				tokenType: session.token_type,
-				expiresIn: session.expires_in
-			});
+			persistStoredSession(session, { remember });
       await goto(afterSignIn());
 		} catch (error) {
 			resultMessage = getErrorMessage(error, 'login.messages.failure', 'Login failed', t);
@@ -99,6 +96,11 @@
 				</span>
 			</FormField>
 
+      <label class="login-remember">
+        <input type="checkbox" bind:checked={remember} />
+        <span>{t('login.fields.remember', 'Keep me signed in')}</span>
+      </label>
+
       <ActionButton class="login-submit" type="submit" disabled={loading}>
         {loading ? t('login.actions.submitting', 'Logging in...') : t('login.actions.submit', 'Login')}
 			</ActionButton>
@@ -136,6 +138,21 @@
   .login-form {
     width: 100%;
     --layout-gap: 1rem;
+  }
+
+  .login-remember {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.55rem;
+    color: var(--pixel-muted);
+    cursor: pointer;
+  }
+
+  .login-remember input {
+    width: 1.1rem;
+    height: 1.1rem;
+    accent-color: var(--pixel-accent);
   }
 
   .visually-hidden,

@@ -13,6 +13,8 @@ export class RomPager {
 	/** Whether the server reported no further pages. */
 	exhausted = $state(false);
 	error = $state<unknown>(null);
+	/** How many ROMs match the filters, from the first page; null until it arrives. */
+	total = $state<number | null>(null);
 
 	readonly #fetchPage: FetchRomPage;
 	readonly #pageSize: number;
@@ -31,6 +33,7 @@ export class RomPager {
 		this.#filters = filters;
 		this.#cursor = undefined;
 		this.items = [];
+		this.total = null;
 		this.exhausted = false;
 		this.error = null;
 		this.loading = false;
@@ -49,6 +52,7 @@ export class RomPager {
 			if (generation !== this.#generation) {
 				return;
 			}
+			if (this.#cursor === undefined && typeof page.total === 'number') this.total = page.total;
 			this.items = [...this.items, ...page.item];
 			this.#cursor = page.next_cursor ?? undefined;
 			this.exhausted = !page.next_cursor;

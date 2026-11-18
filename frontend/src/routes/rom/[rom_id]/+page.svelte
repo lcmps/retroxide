@@ -8,10 +8,12 @@
   import RomEditForm from '#lib/components/rom/RomEditForm.svelte';
   import { platforms } from '#lib/platforms/catalog.svelte.js';
   import { tick, untrack } from 'svelte';
-  import { deleteRom, downloadRom, getRom, i18n, resolveApiLink, scrapeRom } from '#lib';
+  import { deleteRom, downloadRom, getRom, i18n, scrapeRom } from '#lib';
   import CompressionProgress from '#lib/components/rom/CompressionProgress.svelte';
   import DiscTracks from '#lib/components/rom/DiscTracks.svelte';
   import RomFiles from '#lib/components/rom/RomFiles.svelte';
+  import RomMedia from '#lib/components/rom/RomMedia.svelte';
+  import SignedImage from '#lib/components/SignedImage.svelte';
   import { requestCompression, uploadRomCover } from '#lib/api/client.js';
   import DiscSwitcher from '#lib/components/rom/DiscSwitcher.svelte';
   import DiscManager from '#lib/components/rom/DiscManager.svelte';
@@ -78,7 +80,7 @@
   }
 
   // The cover URL is signed, so the browser loads it directly; a new upload gives a new URL.
-  const coverUrl = $derived(rom?.cover_art_url ? resolveApiLink(rom.cover_art_url) : null);
+  const coverUrl = $derived(rom?.cover_art_url ?? null);
 
   /** Uploads the chosen image straight away; it does not wait for the details form to be saved. */
   async function changeCover(event: Event & { currentTarget: HTMLInputElement }): Promise<void> {
@@ -336,7 +338,7 @@
     <article class="rom-card">
       <div class="rom-cover-slot">
         <div class="rom-cover" aria-hidden={coverUrl || editing || uploadingCover ? undefined : 'true'}>
-          {#if coverUrl}<img src={coverUrl} alt={t('rom.cover.alt', 'Cover art for {title}', { title: rom.title })} decoding="async" />{/if}
+          <SignedImage url={coverUrl} alt={t('rom.cover.alt', 'Cover art for {title}', { title: rom.title })} />
           <!-- Stays while an upload runs, even if the form is closed, so its progress stays visible. -->
           {#if editing || uploadingCover}
             <input bind:this={coverInput} class="visually-hidden" type="file" accept={COVER_TYPES.join(',')} tabindex="-1" aria-hidden="true" onchange={changeCover} />
@@ -393,6 +395,7 @@
           </dl>
           {#if rom.description}<p class="rom-description">{rom.description}</p>{/if}
           <!-- Every ROM shows its files' formats and sizes; a title of several discs lists each disc. -->
+          <RomMedia title={rom.title} titleScreenUrl={rom.title_screen_url} screenshotUrl={rom.screenshot_url} />
           {#if discs.length}<RomFiles files={discs} selected={current?.number} />{/if}
           {#if currentDisc}<DiscTracks disc={currentDisc} />{/if}
         {/if}
@@ -530,7 +533,7 @@
     overflow: hidden;
   }
   /* The whole image fits the frame at its own proportions, whatever its size or shape. */
-  .rom-cover img { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: auto; }
+  .rom-cover :global(img) { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: auto; }
 
   .rom-cover-upload {
     position: absolute;

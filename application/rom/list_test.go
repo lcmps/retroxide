@@ -19,6 +19,13 @@ type listROMRepository struct {
 	uploaderID *string
 	filter     ROMFilter
 	callCount  int
+	total      uint64
+	counted    *ROMFilter
+}
+
+func (repository *listROMRepository) CountROMs(_ context.Context, filter ROMFilter) (uint64, error) {
+	repository.counted = &filter
+	return repository.total, nil
 }
 
 func (repository *listROMRepository) ListROMsWithFiles(_ context.Context, limit int, filter ROMFilter) ([]romdomain.ROMWithFile, error) {
@@ -162,5 +169,26 @@ func TestListROMServiceSortedCursorsRoundTripAndAreBoundToTheirOrder(t *testing.
 		if _, err := service.List(context.Background(), adminRequester, request); !fault.IsCode(err, fault.CodeValidation) {
 			t.Errorf("List(%+v) error = %v, want validation", request, err)
 		}
+	}
+}
+
+func TestListROMServiceCountsOnlyOnTheFirstPage(t *testing.T) {
+	repository := &listROMRepository{total: 42}
+	service := NewListROMService(repository)
+	search := "mario"
+	first, err := service.List(context.Background(), adminRequester, ListRequest{Limit: 10, Search: &search})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Total == nil || *first.Total != 42 || repository.counted == nil || *repository.counted.Search != "mario" {
+		t.Fatalf("first page total = %v, counted with %+v", first.Total, repository.counted)
+	}
+	repository.counted = nil
+	later, err := service.List(context.Background(), adminRequester, ListRequest{Limit: 10, Cursor: stringPointer("rom-9")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if later.Total != nil || repository.counted != nil {
+		t.Fatalf("later page total = %v, counted %+v; want no count", later.Total, repository.counted)
 	}
 }

@@ -1030,3 +1030,38 @@ func TestListROMsNeedingThumbnailsFindsCoversWithoutOne(t *testing.T) {
 		t.Fatalf("needing = %+v, want only rom-needs", needing)
 	}
 }
+
+func TestCountROMsMatchesTheListing(t *testing.T) {
+	repositories, ctx := openTestRepositories(t)
+	for _, row := range []struct{ id, title, platform, uploader string }{
+		{"rom-c1", "Super Mario Kart", "SNES", "u1"},
+		{"rom-c2", "Super Metroid", "snes", "u1"},
+		{"rom-c3", "Mario Kart 64", "n64", "u2"},
+	} {
+		file := validROMFile("rf-"+row.id, row.id)
+		if _, err := repositories.UpsertROMFile(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+		if err := repositories.SaveROM(ctx, romdomain.ROM{ID: row.id, ROMFileID: file.ID, UploaderID: row.uploader,
+			Identity: romdomain.ROMIdentity{Title: row.title, Platform: row.platform, IdentifiedBy: "test", Confidence: 100}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snes, mario, u1 := "snes", "mario", "u1"
+	for name, filter := range map[string]rom.ROMFilter{
+		"everything":    {},
+		"platform":      {Platform: &snes},
+		"search":        {Search: &mario},
+		"uploader":      {UploaderID: &u1},
+		"search+sorted": {Search: &mario, Sort: rom.ROMSort{Field: rom.SortTitle, Descending: true}},
+	} {
+		rows, err := repositories.ListROMsWithFiles(ctx, 100, filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count, err := repositories.CountROMs(ctx, filter)
+		if err != nil || count != uint64(len(rows)) {
+			t.Errorf("%s: CountROMs = %d, %v; listing has %d", name, count, err, len(rows))
+		}
+	}
+}

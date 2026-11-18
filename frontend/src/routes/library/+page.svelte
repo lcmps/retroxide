@@ -35,6 +35,20 @@
 			? platforms.nameFor(selectedPlatform)
 			: t('library.title', 'Library')
 	);
+	const filtered = $derived(Boolean(selectedPlatform || searchQuery));
+	/** The library without search or platform, in the same order. */
+	const clearFiltersHref = $derived.by(() => {
+		const params = applySortToParams(new URLSearchParams(), sort);
+		return params.size > 0 ? `/library?${params}` : '/library';
+	});
+	const countLabel = $derived.by(() => {
+		const count = pager.total;
+		if (count === null) return '';
+		if (searchQuery) {
+			return count === 1 ? t('library.results.one', '1 result') : t('library.results.other', '{count} results', { count });
+		}
+		return count === 1 ? t('library.count.one', '1 ROM') : t('library.count.other', '{count} ROMs', { count });
+	});
 	const loadErrorMessage = $derived(
 		initErrorMessage || (pager.error ? getErrorMessage(pager.error, 'library.roms.error', 'Failed to load ROMs', t) : '')
 	);
@@ -84,7 +98,10 @@
 
 <section class="page-shell stack" aria-labelledby="library-title" style="--layout-gap: 2.75rem">
 	<div class="library-heading">
-		<h1 id="library-title">{pageTitle}</h1>
+		<div class="library-heading__title">
+			<h1 id="library-title">{pageTitle}</h1>
+			{#if countLabel && pager.items.length > 0}<p class="library-count" aria-live="polite">{countLabel}</p>{/if}
+		</div>
 		<LibrarySort {sort} onchange={changeSort} />
 	</div>
 
@@ -94,8 +111,16 @@
 
 	{#if pager.items.length === 0 && (pager.loading || !ready)}
 		<p class="library-state" role="status">{t('library.roms.loading', 'Loading ROMs...')}</p>
-	{:else if pager.items.length === 0}
-		<p class="library-state" role="status">{t('library.roms.empty', 'No ROMs matched the current filters.')}</p>
+	{:else if pager.items.length === 0 && !pager.error}
+		<p class="library-state" role="status">
+			{#if filtered}
+				{t('library.roms.empty', 'No ROMs matched the current filters.')}
+				<a href={clearFiltersHref}>{t('library.roms.clearFilters', 'Clear filters')}</a>
+			{:else}
+				{t('library.roms.emptyLibrary', 'Your library is empty.')}
+				<a href={resolve('/uploads')}>{t('library.roms.uploadFirst', 'Upload ROMs')}</a>
+			{/if}
+		</p>
 	{:else}
 		<ul class="rom-gallery" aria-label={t('library.roms.title', 'ROM Catalog')} aria-busy={pager.loading}>
 			{#each pager.items as rom (rom.rom_id)}
@@ -151,6 +176,22 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.75rem 1.5rem;
+	}
+
+	.library-heading__title {
+		display: grid;
+		gap: 0.4rem;
+	}
+
+	.library-count {
+		margin: 0;
+		color: var(--pixel-muted);
+		font-size: 0.55rem;
+	}
+
+	.library-state a {
+		margin-inline-start: 0.4rem;
+		color: var(--pixel-text);
 	}
 
 	.library-state {
