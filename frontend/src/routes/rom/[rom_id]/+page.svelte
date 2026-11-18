@@ -426,6 +426,8 @@
         <ActionButton type="button" onclick={scrapeCurrentRom} disabled={scraping || deleting || uploadingCover || discBusy} aria-busy={scraping} title={t('rom.actions.scrapeHint', 'Fetch the title, details, and artwork from online game databases')}>
           {scraping ? t('rom.actions.scraping', 'Scraping...') : t('rom.actions.scrape', 'Scrape')}
         </ActionButton>
+        <!-- Only the ROM's uploader or an admin can open this page, which is exactly who may share it. -->
+        <ShareButton romId={rom.rom_id} />
         <Dialog.Root bind:open={deleteOpen}>
           <ActionButton type="button" variant="danger" disabled={deleting || scraping || downloading || discBusy} aria-haspopup="dialog" title={t('rom.actions.deleteHint', 'Permanently remove this ROM and its file')} onclick={() => { deleteOpen = true; }}>
             {t('rom.actions.delete', 'Delete ROM')}
@@ -447,8 +449,6 @@
           </Dialog.Portal>
         </Dialog.Root>
       </div>
-      <!-- Only the ROM's uploader or an admin can open this page, which is exactly who may share it. -->
-      <ShareButton romId={rom.rom_id} />
     </article>
   {:else}
     <h1 id="rom-title">{t('rom.title', 'ROM Detail')}</h1>
