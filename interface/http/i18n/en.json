@@ -123,6 +123,7 @@
   "login.fields.loginPlaceholder": "Email or username",
   "login.fields.password": "Password",
   "login.fields.passwordPlaceholder": "Password",
+  "login.fields.remember": "Keep me signed in",
   "login.messages.failure": "Login failed",
   "login.messages.success": "Logged in successfully. Token type: {tokenType}. Expires in {expiresIn}s.",
   "login.password_label": "Password",

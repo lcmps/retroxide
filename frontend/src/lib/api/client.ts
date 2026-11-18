@@ -61,7 +61,8 @@ function readStoredSession(): StoredSession | null {
     return null;
   }
 
-  const rawSession = sessionStorage.getItem(SESSION_STORAGE_KEY);
+  // A session kept for this tab wins over one remembered on the device.
+  const rawSession = sessionStorage.getItem(SESSION_STORAGE_KEY) ?? deviceStorage()?.getItem(SESSION_STORAGE_KEY);
   if (!rawSession) {
     return null;
   }
@@ -88,10 +89,30 @@ function readStoredSession(): StoredSession | null {
   }
 }
 
-export function persistStoredSession(session: SessionResponse): void {
+/** The device-wide store a remembered session lives in, when the browser allows it. */
+function deviceStorage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the current session was kept on the device ("Keep me signed in"). */
+function sessionIsRemembered(): boolean {
+  return sessionStorage.getItem(SESSION_STORAGE_KEY) === null && deviceStorage()?.getItem(SESSION_STORAGE_KEY) != null;
+}
+
+/**
+ * Saves a session. With remember, it is kept on the device and survives closing the tab;
+ * without, it lasts for this tab only. Leaving remember out (a token refresh) keeps the session
+ * where it already is.
+ */
+export function persistStoredSession(session: SessionResponse, options: { remember?: boolean } = {}): void {
   if (!browser) {
     return;
   }
+  const remember = options.remember ?? sessionIsRemembered();
 
   const storedSession: StoredSession = {
     access_token: session.access_token,
@@ -99,7 +120,15 @@ export function persistStoredSession(session: SessionResponse): void {
     expiresAt: Date.now() + session.expires_in * 1000
   };
 
-  sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(storedSession));
+  const serialized = JSON.stringify(storedSession);
+  const device = deviceStorage();
+  if (remember && device) {
+    device.setItem(SESSION_STORAGE_KEY, serialized);
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } else {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, serialized);
+    device?.removeItem(SESSION_STORAGE_KEY);
+  }
 }
 
 export function clearStoredSession(): void {
@@ -108,6 +137,7 @@ export function clearStoredSession(): void {
   }
 
   sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  deviceStorage()?.removeItem(SESSION_STORAGE_KEY);
 }
 
 export function hasStoredSession(): boolean {

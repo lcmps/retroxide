@@ -257,3 +257,53 @@ describe('proactive session refresh', () => {
 		});
 	});
 });
+
+describe('staying signed in', () => {
+	const session = { access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 };
+	let tabStore: Map<string, string>;
+	let deviceStore: Map<string, string>;
+	const storage = (values: Map<string, string>) => ({
+		getItem: (key: string) => values.get(key) ?? null,
+		setItem: (key: string, value: string) => void values.set(key, value),
+		removeItem: (key: string) => void values.delete(key)
+	});
+
+	beforeEach(() => {
+		tabStore = new Map();
+		deviceStore = new Map();
+		vi.stubGlobal('sessionStorage', storage(tabStore));
+		vi.stubGlobal('localStorage', storage(deviceStore));
+		vi.stubGlobal('window', new EventTarget());
+		vi.restoreAllMocks();
+	});
+
+	it('keeps a remembered session when the tab closes', () => {
+		persistStoredSession(session, { remember: true });
+		expect(tabStore.size).toBe(0);
+		tabStore.clear(); // a new tab
+		expect(hasStoredSession()).toBe(true);
+	});
+
+	it('keeps a refreshed session where it was', () => {
+		persistStoredSession(session, { remember: true });
+		persistStoredSession({ ...session, access_token: 'refreshed' });
+		expect(tabStore.size).toBe(0);
+		expect(deviceStore.get('retroxide.session')).toContain('refreshed');
+	});
+
+	it('leaves nothing on the device after signing in without remembering', () => {
+		persistStoredSession(session, { remember: true });
+		persistStoredSession(session, { remember: false });
+		expect(deviceStore.size).toBe(0);
+		expect(hasStoredSession()).toBe(true);
+	});
+
+	it('forgets the session in both places on logout', async () => {
+		persistStoredSession(session, { remember: true });
+		vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(null, { status: 204 })));
+		await logoutSession();
+		expect(deviceStore.size).toBe(0);
+		expect(tabStore.size).toBe(0);
+		expect(hasStoredSession()).toBe(false);
+	});
+});
