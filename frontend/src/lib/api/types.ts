@@ -24,6 +24,8 @@ export type RomSummary = {
 export type RomListResponse = {
   item: RomSummary[];
   next_cursor: string | null;
+  /** How many ROMs match over every page; only the first page carries it. */
+  total?: number | null;
 };
 
 /** Signs in with an email or a username. */

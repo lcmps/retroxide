@@ -59,3 +59,12 @@ describe('parseUploadAcceptedResponse', () => {
 		});
 	});
 });
+describe('parseRomListResponse total', () => {
+	const row = { rom_id: 'rom_1', title: 'Game', platform: 'psx', platform_name: 'PlayStation', sha256: 'abc' };
+
+	it('keeps the total the first page carries, and null without one', () => {
+		expect(parseRomListResponse({ item: [row], next_cursor: null, total: 7 }).total).toBe(7);
+		expect(parseRomListResponse({ item: [row], next_cursor: null }).total).toBeNull();
+		expect(parseRomListResponse({ item: [row], next_cursor: null, total: 'many' }).total).toBeNull();
+	});
+});

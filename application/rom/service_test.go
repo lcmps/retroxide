@@ -108,6 +108,8 @@ func (*romTestRepository) ListROMsWithFiles(context.Context, int, ROMFilter) ([]
 	return nil, nil
 }
 
+func (*romTestRepository) CountROMs(context.Context, ROMFilter) (uint64, error) { return 0, nil }
+
 func (repository *romTestRepository) FindDiscTracks(_ context.Context, romFileID string) ([]romdomain.DiscTrack, error) {
 	return repository.discTracks[romFileID], nil
 }
